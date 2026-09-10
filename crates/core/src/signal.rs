@@ -36,16 +36,38 @@ pub struct Ctx<'a> {
     pub sample_rate: f64,
     /// Features audio de la frame.
     pub audio: &'a AudioFeatures,
+    /// Cache d'évaluation de la frame, indexé par `NodeId::index()`.
+    ///
+    /// **Pourquoi le cache et non `&Graph` :** pendant `eval_frame`, le graphe
+    /// mute le `NodeState` du nœud courant. Se prêter lui-même en `&Graph` au
+    /// même moment viole l'emprunteur. Le cache et l'état sont deux champs
+    /// distincts de `Graph`, donc les deux emprunts coexistent.
+    ///
+    /// C'est aussi plus honnête : un `Signal` n'a **pas** à voir la topologie
+    /// du graphe, seulement les valeurs déjà calculées de ses dépendances.
+    pub cache: &'a [f32],
 }
 
 impl<'a> Ctx<'a> {
-    /// Contexte minimal pour les tests et les cas sans audio.
+    /// Contexte minimal pour les tests et les cas sans audio ni modulation.
     pub fn new(dt: f64, frame: u64, audio: &'a AudioFeatures) -> Self {
         Self {
             dt,
             frame,
             sample_rate: 48_000.0,
             audio,
+            cache: &[],
+        }
+    }
+
+    /// Contexte complet, construit par `Graph::eval_frame`.
+    pub fn with_cache(dt: f64, frame: u64, audio: &'a AudioFeatures, cache: &'a [f32]) -> Self {
+        Self {
+            dt,
+            frame,
+            sample_rate: 48_000.0,
+            audio,
+            cache,
         }
     }
 }

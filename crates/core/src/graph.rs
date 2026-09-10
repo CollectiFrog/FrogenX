@@ -63,6 +63,8 @@ pub struct Graph {
     order_dirty: bool,
     diagnostics: Diagnostics,
     audio: AudioFeatures,
+    /// Compteur de frames, exposé aux modules via `Ctx::frame` (§16.2).
+    frame: u64,
 }
 
 impl Default for Graph {
@@ -81,6 +83,7 @@ impl Graph {
             order_dirty: true,
             diagnostics: Diagnostics::default(),
             audio: AudioFeatures::default(),
+            frame: 0,
         }
     }
 
@@ -238,9 +241,9 @@ impl Graph {
         }
 
         let audio = self.audio.clone();
-        let ctx = Ctx::new(dt, 0, &audio);
 
-        for &i in &self.order {
+        for idx in 0..self.order.len() {
+            let i = self.order[idx];
             let slot = &self.slots[i as usize];
             let Some(signal) = &slot.signal else { continue };
 
@@ -255,8 +258,13 @@ impl Graph {
                 }
             }
 
+            // Le cache est prêté en lecture, l'état du nœud courant en écriture.
+            // Deux champs distincts de `self` : les emprunts coexistent, ce qui
+            // est précisément pourquoi `Ctx` porte le cache et non `&Graph`.
             let (off, len) = (slot.state_off, slot.state_len);
-            let mut st = NodeState::new(&mut self.state[off..off + len]);
+            let (cache, state) = (&self.cache, &mut self.state);
+            let ctx = Ctx::with_cache(dt, self.frame, &audio, cache);
+            let mut st = NodeState::new(&mut state[off..off + len]);
             let v = signal.eval(t, &ctx, &mut st);
 
             // §18.3 : un seul point de contrôle du non-fini, à l'écriture dans
@@ -269,6 +277,8 @@ impl Graph {
                 0.0
             };
         }
+
+        self.frame = self.frame.wrapping_add(1);
     }
 
     /// Vrai si `to` est atteignable depuis `from` en suivant les dépendances.

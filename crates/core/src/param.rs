@@ -65,12 +65,15 @@ impl Param {
         }
     }
 
-    /// Résout la valeur du paramètre.
+    /// Résout la valeur du paramètre depuis le graphe, **après** `eval_frame`.
     ///
-    /// **Lit le cache de la frame, n'évalue rien.** Le graphe est entièrement
-    /// évalué avant que la moindre forme ne soit générée (§20.1) : deux formes
-    /// lisant le même LFO voient donc exactement la même valeur, et aucun coût
-    /// caché ne se déclenche ici.
+    /// **Lit le cache, n'évalue rien.** Le graphe est entièrement évalué avant
+    /// que la moindre forme ne soit générée (§20.1) : deux formes lisant le
+    /// même LFO voient donc exactement la même valeur, et aucun coût caché ne
+    /// se déclenche ici.
+    ///
+    /// C'est la voie des **consommateurs** (formes, couches). Un `Signal` en
+    /// cours d'évaluation utilise [`Param::eval`], qui lit le cache du `Ctx`.
     pub fn get(&self, g: &Graph) -> f32 {
         match *self {
             Param::Fixed(v) => v,
@@ -79,6 +82,32 @@ impl Param {
                 depth,
                 source,
             } => base + depth * g.value(source),
+        }
+    }
+
+    /// Résout la valeur **pendant** l'évaluation d'un `Signal`.
+    ///
+    /// Lit le cache porté par le `Ctx` plutôt que le graphe : pendant
+    /// `eval_frame`, le graphe mute le `NodeState` du nœud courant et ne peut
+    /// pas se prêter en entier (voir [`Ctx::cache`]).
+    ///
+    /// Une source hors cache rend `0.0` — le régime « jamais de panique en
+    /// évaluation » du §18.1.
+    pub fn eval(&self, ctx: &crate::signal::Ctx) -> f32 {
+        match *self {
+            Param::Fixed(v) => v,
+            Param::Modulated {
+                base,
+                depth,
+                source,
+            } => {
+                let v = ctx
+                    .cache
+                    .get(source.index() as usize)
+                    .copied()
+                    .unwrap_or(0.0);
+                base + depth * v
+            }
         }
     }
 

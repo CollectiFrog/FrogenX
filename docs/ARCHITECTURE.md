@@ -401,7 +401,8 @@ couches complètes empilées.
 |---|---|---|
 | 1 | ✅ `Signal`, `Param`, `Clock` | valeurs testables, sans GPU — *fait* |
 | 2 | ✅ Graphe de patch (arena, tri topo, cache) | modulation évaluable — *fait* |
-| 3 | Primitives + opérateurs | polylignes testables |
+| 3a | ✅ Oscillateurs, LFO, bruit, enveloppes | sources de modulation — *fait* |
+| 3b | Primitives + opérateurs de formes | polylignes testables |
 | 4 | `Layer` + `ShapeLayer` + compositeur, offscreen | **première image à l'écran** |
 | 5 | `OutputSink` + preview | pipeline de sortie en place |
 | 6 | LFO câblé sur une fréquence | **le modulaire prend vie** |
@@ -440,6 +441,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
 | **État des nœuds dans le graphe**, pas dans les modules (§16.1) | modules purs et testables, sérialisation et reset gratuits, pas d'emprunt mutable sur un nœud partagé |
+| **`Ctx` porte le cache, pas `&Graph`** (§16.2) | le graphe mute l'état du nœud courant pendant `eval` ; et un `Signal` n'a pas à voir la topologie, seulement les valeurs de ses dépendances |
+| **Phase accumulée**, pas `sin(2π·f·t)` (osc) | en FM, la formule directe fait sauter la phase à chaque changement de fréquence — discontinuité visible |
+| **Bruit implémenté en interne**, pas la crate `noise` | le déterminisme à graine explicite (§20.3) doit être garanti, pas supposé à travers les versions d'une dépendance |
 | **Écriture dans un buffer fourni** pour les formes (§16.3) | évite une allocation par forme et par frame à 60 fps |
 | **Graphe évalué entièrement avant les formes** (§20.1) | `Param::get()` sans coût ni effet de bord ; deux formes lisant un LFO voient la même valeur |
 | **Pas d'erreur en évaluation**, seulement en édition (§18.1) | un logiciel de scène ne panique pas ; les compteurs de diagnostic rendent les incohérences visibles sans interrompre |
@@ -582,12 +586,23 @@ pub struct Ctx<'a> {
     pub frame: u64,                   // compteur de frames depuis le début
     pub sample_rate: f64,             // fréquence d'échantillonnage audio
     pub audio: &'a AudioFeatures,     // instantané, lecture seule
+    pub cache: &'a [f32],             // valeurs déjà calculées de la frame
 }
 ```
 
 `Ctx` est **construit une fois par frame** par le moteur, et passé en lecture seule.
 Il ne contient jamais l'horloge système : `t` est un paramètre séparé, précisément
 pour qu'un test puisse le fixer (§4).
+
+**Pourquoi `cache: &[f32]` et non `&Graph`** — découvert en implémentant `osc` :
+pendant `eval_frame`, le graphe mute le `NodeState` du nœud courant. Se prêter
+lui-même en `&Graph` au même moment viole l'emprunteur. Le cache et l'état sont deux
+champs **distincts** de `Graph`, donc les deux emprunts coexistent.
+
+C'est aussi plus honnête sur le plan de la conception : un `Signal` n'a **pas** à voir
+la topologie du graphe, seulement les valeurs déjà calculées de ses dépendances. La
+contrainte du compilateur a révélé un couplage que le contrat initial autorisait à
+tort.
 
 `dt` est nécessaire aux modules à état — une enveloppe doit savoir combien de temps
 s'est écoulé, et ne peut pas le déduire de `t` seul si elle veut rester correcte quand
@@ -617,18 +632,25 @@ pub enum Param {
 }
 
 impl Param {
-    pub fn get(&self, g: &Graph) -> f32 {
-        match *self {
-            Param::Fixed(v) => v,
-            Param::Modulated { base, depth, source } => base + depth * g.value(source),
-        }
-    }
+    /// Pour les consommateurs (formes, couches), APRÈS eval_frame.
+    pub fn get(&self, g: &Graph) -> f32 { /* base + depth * g.value(source) */ }
+
+    /// Pour un Signal, PENDANT son évaluation. Lit `ctx.cache`.
+    pub fn eval(&self, ctx: &Ctx) -> f32 { /* base + depth * ctx.cache[source] */ }
 }
 ```
 
-`g.value(source)` lit le **cache de la frame** (§3) — il n'évalue rien. Le graphe est
-entièrement évalué avant que les formes ne soient générées (§20). Un `Param` ne peut
-donc pas déclencher une évaluation en cascade, ce qui garantit l'absence de coût caché.
+**Deux voies, une seule sémantique.** Les deux lisent le **cache de la frame** (§3) et
+n'évaluent rien ; elles diffèrent seulement par ce à quoi l'appelant a accès :
+
+| Appelant | Méthode | Raison |
+|---|---|---|
+| Forme, couche — après `eval_frame` | `get(&Graph)` | a le graphe entier sous la main |
+| `Signal` — pendant `eval_frame` | `eval(&Ctx)` | le graphe est partiellement emprunté (§16.2) |
+
+Le graphe est entièrement évalué avant que les formes ne soient générées (§20). Un
+`Param` ne peut donc pas déclencher une évaluation en cascade, ce qui garantit
+l'absence de coût caché. Une source hors cache rend `0.0` — jamais de panique (§18.1).
 
 ### 16.5 Identifiants
 

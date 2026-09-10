@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "crates/osc"]
 
 # Versions communes à toutes les crates (voir rust-workspace).
 # Chaque crate référence `dep.workspace = true` — évite les versions
@@ -8,6 +8,7 @@ members = ["crates/core"]
 # incompréhensibles entre crates.
 [workspace.dependencies]
 frogenx-core = { path = "crates/core" }
+frogenx-osc = { path = "crates/osc" }
 
 [workspace.package]
 version = "0.1.0"

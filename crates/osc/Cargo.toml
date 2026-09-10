@@ -1,0 +1,13 @@
+[package]
+name = "frogenx-osc"
+description = "Oscillateurs, LFO, enveloppes et bruit — les sources de modulation de FrogenX"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Ne dépend que de core (§10 : les flèches vont vers le haut).
+# Le bruit est implémenté ici plutôt que via la crate `noise` : le
+# déterminisme à graine explicite (§20.3) doit être garanti, pas supposé.
+[dependencies]
+frogenx-core.workspace = true

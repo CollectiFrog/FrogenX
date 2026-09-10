@@ -51,12 +51,15 @@ toujours une dépendance qui a fuité vers le bas.
 
 ## État
 
-**Étapes 1 et 2 faites** — `crates/core` : `Signal`, `Param`, `Graph`, `Clock`, sans
-aucune dépendance, 30 tests verts. Les contrats d'implémentation sont fixés en partie II
-de l'architecture (§16–§24).
+**Étapes 1, 2 et 3a faites** — 69 tests verts.
 
-Prochaine étape : `crates/osc` — oscillateurs, LFO, enveloppes, bruit. Puis les formes
-(étape 3), et la première image à l'écran (étape 4).
+- `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
+- `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
+  explicite, enveloppes attaque/relâchement, opérateurs (`Sum`, `Product`, `Mix`,
+  `Trigger`, `SampleHold`).
+
+Prochaine étape : `crates/shape` — primitives et opérateurs géométriques (3b), puis la
+première image à l'écran (étape 4).
 
 ```bash
 cargo test --workspace
