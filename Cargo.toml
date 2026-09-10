@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/core"]
+
+# Versions communes à toutes les crates (voir rust-workspace).
+# Chaque crate référence `dep.workspace = true` — évite les versions
+# divergentes de glam ou wgpu, qui produisent des erreurs de types
+# incompréhensibles entre crates.
+[workspace.dependencies]
+frogenx-core = { path = "crates/core" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -349,9 +349,12 @@ place en dernier.
 
 ## 10. Structure des crates
 
+Les crates vivent sous `crates/`, le workspace est à la racine. Seule `core` existe
+à ce jour ; les suivantes sont créées au fil de la feuille de route (§12).
+
 ```
 frogenx/
-├── core/      # Signal, Param, Graph, Clock          ← aucune dépendance
+├── core/      # Signal, Param, Graph, Clock          ← aucune dépendance ✅
 ├── osc/       # oscillateurs, LFO, enveloppes, bruit
 ├── audio/     # cpal, FFT, features → Signal
 ├── shape/     # primitives + opérateurs
@@ -396,8 +399,8 @@ couches complètes empilées.
 
 | # | Étape | Résultat visible |
 |---|---|---|
-| 1 | `Signal`, `Param`, oscillateur | valeurs testables, sans GPU |
-| 2 | Graphe de patch (arena, tri topo, cache) | modulation évaluable |
+| 1 | ✅ `Signal`, `Param`, `Clock` | valeurs testables, sans GPU — *fait* |
+| 2 | ✅ Graphe de patch (arena, tri topo, cache) | modulation évaluable — *fait* |
 | 3 | Primitives + opérateurs | polylignes testables |
 | 4 | `Layer` + `ShapeLayer` + compositeur, offscreen | **première image à l'écran** |
 | 5 | `OutputSink` + preview | pipeline de sortie en place |

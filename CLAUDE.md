@@ -51,10 +51,15 @@ toujours une dépendance qui a fuité vers le bas.
 
 ## État
 
-Démarrage — aucun code encore, mais les **contrats d'implémentation sont fixés**
-(partie II de l'architecture, §16–§24 : signatures, conventions numériques, modèle
-d'erreur, format de patch, cycle de frame, couleur, tests). Feuille de route en
-11 étapes au §12 ; prochaine étape : le cœur `Signal` / `Param` / oscillateurs.
+**Étapes 1 et 2 faites** — `crates/core` : `Signal`, `Param`, `Graph`, `Clock`, sans
+aucune dépendance, 30 tests verts. Les contrats d'implémentation sont fixés en partie II
+de l'architecture (§16–§24).
 
-Le projet **n'est pas encore un dépôt git**, ce que la règle du « même commit » suppose
-pourtant. À initialiser.
+Prochaine étape : `crates/osc` — oscillateurs, LFO, enveloppes, bruit. Puis les formes
+(étape 3), et la première image à l'écran (étape 4).
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
+```

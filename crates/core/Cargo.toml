@@ -1,0 +1,12 @@
+[package]
+name = "frogenx-core"
+description = "Signal, Param, Graph, Clock — le cœur de FrogenX"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# AUCUNE dépendance. C'est la règle du §10 de docs/ARCHITECTURE.md :
+# core ne dépend de rien, ce qui le rend testable sans GPU ni carte son.
+# Avant d'ajouter une ligne ici, relire la skill rust-workspace.
+[dependencies]
