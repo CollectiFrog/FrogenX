@@ -355,7 +355,8 @@ Les crates vivent sous `crates/`, le workspace est à la racine. Seule `core` ex
 ```
 frogenx/
 ├── core/      # Signal, Param, Graph, Clock          ← aucune dépendance ✅
-├── osc/       # oscillateurs, LFO, enveloppes, bruit
+├── osc/       # oscillateurs, LFO, enveloppes, bruit ✅
+├── shape/     # primitives + opérateurs              ✅ (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
 ├── shape/     # primitives + opérateurs
 ├── layer/     # trait Layer : Shape / Feedback / Video
@@ -378,7 +379,7 @@ maintenable à mesure qu'il grossit.
 
 | Domaine | Crate | Rôle |
 |---|---|---|
-| Maths | `glam` | vecteurs, matrices |
+| Maths | `glam` ✅ | vecteurs, matrices |
 | Rendu | `wgpu`, `winit` | GPU multiplateforme, fenêtrage |
 | UI | `egui` | rack de modules, câblage |
 | Bruit | `noise` | Perlin, simplex |
@@ -402,7 +403,7 @@ couches complètes empilées.
 | 1 | ✅ `Signal`, `Param`, `Clock` | valeurs testables, sans GPU — *fait* |
 | 2 | ✅ Graphe de patch (arena, tri topo, cache) | modulation évaluable — *fait* |
 | 3a | ✅ Oscillateurs, LFO, bruit, enveloppes | sources de modulation — *fait* |
-| 3b | Primitives + opérateurs de formes | polylignes testables |
+| 3b | ✅ Primitives + opérateurs de formes | polylignes testables — *fait* |
 | 4 | `Layer` + `ShapeLayer` + compositeur, offscreen | **première image à l'écran** |
 | 5 | `OutputSink` + preview | pipeline de sortie en place |
 | 6 | LFO câblé sur une fréquence | **le modulaire prend vie** |
@@ -444,6 +445,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`Ctx` porte le cache, pas `&Graph`** (§16.2) | le graphe mute l'état du nœud courant pendant `eval` ; et un `Signal` n'a pas à voir la topologie, seulement les valeurs de ses dépendances |
 | **Phase accumulée**, pas `sin(2π·f·t)` (osc) | en FM, la formule directe fait sauter la phase à chaque changement de fréquence — discontinuité visible |
 | **Bruit implémenté en interne**, pas la crate `noise` | le déterminisme à graine explicite (§20.3) doit être garanti, pas supposé à travers les versions d'une dépendance |
+| **`ShapeOp` en place**, distinct de `ShapeGenerator` (§16.3 bis) | des opérateurs enveloppants exigeraient un buffer par maillon — l'allocation par frame que le §16.3 évite |
+| **Contour non refermé par duplication** (§16.3) | un point répété dupliquerait un sommet à la tessellation et produirait des doublons sous répétition radiale |
+| **Saturation de la géométrie chez chaque primitive** (§18.4) | une modulation dégénérée doit dégrader la forme, jamais allouer des millions de points ni figer l'application |
 | **Écriture dans un buffer fourni** pour les formes (§16.3) | évite une allocation par forme et par frame à 60 fps |
 | **Graphe évalué entièrement avant les formes** (§20.1) | `Param::get()` sans coût ni effet de bord ; deux formes lisant un LFO voient la même valeur |
 | **Pas d'erreur en évaluation**, seulement en édition (§18.1) | un logiciel de scène ne panique pas ; les compteurs de diagnostic rendent les incohérences visibles sans interrompre |
@@ -621,7 +625,35 @@ allouer un `Vec` par forme et par frame produit une pression mémoire inutile. L
 compositeur possède les buffers et les réutilise (`out.clear()` puis remplissage).
 
 Le `&Graph` est nécessaire parce que les paramètres d'une forme sont des `Param`, dont
-la résolution exige le graphe.
+la résolution exige le graphe. Une forme est générée **après** `eval_frame` (§20.1),
+donc elle utilise `Param::get(&Graph)` et non `Param::eval(&Ctx)` (§16.4).
+
+**Convention de fermeture :** une forme fermée ne répète **pas** son premier point à la
+fin. C'est au rasteriseur de refermer le contour. Répéter le point dupliquerait un
+sommet à la tessellation et compliquerait tous les opérateurs — une répétition radiale
+sur 6 branches produirait 6 doublons.
+
+**Convention d'espace :** coordonnées normalisées, origine au centre, `[-1, 1]` sur le
+petit côté (§17).
+
+### 16.3 bis Le trait `ShapeOp` — les opérateurs
+
+Décision prise en implémentant `shape`, que la partie I ne tranchait pas.
+
+```rust
+pub trait ShapeOp {
+    fn apply(&self, t: f64, ctx: &Ctx, g: &Graph, pts: &mut Vec<Vec2>);
+}
+```
+
+**Pourquoi un trait distinct plutôt qu'un opérateur enveloppant un générateur.**
+L'enveloppement (`Deform::new(Circle)`) donnerait une composition naturelle, mais chaque
+maillon de la chaîne aurait besoin de son **propre buffer** pour recevoir la sortie du
+précédent — exactement l'allocation par frame que le §16.3 cherche à éviter.
+
+Un opérateur travaille donc **en place**. Une chaîne de dix opérateurs n'alloue rien.
+`Chain` assemble un générateur et une suite d'opérateurs, et implémente lui-même
+`ShapeGenerator` — la composition reste donc transparente pour l'appelant.
 
 ### 16.4 `Param`
 

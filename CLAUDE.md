@@ -51,15 +51,19 @@ toujours une dépendance qui a fuité vers le bas.
 
 ## État
 
-**Étapes 1, 2 et 3a faites** — 69 tests verts.
+**Étapes 1, 2, 3a et 3b faites** — 118 tests verts.
 
 - `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
   explicite, enveloppes attaque/relâchement, opérateurs (`Sum`, `Product`, `Mix`,
   `Trigger`, `SampleHold`).
+- `crates/shape` : primitives (`Ellipse`, `Polygon` à côtés flottants, `Star`, `Rect`,
+  `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et opérateurs
+  en place (`Deform`, `NoiseDisplace`, `RadialRepeat`, `Transform`, `Smooth`, `Chain`).
 
-Prochaine étape : `crates/shape` — primitives et opérateurs géométriques (3b), puis la
-première image à l'écran (étape 4).
+**Prochaine étape : 4 — la première image à l'écran.** `crates/layer` + `crates/render` :
+trait `Layer`, `ShapeLayer`, compositeur, rendu offscreen wgpu. C'est l'étape qui change
+de nature — première dépendance GPU, et la règle §10 devient critique.
 
 ```bash
 cargo test --workspace
