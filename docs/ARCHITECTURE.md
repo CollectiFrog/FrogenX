@@ -557,7 +557,7 @@ couches complètes empilées.
 | 13 | `scene3d` : maillages, caméra, lumières, culling | scène 3D comme source de clip |
 | 14 | Art-Net / DMX en sortie | pilotage d'éclairage physique |
 | 15 | Scripting Lua (`mlua`) sur `Command` (§23.4) | logique de composition scriptable |
-| 16 | Shaders d'effets custom — format à trancher (§23.4) | effets utilisateur sans recompiler FrogenX |
+| 16 | Shaders d'effets custom en WGSL natif (§23.4) | effets utilisateur sans recompiler FrogenX |
 
 **Les étapes clés :** la 4 (la grille devient le squelette organisationnel, avant même
 le rendu — tout ce qui suit s'y raccroche), la 5 (première image), la 7 (le concept
@@ -607,6 +607,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`egui`, pas `iced`, pour la crate `ui`** (§23) | intégration wgpu directe (texture native en quelques lignes), écosystème node-graph existant (`egui_node_graph`, `egui-snarl`), et mode immédiat qui lit/écrit l'état du `Graph` sans state parallèle — `iced` imposerait une machine `Message`/`update()` en plus, contre l'invariant « l'état vit dans le graphe » |
 | **`scene3d` modulée en direct par `Signal`/`Param`**, pas un flux déjà joué (§22bis) | TouchDesigner — seule référence du projet qui fait du 3D node-based en live — recuit toujours sa scène depuis l'état courant des paramètres au moment du Render TOP ; aucun raccourci de pré-rendu documenté |
 | **Instancing comme primitive de `scene3d`**, pas un système de particules séparé (§22bis) | modèle confirmé chez TouchDesigner (Geometry COMP, page Instance) pour le cas « beaucoup d'objets » visé à l'étape 13 |
+| **WGSL natif pour les shaders d'effets custom**, pas ISF adapté (§23.4) | le crate `isf` ne parse que les métadonnées (abandonné depuis 2020), le frontend GLSL de `naga` est lui-même qualifié « support secondaire » et incompatible avec le dialecte ISF ; transpiler la syntaxe ne suffirait pas, il faudrait reconstruire le runtime ISF (buffers multi-passes, persistants) — un sous-projet de semaines, pas un adaptateur |
 | **Pool de textures scratch réutilisables par format** (§22) | évite l'allocation par frame pour les buffers temporaires (snapshots, masques), généralise le ping-pong déjà en place pour `FeedbackLayer` |
 | **État des nœuds dans le graphe**, pas dans les modules (§16.1) | modules purs et testables, sérialisation et reset gratuits, pas d'emprunt mutable sur un nœud partagé |
 | **`Ctx` porte le cache, pas `&Graph`** (§16.2) | le graphe mute l'état du nœud courant pendant `eval` ; et un `Signal` n'a pas à voir la topologie, seulement les valeurs de ses dépendances |
@@ -1403,27 +1404,45 @@ compromis pour un langage que l'utilisateur va écrire en direct, en répétitio
 régie. Un script Lua peut émettre des `Command` (§23) pour piloter le graphe, mais ne
 mute jamais le `Graph` directement — même contrat que l'UI.
 
-**Format de shaders pour les effets pixel : décision ouverte, non tranchée.** Deux
-options, documentées ici pour être tranchées plus tard plutôt que devinées :
+**Format de shaders pour les effets pixel : tranché — WGSL natif, importeur ISF
+plus tard.** Deux options avaient été posées (compatible ISF adapté en WGSL, vs
+format WGSL propre à FrogenX) ; la décision a été vérifiée contre l'état réel de
+l'écosystème Rust plutôt que devinée :
 
-| Option | Pour | Contre |
-|---|---|---|
-| **Compatible ISF** (Interactive Shader Format, adapté en WGSL) | Standard déjà utilisé par Resolume, VDMX, TouchDesigner — un effet écrit pour l'un fonctionne (ou presque) dans FrogenX, adoption facilitée pour un public déjà équipé | ISF est GLSL-centré ; nécessite une transpilation GLSL→WGSL à l'import (risque de divergence de comportement selon le pilote/backend, pas garantie identique à l'original) |
-| **Format WGSL natif propre à FrogenX** | Cohérent avec le choix wgpu/WGSL déjà acté (§9.1) ; pas de couche de transpilation à maintenir | Aucune compatibilité avec l'écosystème existant ; un utilisateur venant de Resolume/VDMX repart de zéro |
+- Le crate `isf` (nannou-org) ne fait que **parser** le JSON de métadonnées — pas de
+  transpilation, abandonné depuis 2020 (dernière publication v0.1.0).
+- Le frontend GLSL de `naga` (seul transpileur GLSL→WGSL utilisable en Rust) est
+  qualifié de **« support secondaire »** par son propre README, limité à un dialecte
+  GLSL 440+/Vulkan — pas le GLSL ES 2.0/3.0 dans lequel ISF est écrit — avec un
+  blocage connu sur les samplers combinés signalé par un mainteneur wgpu en 2024.
+- Aucun projet Rust ISF-dans-wgpu trouvé, même partiel ou abandonné.
+- Au-delà de la syntaxe, ISF a un vrai modèle d'exécution à reconstruire : buffers
+  `TARGET` multi-passes, buffers `PERSISTENT` qui survivent entre frames, uniformes
+  implicites (`isf_FragNormCoord`, `IMG_NORMPIXEL`, entrées FFT audio). Transpiler la
+  syntaxe ne suffit pas ; il faudrait réimplémenter une partie du runtime ISF par-
+  dessus un transpileur déjà fragile.
 
-**Ce que les deux options doivent respecter, quel que soit le choix final :**
+**Décision : WGSL natif maintenant.** La compatibilité ISF dépend d'une
+infrastructure qui n'existe pas dans l'écosystème Rust — ce n'est pas un adaptateur
+fin mais un sous-projet de plusieurs semaines avec un risque de correction (le
+frontend GLSL de `naga` n'est pas fiable aujourd'hui), à ne pas laisser retarder ou
+fragiliser le pipeline d'effets. **Ce choix ne ferme pas la porte à ISF plus tard** :
+tant que le binding des paramètres d'effet reste le schéma explicite de FrogenX
+(`Param`, §16.4) et non la convention d'uniformes implicites d'ISF, un futur
+importeur ISF (métadonnées ISF → WGSL généré + bindings `Param`) peut s'ajouter comme
+frontend de compilation isolé, sans toucher au pipeline d'effets natif.
+
+**Contraintes du format WGSL natif, dès l'implémentation :**
 - Jamais de panique en évaluation (§18.1) — un shader custom défaillant dégrade
   (image noire, effet ignoré, compteur `Diagnostics` incrémenté), ne plante jamais le
   rendu.
 - Les paramètres exposés par un effet custom restent des `Param` (§16.4), pas des
   uniformes bruts — un effet custom doit être modulable exactement comme un effet
-  natif, sinon il devient un citoyen de seconde classe dans le graphe.
+  natif, sinon il devient un citoyen de seconde classe dans le graphe. C'est aussi ce
+  qui garde la porte ISF ouverte (ci-dessus).
 - Compilation/validation du shader se fait en régime **édition** (§18.1), jamais en
   frame — un shader qui ne compile pas est refusé au chargement, pas découvert à
   l'exécution.
-
-À trancher avant l'implémentation (feuille de route, §12) : cette section reste une
-spécification des contraintes, pas encore un contrat fermé comme §16 à §20.
 
 ---
 
