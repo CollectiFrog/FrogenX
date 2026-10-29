@@ -175,8 +175,8 @@ elle s'étend aux effets vidéo et 3D sans remettre en cause le contrat.
 
 ```rust
 pub enum Transport {
-    Timeline { position: Param, speed: Param },
-    BpmSync { position: Param, duration_beats: Param, play_mode: PlayMode },
+    Timeline { position: PositionSignal, speed: Param },
+    BpmSync { position: PositionSignal, duration_beats: Param, play_mode: PlayMode },
 }
 
 pub struct TempoController {
@@ -191,6 +191,58 @@ pub struct TempoController {
 répond à « combien de temps dure un beat maintenant », une donnée musicale que plusieurs
 clips et layers doivent partager en même temps, et qui change en live (tap tempo, push/
 pull de synchro avec un DJ). C'est une couche au-dessus de `Clock`, pas une redéfinition.
+
+**Pourquoi `position` n'est pas un `Param`.** `speed` et `duration_beats` sont bien
+réglables par l'utilisateur ou modulables par un `Signal` — ce sont des entrées,
+`Param` leur convient. `position` n'est pas réglable de la même façon : c'est une
+valeur qui **avance toute seule**, frame après frame, dérivée du temps — exactement le
+rôle que §16.1 attribue à un `Signal`, pas à un `Param`. Un `Param::Fixed`/`Modulated`
+ne s'auto-incrémente jamais ; le faire avancer depuis l'extérieur à 60 fps via un
+`Command::SetParam` (§23) détournerait un mécanisme pensé pour l'édition ponctuelle,
+pas pour l'évaluation par frame — exactement le genre de raccourci que §15 interdit.
+
+`position` est donc portée par un petit `Signal` interne au clip, un
+**accumulateur de position** — le même principe que la phase d'un oscillateur
+(§16.1, « corollaire du temps » §2.3), appliqué à une position de lecture au lieu
+d'une phase `[0,1)` :
+
+```rust
+// slots[0] = position accumulée, en secondes (Timeline) ou en battements (BpmSync)
+pub struct PositionSignal { speed: Param }
+
+impl Signal for PositionSignal {
+    fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
+        let pos = state.get(0) + self.speed.eval(ctx) * ctx.dt as f32;
+        state.set(0, pos);
+        pos
+    }
+    fn state_size(&self) -> usize { 1 }
+}
+```
+
+**Ce que ça donne, concrètement :**
+- `position` se lit comme n'importe quel `Signal` — `p.get(&graph)` depuis le moteur
+  de composition entre deux frames, `p.eval(ctx)` depuis un autre `Signal` du même
+  clip (§16.4, tableau des deux voies de lecture).
+- L'état (la position courante) vit dans le `NodeState` que le `Graph` du clip
+  possède — pas dans `Transport` lui-même, qui reste une structure sans champ
+  mutable. Ça respecte §2.3 sans exception, et ça rend `position` sérialisable et
+  réinitialisable gratuitement, comme tout `NodeState` (§16.1).
+- `BpmSync` branche la même `PositionSignal` mais avec `speed` dérivée du `tempo`
+  du `TempoController` plutôt qu'un `Param` fixe — un `resync` (tap, re-sync DJ) se
+  traduit par un `Command` qui réécrit `state.slots[0]` via le `Graph`, pas par une
+  mutation directe de `Transport`.
+- `ClipTransition` (§3bis.2) suit le même principe pour sa progression — un fondu
+  qui dure N frames est aussi un accumulateur, pas un `Param` statique.
+
+**Pourquoi documenter ce choix ici plutôt que de le découvrir en silence à
+l'implémentation** : `feature-complete` demande explicitement de corriger le contrat
+dans le document dès qu'une contrainte du compilateur révèle un couplage que le
+contrat autorisait à tort (c'est arrivé une première fois pour `Ctx`, §16.2). Ici,
+c'est anticipé plutôt que découvert : `Param` n'a jamais eu vocation à représenter une
+valeur qui avance seule, et laisser le sketch initial (`position: Param`) tel quel
+aurait forcé une réécriture à l'étape 7 de la feuille de route (BpmSync câblé en
+direct, §12).
 
 ### 3bis.4 `CrossFader`
 
@@ -601,6 +653,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `Graph` par `Clip`, pas un graphe global** (§3) | un clip reste déplaçable, dupliquable, sérialisable seul ; la modulation inter-clips est une extension explicite, pas le cas par défaut |
 | **`Column` transversal**, pas une propriété de `Layer` (§3bis.1) | un déclenchement par layer ne peut pas exprimer une scène synchronisée sur tous les layers sans dupliquer la logique |
 | **`TempoController` au-dessus de `Clock`**, pas une redéfinition (§3bis.3) | `Clock` répond à l'heure pour le déterminisme ; le tempo répond à la durée d'un beat, partagée et modifiable en live (tap, resync) |
+| **`Transport.position` est un `Signal` accumulateur**, pas un `Param` (§3bis.3) | une valeur qui avance seule à chaque frame est le rôle d'un `Signal` (§16.1), pas d'un `Param` — l'écrire via `Command::SetParam` à 60 fps détournerait un mécanisme pensé pour l'édition ponctuelle |
 | **`CrossFader` global en plus de `BlendParams` par couche** (§3bis.4) | le geste de régie mélange deux groupes entiers ; `BlendParams` mélange une couche avec celle du dessous — les deux répondent à des échelles différentes |
 | **`composition` ne dépend que de `core`** (§10) | la grille doit rester testable sans GPU ni audio, pour la même raison que `core`/`osc`/`shape` |
 | **La grille (étape 4) précède le rendu (étape 5)** (§12) | toutes les étapes suivantes s'y raccrochent ; construire par-dessus une grille déjà en place évite une réécriture |
