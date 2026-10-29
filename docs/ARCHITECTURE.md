@@ -150,6 +150,32 @@ déclenche le même instant dramaturgique (« scène 3 ») sur tous les layers s
 synchronisation sur chaque layer. C'est le même besoin qu'une scène sur un contrôleur
 d'éclairage : une colonne, canaux multiples.
 
+**Représentation : une arena par niveau, pas une arena unique pour toute la
+hiérarchie.** Même principe que `core::Graph` (§3) — `Vec<T>` + identifiant à
+génération — répété une fois par niveau plutôt que partagé :
+
+```rust
+pub struct DeckId(u32);
+pub struct LayerGroupId(u32);
+pub struct LayerId(u32);
+pub struct ColumnId(u32);
+pub struct ClipId(u32);
+```
+
+**Pourquoi pas une seule arena hétérogène.** Un identifiant typé par niveau rend une
+confusion (passer un `ClipId` où un `DeckId` est attendu) **détectable à la
+compilation**, pas à l'exécution — alors qu'un unique `NodeId` générique pour toute la
+hiérarchie laisserait ce genre d'erreur passer silencieusement jusqu'à un panique ou un
+comportement incohérent en régime édition (§18.1). Chaque `Vec` reste aussi petit et
+contigu que son niveau le permet, et retirer un `Deck` ne renumérote jamais les `Clip`
+d'un autre deck.
+
+**Coût accepté :** cinq structs d'identifiant au lieu d'un seul générique, et une
+référence croisée (un `Layer` vers son `Deck` parent) passe par un identifiant typé de
+la relation plutôt qu'un simple entier. C'est du boilerplate mécanique, pas un risque —
+contrairement au choix de représentation de `Transport.position` (§3bis.3), qui
+engageait un vrai contrat.
+
 ### 3bis.2 Le `Clip`, point de jonction avec le graphe modulaire
 
 ```rust
@@ -170,6 +196,32 @@ paramètres via son `Graph`, exactement comme avant la réorientation.
 **Chaque clip porte son `Graph`** (voir le changement au §3). Les effets d'un clip sont
 une chaîne `ShapeOp`-like en place, cohérente avec la décision déjà prise en §16.3 bis —
 elle s'étend aux effets vidéo et 3D sans remettre en cause le contrat.
+
+**`ClipTransition` suit le même principe que `Transport.position` (§3bis.3) : une
+progression qui avance seule est un accumulateur, pas un `Param` statique.**
+
+```rust
+pub enum ClipTransition {
+    Cut,
+    Fade { phase: PositionSignal, curve: FadeCurve },
+    Wipe { phase: PositionSignal, curve: FadeCurve, direction: WipeDirection },
+}
+```
+
+**Pourquoi pas une énum de données pures (`Fade(Param)`).** Un fondu qui dure N frames
+a besoin de la même chose qu'une position de lecture : une valeur qui progresse de 0 à
+1 toute seule, frame après frame, sans qu'un `Command` externe la pousse à chaque
+frame. C'est exactement le rôle de `PositionSignal` (§3bis.3) — réutilisé ici plutôt
+que réinventé, et l'état de progression vit dans le `NodeState` du `Graph` du clip,
+pas dans `ClipTransition` lui-même, qui reste sans champ mutable (§2.3).
+
+**Portée livrée à l'étape 4 (§12) : `Cut` seul.** `Fade`/`Wipe` sont dans l'énum dès
+maintenant pour fixer la forme du contrat, mais leur logique de rendu (mélanger deux
+clips pendant la transition) dépend du compositeur de couches qui n'existe qu'à partir
+de l'étape 5. Les construire avant aurait anticipé une dépendance que `composition` ne
+doit pas avoir (§10 : testable sans GPU). **Ce n'est pas un report silencieux** : le
+type existe, son comportement pour `Fade`/`Wipe` lève `todo!()` documenté jusqu'à
+l'étape 5, jamais une valeur fausse qui passerait un test par accident.
 
 ### 3bis.3 Transport et tempo
 
@@ -266,6 +318,16 @@ Le format de patch versionné (§19) s'étend pour porter la grille : un patch d
 désormais une `Composition` (decks, layers, columns), chaque clip sérialisant son
 `Graph` comme avant. C'est un changement de schéma, donc une migration (§19.2) au
 moment de l'implémenter — pas une refonte du mécanisme de versionnage lui-même.
+
+**`serde` dès le premier commit de `composition`, pas ajouté après coup.** Les cinq
+identifiants arena du §3bis.1 et la forme de `ClipTransition` (§3bis.2) doivent avoir
+un schéma de sérialisation stable avant que quoi que ce soit ne s'appuie dessus —
+exactement le format v2 déjà esquissé en §19.1 (`"id": 0, "gen": 0` par nœud). Ajouter
+`#[derive(Serialize, Deserialize)]` après coup, une fois la structure interne figée
+par du code qui en dépend, coûterait une migration de schéma (§19.2) immédiate — un
+coût strictement supérieur à celui de le faire dès le début, pour un `derive` qui ne
+change rien au comportement. `serde` passe donc de « à venir » à dépendance active de
+`composition` dans `[workspace.dependencies]` (§11), dès l'étape 4 du §12.
 
 ---
 
@@ -654,6 +716,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`Column` transversal**, pas une propriété de `Layer` (§3bis.1) | un déclenchement par layer ne peut pas exprimer une scène synchronisée sur tous les layers sans dupliquer la logique |
 | **`TempoController` au-dessus de `Clock`**, pas une redéfinition (§3bis.3) | `Clock` répond à l'heure pour le déterminisme ; le tempo répond à la durée d'un beat, partagée et modifiable en live (tap, resync) |
 | **`Transport.position` est un `Signal` accumulateur**, pas un `Param` (§3bis.3) | une valeur qui avance seule à chaque frame est le rôle d'un `Signal` (§16.1), pas d'un `Param` — l'écrire via `Command::SetParam` à 60 fps détournerait un mécanisme pensé pour l'édition ponctuelle |
+| **Une arena par niveau de la grille** (`DeckId`/`LayerGroupId`/`LayerId`/`ColumnId`/`ClipId`), pas une arena unique (§3bis.1) | un identifiant typé par niveau rend une confusion détectable à la compilation, pas à l'exécution ; même idiome que `core::Graph` |
+| **`ClipTransition` réutilise `PositionSignal`** pour sa progression, `Fade`/`Wipe` non rendus avant l'étape 5 (§3bis.2) | une transition qui avance seule a le même besoin que `Transport.position` ; leur rendu dépend d'un compositeur de couches que `composition` ne doit pas connaître (§10) |
+| **`serde` dès le premier commit de `composition`**, pas ajouté après (§3bis.5) | un schéma figé par du code qui en dépend coûte une migration immédiate (§19.2) ; le coût de l'ajouter dès le début est quasi nul |
 | **`CrossFader` global en plus de `BlendParams` par couche** (§3bis.4) | le geste de régie mélange deux groupes entiers ; `BlendParams` mélange une couche avec celle du dessous — les deux répondent à des échelles différentes |
 | **`composition` ne dépend que de `core`** (§10) | la grille doit rester testable sans GPU ni audio, pour la même raison que `core`/`osc`/`shape` |
 | **La grille (étape 4) précède le rendu (étape 5)** (§12) | toutes les étapes suivantes s'y raccrochent ; construire par-dessus une grille déjà en place évite une réécriture |
@@ -720,6 +785,7 @@ concrètement, par étage du §1 :
 | **Opérateurs** | composition, idempotence quand elle est attendue, préservation du nombre de points |
 | **Audio** | features sur signaux **synthétiques** (sinus pur → centroïde connu ; silence → RMS nul) |
 | **Sorties** | un `OutputSink` factice reçoit bien les frames, dans l'ordre, sans perte en mode `Fixed` |
+| **Grille de composition** | construction/suppression dans la hiérarchie sans invalider les identifiants des niveaux non touchés (§3bis.1) ; une `Column` déclenche bien la même tranche sur tous les `Layer` (§3bis.1) ; `TempoController::tap` calcule un BPM correct sur une séquence d'événements synthétiques ; `CrossFader.phase` à 0/0.5/1 produit les `BlendParams::opacity` attendus sur les deux groupes (§3bis.4) ; `PositionSignal` avance déterministiquement à un `t`/`dt` injecté, jamais l'horloge système (§3bis.3) |
 
 **Ce qui rend cela possible :** la règle de dépendance du §10. `core`, `osc` et `shape`
 ne connaissent ni GPU, ni carte son, ni fenêtre — ils sont donc testables en CI,
