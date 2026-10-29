@@ -601,18 +601,39 @@ frogenx/
 ├── shape/     # primitives + opérateurs              ✅ (core, osc, glam)
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
-├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController (core)
+├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController (core, shape)
 ├── layer/     # trait Layer : Shape / Scene3d / Feedback / Video
 ├── render/    # wgpu, compositeur, post-fx
 ├── output/    # OutputSink : preview / NDI / Spout / Syphon / Art-Net / recorder
 └── ui/        # egui : grille de clips, rack par clip, monitoring
 ```
 
-**`composition` ne dépend que de `core`.** La grille (§3bis) doit rester testable sans
-GPU ni audio, pour la même raison que `core`/`osc`/`shape` : trier des decks, détecter
-des conflits de connexion sur une colonne, valider une transition de clip — tout cela
-se vérifie sur des structures de données pures. `composition` connaît l'existence d'un
-`Graph` par clip (il en possède un par `Clip`), mais jamais wgpu, cpal ou le rendu.
+**`composition` dépend de `core` et `shape`, pas seulement de `core`.** Révision du
+sketch initial de §3bis.2 : `Clip.effects` référence une chaîne `ShapeOp` (§16.3 bis),
+dont le type vit dans `shape`. Deux routes existaient pour éviter cette dépendance —
+un identifiant opaque résolu plus haut dans la pile (§5, §13), ou accepter la
+dépendance — et c'est la seconde qui est retenue : `shape` elle-même ne dépend que de
+`core`/`osc`/`glam` (aucun GPU, aucune carte son), donc `composition → shape` ne casse
+**pas** la testabilité sans GPU qui motive la règle de dépendance (§10) — elle déplace
+seulement la position de `composition` dans la chaîne, sans l'exposer à wgpu ni cpal.
+Trier des decks, détecter des conflits de connexion sur une colonne, valider une
+transition de clip restent vérifiables sur des structures de données pures. La
+distinction qui compte n'est donc pas « combien de crates en amont », mais « est-ce
+que l'une d'elles connaît le GPU, la carte son ou une fenêtre » —`shape` n'en connaît
+aucun.
+
+**Conséquence sur l'ordre de la chaîne de dépendance (§0, en-tête du document) :**
+`composition` se place après `shape`, pas après `core` directement —
+`core → osc → shape → composition → audio → layer → render → output → ui`. `audio`
+reste indépendant de `composition` (une feature audio est un `Signal`, peu importe où
+il est consommé) ; son déplacement dans la liste est seulement pour lire la chaîne de
+gauche à droite dans l'ordre réel des flèches.
+
+**`scene3d` suit la même règle que `shape`.** Primitives 3D (maillages, caméra,
+lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rôle que
+`shape` jouait pour le 2D, étendu à la 3D plutôt que remplacé. `Clip.effects` pourra,
+selon `ClipSource`, référencer une chaîne de `shape::ShapeOp` ou de son équivalent
+`scene3d` — même principe de dépendance que ci-dessus, appliqué symétriquement.
 
 **`scene3d` suit la même règle que `shape`.** Primitives 3D (maillages, caméra,
 lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rôle que
@@ -719,6 +740,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Une arena par niveau de la grille** (`DeckId`/`LayerGroupId`/`LayerId`/`ColumnId`/`ClipId`), pas une arena unique (§3bis.1) | un identifiant typé par niveau rend une confusion détectable à la compilation, pas à l'exécution ; même idiome que `core::Graph` |
 | **`ClipTransition` réutilise `PositionSignal`** pour sa progression, `Fade`/`Wipe` non rendus avant l'étape 5 (§3bis.2) | une transition qui avance seule a le même besoin que `Transport.position` ; leur rendu dépend d'un compositeur de couches que `composition` ne doit pas connaître (§10) |
 | **`serde` dès le premier commit de `composition`**, pas ajouté après (§3bis.5) | un schéma figé par du code qui en dépend coûte une migration immédiate (§19.2) ; le coût de l'ajouter dès le début est quasi nul |
+| **`composition` dépend de `shape`**, pas seulement de `core` (§10) | `Clip.effects` référence une chaîne `ShapeOp` dont le type vit dans `shape` ; `shape` elle-même ne connaît ni GPU ni carte son, donc cette dépendance ne casse pas la testabilité sans GPU qui motive la règle de dépendance, elle déplace seulement la position de `composition` dans la chaîne |
 | **`CrossFader` global en plus de `BlendParams` par couche** (§3bis.4) | le geste de régie mélange deux groupes entiers ; `BlendParams` mélange une couche avec celle du dessous — les deux répondent à des échelles différentes |
 | **`composition` ne dépend que de `core`** (§10) | la grille doit rester testable sans GPU ni audio, pour la même raison que `core`/`osc`/`shape` |
 | **La grille (étape 4) précède le rendu (étape 5)** (§12) | toutes les étapes suivantes s'y raccrochent ; construire par-dessus une grille déjà en place évite une réécriture |

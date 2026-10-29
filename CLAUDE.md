@@ -1,7 +1,8 @@
 # FrogenX
 
-Générateur de visuels procéduraux, organiques et géométriques — temps réel, piloté
-comme un synthétiseur modulaire. Rust, wgpu, multiplateforme (Linux / macOS / Windows).
+Mixeur vidéo et scène 3D live, organisé en grille de clips déclenchables, où chaque
+clip est piloté comme un synthétiseur modulaire. Rust, wgpu, multiplateforme
+(Linux / macOS / Windows).
 
 **Lire [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) avant toute intervention.** Les
 décisions structurantes y sont accompagnées de leur raison (§13, tableau
@@ -31,12 +32,15 @@ Détail dans la skill `modular-design`, contrats complets en partie II de l'arch
 
 ## Règle de dépendance des crates
 
-`core` → `osc` → `audio` → `shape` → `layer` → `render` → `output` → `ui`, les flèches
-vers le haut. `core` ne dépend de rien ; `shape` ne connaît ni wgpu ni l'audio.
+`core` → `osc` → `shape` → `composition` → `audio` → `layer` → `render` → `output` →
+`ui`, les flèches vers le haut. `core` ne dépend de rien ; `shape` et `composition` ne
+connaissent ni wgpu ni l'audio.
 
-Ce n'est pas de l'esthétique : c'est ce qui rend `core`, `osc` et `shape` testables sans
-GPU ni carte son. Une fonctionnalité soudain « impossible à tester » signale presque
-toujours une dépendance qui a fuité vers le bas.
+Ce n'est pas de l'esthétique : c'est ce qui rend `core`, `osc`, `shape` et
+`composition` testables sans GPU ni carte son. Une fonctionnalité soudain « impossible
+à tester » signale presque toujours une dépendance qui a fuité vers le bas — la
+question qui compte n'est pas « combien de crates en amont », mais « est-ce que l'une
+d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md §10).
 
 ## Skills
 
@@ -51,7 +55,9 @@ toujours une dépendance qui a fuité vers le bas.
 
 ## État
 
-**Étapes 1, 2, 3a et 3b faites** — 118 tests verts.
+**Étapes 1, 2, 3a et 3b faites, étape 4 en cours** — grille de composition
+(`crates/composition`) : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`,
+`TempoController`, `PositionSignal` (docs/ARCHITECTURE.md §3bis).
 
 - `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
@@ -60,10 +66,12 @@ toujours une dépendance qui a fuité vers le bas.
 - `crates/shape` : primitives (`Ellipse`, `Polygon` à côtés flottants, `Star`, `Rect`,
   `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et opérateurs
   en place (`Deform`, `NoiseDisplace`, `RadialRepeat`, `Transform`, `Smooth`, `Chain`).
+- `crates/composition` : la grille (§3bis) — dépend de `core` et `shape`.
 
-**Prochaine étape : 4 — la première image à l'écran.** `crates/layer` + `crates/render` :
-trait `Layer`, `ShapeLayer`, compositeur, rendu offscreen wgpu. C'est l'étape qui change
-de nature — première dépendance GPU, et la règle §10 devient critique.
+**Après l'étape 4 : étape 5 — la première image à l'écran.** `crates/layer` +
+`crates/render` : trait `Layer`, `ShapeLayer`, compositeur, rendu offscreen wgpu.
+C'est l'étape qui change de nature — première dépendance GPU, et la règle §10 devient
+critique.
 
 ```bash
 cargo test --workspace
