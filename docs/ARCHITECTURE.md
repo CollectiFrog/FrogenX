@@ -530,6 +530,7 @@ maintenable à mesure qu'il grossit.
 | Encodage | binaire `ffmpeg` (pipe) | enregistrement, décodage de clips (§9.3) |
 | Éclairage | `artnet` ou équivalent | sortie Art-Net / DMX (§3bis, §8) |
 | Scripting | `mlua` | logique de composition personnalisée (§23.4) |
+| Contrôle live | `midir` (MIDI), `rosc` (OSC) | pilotage de l'interface et des effets par surface externe (§22bis.1) |
 
 ---
 
@@ -558,6 +559,7 @@ couches complètes empilées.
 | 14 | Art-Net / DMX en sortie | pilotage d'éclairage physique |
 | 15 | Scripting Lua (`mlua`) sur `Command` (§23.4) | logique de composition scriptable |
 | 16 | Shaders d'effets custom en WGSL natif (§23.4) | effets utilisateur sans recompiler FrogenX |
+| 17 | Entrées MIDI/OSC, `Param3d::Bind` sur `scene3d` (§22bis.1) | pilotage live de l'interface et des effets par surface de contrôle externe |
 
 **Les étapes clés :** la 4 (la grille devient le squelette organisationnel, avant même
 le rendu — tout ce qui suit s'y raccroche), la 5 (première image), la 7 (le concept
@@ -608,6 +610,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`scene3d` modulée en direct par `Signal`/`Param`**, pas un flux déjà joué (§22bis) | TouchDesigner — seule référence du projet qui fait du 3D node-based en live — recuit toujours sa scène depuis l'état courant des paramètres au moment du Render TOP ; aucun raccourci de pré-rendu documenté |
 | **Instancing comme primitive de `scene3d`**, pas un système de particules séparé (§22bis) | modèle confirmé chez TouchDesigner (Geometry COMP, page Instance) pour le cas « beaucoup d'objets » visé à l'étape 13 |
 | **WGSL natif pour les shaders d'effets custom**, pas ISF adapté (§23.4) | le crate `isf` ne parse que les métadonnées (abandonné depuis 2020), le frontend GLSL de `naga` est lui-même qualifié « support secondaire » et incompatible avec le dialecte ISF ; transpiler la syntaxe ne suffirait pas, il faudrait reconstruire le runtime ISF (buffers multi-passes, persistants) — un sous-projet de semaines, pas un adaptateur |
+| **`Param::Bind` (bidirectionnel) ajouté dans `scene3d` seulement**, `core`/2D restent unidirectionnels (§22bis.1) | le pilotage live par MIDI/OSC et la manipulation directe d'une caméra 3D exigent une resynchronisation dans les deux sens (éviter le *parameter jump*) ; la génération 2D reste de la modulation pure sans ce geste de pilotage manuel, `Modulated` suffit |
 | **Pool de textures scratch réutilisables par format** (§22) | évite l'allocation par frame pour les buffers temporaires (snapshots, masques), généralise le ping-pong déjà en place pour `FeedbackLayer` |
 | **État des nœuds dans le graphe**, pas dans les modules (§16.1) | modules purs et testables, sérialisation et reset gratuits, pas d'emprunt mutable sur un nœud partagé |
 | **`Ctx` porte le cache, pas `&Graph`** (§16.2) | le graphe mute l'état du nœud courant pendant `eval` ; et un `Signal` n'a pas à voir la topologie, seulement les valeurs de ses dépendances |
@@ -1237,11 +1240,47 @@ l'analyse de TouchDesigner (seul logiciel de référence du projet qui fait rée
   pas maintenant.
 - **Liaison de paramètres** : chaque paramètre TD a 4 modes — Constant, Expression,
   Export (canal → paramètre, à sens unique), **Bind (canal ↔ paramètre, à double sens)**.
-  Le `Param::Modulated{base,depth,source}` de FrogenX (§2.2) couvre l'équivalent d'Export,
-  pas de Bind. **Gap identifié, pas comblé** : si un contrôle UI doit un jour réécrire
-  dans sa propre source de modulation (ex. un slider qui ajuste le LFO qui le pilote),
-  `Param` n'a pas de mécanisme pour ça aujourd'hui. À surveiller, pas à résoudre avant
-  qu'un besoin concret apparaisse.
+  Le `Param::Modulated{base,depth,source}` de FrogenX (§2.2) couvre l'équivalent
+  d'Export, pas de Bind. **Décision : architecture hybride, tranchée en §23.5.**
+
+### 22bis.1 `Param` reste unidirectionnel en 2D, `scene3d` gagne `Param::Bind`
+
+**Décision : le binding bidirectionnel est ajouté, mais seulement dans `scene3d`.**
+`core`/`osc`/`shape` (génération 2D) gardent `Param` tel qu'il est — `Fixed` /
+`Modulated{base,depth,source}`, strictement à sens unique. `scene3d` gagne une
+troisième variante, propre à cette crate :
+
+```rust
+// dans scene3d uniquement — pas dans core::Param
+pub enum Param3d {
+    Fixed(f32),
+    Modulated { base: f32, depth: f32, source: NodeId },
+    Bind { source: NodeId },   // deux sens : lit ET réécrit le NodeState de source
+}
+```
+
+**Pourquoi ici et pas en 2D.** Le déclencheur est le pilotage live par contrôleur
+physique (MIDI, OSC) demandé pour l'interface et les effets : un fader logiciel à 50 %
+et une molette MIDI encore à 0 % se désynchronisent au premier geste (le classique
+*parameter jump* MIDI) si rien ne les resynchronise dans les deux sens. Une caméra 3D
+pilotée à la souris pendant qu'un `Signal` la module (ex. un LFO sur la rotation) a le
+même besoin : tourner la caméra à la main doit pouvoir re-caler la phase du LFO, pas
+seulement être écrasé à la frame suivante. La génération 2D (formes, `ShapeOp`) n'a
+jamais ce geste de pilotage direct d'un objet manipulable à la main — elle reste de la
+modulation pure, `Modulated` suffit.
+
+**Pourquoi ça ne casse pas « l'état vit dans le graphe » (§2.3).** `Param3d::Bind`
+n'écrit jamais dans un module ni dans un champ mutable arbitraire — il écrit dans le
+`NodeState` du nœud `source`, via le `Graph`, exactement le canal déjà prévu pour que
+l'état d'un `Signal` persiste entre frames (§16.1). Un `Signal` utilisé derrière un
+`Bind` doit lire sa position courante depuis son `NodeState` plutôt que la recalculer
+uniquement depuis `t` — c'est une exigence sur les `Signal` admissibles derrière un
+`Bind`, pas une exception à la règle : l'état reste dans le graphe, jamais dans le
+module.
+
+**Portée explicite :** `Param3d::Bind` peut cibler n'importe quel nœud du graphe de
+`scene3d`, interne ou branché sur une entrée MIDI/OSC — pas seulement les entrées
+physiques. La frontière est la crate, pas la nature de la source.
 - **Instancing** : le Geometry COMP a une page Instance intégrée — transform/couleur par
   instance piloté par un canal CHOP, une instance par échantillon/ligne/pixel/point.
   Pas un système de particules séparé. C'est la réponse à « beaucoup d'objets » : une
