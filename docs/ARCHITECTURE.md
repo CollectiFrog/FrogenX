@@ -1,27 +1,43 @@
 # Architecture — FrogenX
 
-> Générateur de visuels procéduraux, organiques et géométriques, temps réel,
-> piloté comme un synthétiseur modulaire.
+> Mixeur vidéo et scène 3D live, organisé en grille de clips déclenchables, où
+> chaque clip est piloté comme un synthétiseur modulaire.
 
 **Statut du document :** vivant. Il décrit les décisions structurantes et le *pourquoi*
 de chacune. Il doit être modifié quand une décision change — un document d'architecture
 qui ment est pire que pas de document.
 
+**Réorientation (voir §13 pour le détail des décisions) :** FrogenX part d'un générateur
+de visuels procéduraux 2D vers un outil de mixage vidéo live avec scènes 3D, organisé
+autour d'une **grille de clips** (inspirée de Resolume Arena) plutôt que d'un patch
+modulaire unique. Le graphe `Signal`/`Param` ne disparaît pas : il devient le moteur de
+pilotage *à l'intérieur* de chaque clip, layer et effet — exactement le rôle qu'il jouait
+déjà, mais désormais invoqué depuis une structure d'organisation explicite plutôt que
+comme unique niveau du logiciel.
+
 ---
 
 ## 1. L'idée en une phrase
 
-Des **signaux** (oscillateurs, LFO, enveloppes, features audio) modulent des
-**paramètres** de **formes**, rendues en **couches** composées ensemble, puis
-envoyées vers plusieurs **sorties** simultanées.
+Une **grille de clips** (decks, layers, colonnes) organise ce qui joue et quand. Chaque
+**clip** contient une **source** (forme procédurale, scène 3D, vidéo) et une chaîne
+d'**effets**, tous deux pilotés par des **signaux** qui modulent des **paramètres**.
+Les layers se composent en **couches**, envoyées vers plusieurs **sorties** simultanées.
 
 ```
-   Signaux  ──module──▶  Formes  ──rasterise──▶  Couches  ──compose──▶  Sorties
-  (osc, LFO,            (primitives            (shape,               (écran, NDI,
-   audio)                + opérateurs)          feedback, vidéo)      fichier)
+   Grille ──organise──▶ Clip ──contient──▶ Source + Effets ──module──▶ via Signal/Param
+  (Deck,                (quoi joue,       (forme, scène 3D,          (le graphe existant,
+   Layer,                 quand,           vidéo + chaîne             désormais local
+   Column)                comment)         d'opérateurs)              à chaque clip)
+                                                   │
+                                                   ▼
+                                    Couches ──compose──▶ Sorties
+                                   (compositeur de         (écran, NDI,
+                                    layers/groupes)          fichier, Art-Net)
 ```
 
-Ces quatre étages sont l'ossature du logiciel. Tout ce qui suit les détaille.
+Cinq étages : la grille qui organise, le clip qui contient, le graphe qui module, les
+couches qui composent, les sorties qui diffusent. Tout ce qui suit les détaille.
 
 ---
 
@@ -92,6 +108,112 @@ exponentiel. Le cache est invalidé au début de chaque frame, pas plus.
 **Cycles :** interdits, détectés au câblage et refusés avec un message clair. Le
 feedback ne se fait pas dans le graphe de signaux — il se fait au niveau des couches
 (§6), où il a un sens visuel et un délai d'une frame bien défini.
+
+**Un `Graph` par clip, pas un graphe global.** Chaque `Clip` (§3bis) possède son propre
+`Graph` pour piloter sa source et ses effets. Deux clips ne partagent pas de nœuds : un
+LFO réglé sur un clip n'existe pas pour les autres. C'est délibéré — un clip doit rester
+déplaçable, dupliquable et sérialisable seul, sans graphe de dépendances externe à
+résoudre. Un besoin de modulation inter-clips (un LFO qui pilote plusieurs clips à la
+fois) se pose plus tard comme une extension explicite, pas comme le cas par défaut.
+
+---
+
+## 3bis. La grille de composition
+
+**Décision structurante : FrogenX organise ce qui joue et quand autour d'une grille de
+clips déclenchables, inspirée de Resolume Arena** — plutôt que d'exposer un unique patch
+modulaire comme surface de premier niveau. Le graphe `Signal`/`Param`/`Graph` du §2 et
+du §3 ne disparaît pas : il devient le moteur de pilotage interne de chaque clip, layer
+et effet. La grille répond à « quoi joue, quand, sur quelle couche » ; le graphe répond
+à « comment ce qui joue évolue dans le temps ».
+
+### 3bis.1 La hiérarchie
+
+```
+Composition
+ ├─ Deck[]            un jeu complet de layers, interchangeable à chaud
+ │   └─ LayerGroup[]  pilote plusieurs layers comme un seul objet
+ │       └─ Layer[]   piste verticale : vidéo + audio, blend, autopilot
+ │           └─ Clip[]  source + effets + transport, pilotable par son Graph
+ └─ Column[]          déclenche la même tranche sur tous les layers à la fois
+```
+
+**Pourquoi un `Deck` plutôt qu'un patch unique actif.** Un VJ change de répertoire
+entier de visuels en plein set sans interrompre la diffusion — charger un nouveau deck
+pendant qu'un autre continue de tourner sur une sortie. Un patch modulaire unique ne
+permet pas ça : il faudrait décâbler puis recâbler en live. Le `Deck` rend ce changement
+atomique et réversible.
+
+**Pourquoi `Column` est transversal plutôt qu'une propriété de `Layer`.** Une colonne
+déclenche le même instant dramaturgique (« scène 3 ») sur tous les layers simultanément
+— un déclenchement par layer ne peut pas exprimer ça sans dupliquer la logique de
+synchronisation sur chaque layer. C'est le même besoin qu'une scène sur un contrôleur
+d'éclairage : une colonne, canaux multiples.
+
+### 3bis.2 Le `Clip`, point de jonction avec le graphe modulaire
+
+```rust
+pub struct Clip {
+    pub source: ClipSource,       // Shape(Graph) | Scene3d(Graph) | Video(VideoTrack)
+    pub effects: Vec<ShapeOp>,    // ou son équivalent vidéo/3D — chaîne en place (§16.3 bis)
+    pub transport: Transport,     // Timeline ou BpmSync (§3bis.3)
+    pub transition: ClipTransition,
+}
+```
+
+**Un clip n'est pas qu'un fichier vidéo.** Il peut contenir une forme procédurale
+(héritage direct de `shape/`), une scène 3D, ou un flux vidéo décodé — la distinction
+se fait sur `ClipSource`, pas sur le type `Clip` lui-même. C'est ce qui permet à FrogenX
+de rester différent d'un simple lecteur de clips : un clip procédural module ses propres
+paramètres via son `Graph`, exactement comme avant la réorientation.
+
+**Chaque clip porte son `Graph`** (voir le changement au §3). Les effets d'un clip sont
+une chaîne `ShapeOp`-like en place, cohérente avec la décision déjà prise en §16.3 bis —
+elle s'étend aux effets vidéo et 3D sans remettre en cause le contrat.
+
+### 3bis.3 Transport et tempo
+
+```rust
+pub enum Transport {
+    Timeline { position: Param, speed: Param },
+    BpmSync { position: Param, duration_beats: Param, play_mode: PlayMode },
+}
+
+pub struct TempoController {
+    pub tempo: Param,              // BPM
+    pub tap: EventSink,            // tempo tap
+    pub resync: EventSink,
+}
+```
+
+**Pourquoi un `TempoController` de premier niveau, pas juste `Clock::Fixed`/`Realtime`
+(§4).** `Clock` répond à « quelle heure est-il » pour le rendu déterministe. Le tempo
+répond à « combien de temps dure un beat maintenant », une donnée musicale que plusieurs
+clips et layers doivent partager en même temps, et qui change en live (tap tempo, push/
+pull de synchro avec un DJ). C'est une couche au-dessus de `Clock`, pas une redéfinition.
+
+### 3bis.4 `CrossFader`
+
+```rust
+pub struct CrossFader {
+    pub phase: Param,              // 0 = groupe A, 1 = groupe B
+    pub curve: FadeCurve,
+}
+```
+
+**Pourquoi un fader global plutôt que seulement `BlendParams` par couche (§22).**
+`BlendParams::opacity` mélange une couche avec ce qu'il y a dessous, couche par couche.
+Le `CrossFader` mélange deux *groupes* de layers entiers en une seule commande — le
+geste de régie classique (main gauche sur A, main droite sur B). Les deux coexistent :
+le fader est une commande de haut niveau qui finit par piloter des `Param` d'opacité
+existants, pas un nouveau pipeline de composition.
+
+### 3bis.5 Conséquence sur le format de patch (§19)
+
+Le format de patch versionné (§19) s'étend pour porter la grille : un patch décrit
+désormais une `Composition` (decks, layers, columns), chaque clip sérialisant son
+`Graph` comme avant. C'est un changement de schéma, donc une migration (§19.2) au
+moment de l'implémenter — pas une refonte du mécanisme de versionnage lui-même.
 
 ---
 
@@ -199,16 +321,22 @@ trait Layer {
 
 ```
 [ShapeLayer]     ─┐
+[Scene3dLayer]   ─┤
 [VideoLayer]     ─┼──▶ compositeur ──▶ texture finale
 [FeedbackLayer]  ─┘
 ```
 
-**Les trois implémentations, dans l'ordre de difficulté :**
+**Les implémentations, dans l'ordre de difficulté :**
 
 1. **`ShapeLayer`** — rasterise des formes tessellées. C'est déjà l'architecture.
 2. **`FeedbackLayer`** — réinjecte la frame précédente, transformée. Presque gratuit
    (deux textures qu'on échange), et visuellement très rentable.
 3. **`VideoLayer`** — le vrai morceau (§9.3).
+4. **`Scene3dLayer`** — rend une scène 3D (`scene3d`, §10) dans sa propre texture ;
+   rejoint le compositeur exactement comme les autres, le point de rencontre décrit
+   plus haut ne change pas en passant de 2D à 3D. Arrive en dernier (§12, étape 13) :
+   le culling/batching pour les hautes densités de polygones est un investissement
+   propre, indépendant du reste de la chaîne de composition.
 
 **Ce que les couches débloquent :** une forme peut servir de **masque** ou de
 **déplacement UV** sur la vidéo. C'est là que vectoriel et matriciel deviennent
@@ -357,17 +485,28 @@ frogenx/
 ├── core/      # Signal, Param, Graph, Clock          ← aucune dépendance ✅
 ├── osc/       # oscillateurs, LFO, enveloppes, bruit ✅
 ├── shape/     # primitives + opérateurs              ✅ (core, osc, glam)
+├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
-├── shape/     # primitives + opérateurs
-├── layer/     # trait Layer : Shape / Feedback / Video
+├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController (core)
+├── layer/     # trait Layer : Shape / Scene3d / Feedback / Video
 ├── render/    # wgpu, compositeur, post-fx
-├── output/    # OutputSink : preview / NDI / Spout / Syphon / recorder
-└── ui/        # egui : rack, câblage, monitoring
+├── output/    # OutputSink : preview / NDI / Spout / Syphon / Art-Net / recorder
+└── ui/        # egui : grille de clips, rack par clip, monitoring
 ```
 
+**`composition` ne dépend que de `core`.** La grille (§3bis) doit rester testable sans
+GPU ni audio, pour la même raison que `core`/`osc`/`shape` : trier des decks, détecter
+des conflits de connexion sur une colonne, valider une transition de clip — tout cela
+se vérifie sur des structures de données pures. `composition` connaît l'existence d'un
+`Graph` par clip (il en possède un par `Clip`), mais jamais wgpu, cpal ou le rendu.
+
+**`scene3d` suit la même règle que `shape`.** Primitives 3D (maillages, caméra,
+lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rôle que
+`shape` jouait pour le 2D, étendu à la 3D plutôt que remplacé.
+
 **Règle de dépendance :** les flèches vont vers le haut de la liste. `core` ne dépend
-de rien. `shape` ne connaît ni wgpu ni l'audio. `render` ne sait pas ce qu'est un
-oscillateur.
+de rien. `shape`/`scene3d` ne connaissent ni wgpu ni l'audio. `render` ne sait pas ce
+qu'est un oscillateur.
 
 **Pourquoi cela compte :** `core`, `osc` et `shape` restent testables sans GPU, sans
 carte son et sans fenêtre — donc en CI, rapidement. C'est ce qui garde le projet
@@ -381,14 +520,16 @@ maintenable à mesure qu'il grossit.
 |---|---|---|
 | Maths | `glam` ✅ | vecteurs, matrices |
 | Rendu | `wgpu`, `winit` | GPU multiplateforme, fenêtrage |
-| UI | `egui` | rack de modules, câblage |
+| UI | `egui` | grille de clips, rack de modules, câblage |
 | Bruit | `noise` | Perlin, simplex |
 | Tessellation | `lyon` | polylignes → triangles |
 | Audio | `cpal` | capture multiplateforme |
 | FFT | `rustfft` | analyse spectrale |
 | Lock-free | `rtrb`, `triple_buffer` | passage audio → rendu |
 | Sérialisation | `serde` | sauvegarde de patchs |
-| Encodage | binaire `ffmpeg` (pipe) | enregistrement |
+| Encodage | binaire `ffmpeg` (pipe) | enregistrement, décodage de clips (§9.3) |
+| Éclairage | `artnet` ou équivalent | sortie Art-Net / DMX (§3bis, §8) |
+| Scripting | `mlua` | logique de composition personnalisée (§23.4) |
 
 ---
 
@@ -404,21 +545,34 @@ couches complètes empilées.
 | 2 | ✅ Graphe de patch (arena, tri topo, cache) | modulation évaluable — *fait* |
 | 3a | ✅ Oscillateurs, LFO, bruit, enveloppes | sources de modulation — *fait* |
 | 3b | ✅ Primitives + opérateurs de formes | polylignes testables — *fait* |
-| 4 | `Layer` + `ShapeLayer` + compositeur, offscreen | **première image à l'écran** |
-| 5 | `OutputSink` + preview | pipeline de sortie en place |
-| 6 | LFO câblé sur une fréquence | **le modulaire prend vie** |
-| 7 | Audio → features → `Signal` | **visuel audio-réactif** |
-| 8 | `FeedbackLayer` | traînées, échos, complexité organique |
-| 9 | Enregistrement (readback + ffmpeg) | fichier vidéo |
-| 10 | NDI, puis Spout / Syphon | intégration VJ |
-| 11 | `VideoLayer` | clips vidéo comme couches |
+| 4 | `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** |
+| 5 | `Layer` + `ShapeLayer` + compositeur, offscreen | **première image à l'écran** |
+| 6 | `OutputSink` + preview | pipeline de sortie en place |
+| 7 | LFO câblé sur une fréquence, depuis un clip de la grille | **le modulaire prend vie dans la grille** |
+| 8 | Audio → features → `Signal` | **visuel audio-réactif** |
+| 9 | `FeedbackLayer` | traînées, échos, complexité organique |
+| 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
+| 11 | NDI, puis Spout / Syphon | intégration VJ |
+| 12 | `VideoLayer` | clips vidéo comme couches |
+| 13 | `scene3d` : maillages, caméra, lumières, culling | scène 3D comme source de clip |
+| 14 | Art-Net / DMX en sortie | pilotage d'éclairage physique |
+| 15 | Scripting Lua (`mlua`) sur `Command` (§23.4) | logique de composition scriptable |
+| 16 | Shaders d'effets custom — format à trancher (§23.4) | effets utilisateur sans recompiler FrogenX |
 
-**Les étapes clés :** la 4 (première image), la 6 (le concept se prouve), la 7
-(l'audio-réactivité, cœur du projet).
+**Les étapes clés :** la 4 (la grille devient le squelette organisationnel, avant même
+le rendu — tout ce qui suit s'y raccroche), la 5 (première image), la 7 (le concept
+modulaire se prouve *dans* la grille), la 8 (l'audio-réactivité, cœur du projet).
 
-**Les étapes 4 et 5 sont l'investissement anticipé** du plan : elles coûtent peu
+**L'étape 4 passe devant le rendu, à rebours du vertical slice habituel**, parce que
+la grille est désormais la structure que toutes les étapes suivantes organisent. Y
+raccrocher `Layer`/`OutputSink`/`VideoLayer` après coup serait une réécriture ; les
+construire directement au-dessus d'une grille déjà en place ne l'est pas.
+
+**Les étapes 5 et 6 restent l'investissement anticipé** du plan : elles coûtent peu
 maintenant et évitent une réécriture complète du rendu quand la vidéo et les sorties
-multiples arrivent.
+multiples arrivent. La 3D (étape 13) et l'éclairage (étape 14) viennent après que le
+pipeline vidéo/audio-réactif est prouvé, pour la même raison qu'avant la réorientation
+la vidéo venait en dernier (§9.3) : travail conséquent, largement indépendant du reste.
 
 ---
 
@@ -441,6 +595,19 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | NDI avant Spout / Syphon | seule techno des trois plateformes ; les autres sont `unsafe` et tardives |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
+| **Grille de clips (Deck/LayerGroup/Layer/Column) comme structure d'organisation** (§3bis) | répond à « quoi joue, quand » ; un patch modulaire unique ne permet pas de changer de répertoire de visuels à chaud en live |
+| **Un `Graph` par `Clip`, pas un graphe global** (§3) | un clip reste déplaçable, dupliquable, sérialisable seul ; la modulation inter-clips est une extension explicite, pas le cas par défaut |
+| **`Column` transversal**, pas une propriété de `Layer` (§3bis.1) | un déclenchement par layer ne peut pas exprimer une scène synchronisée sur tous les layers sans dupliquer la logique |
+| **`TempoController` au-dessus de `Clock`**, pas une redéfinition (§3bis.3) | `Clock` répond à l'heure pour le déterminisme ; le tempo répond à la durée d'un beat, partagée et modifiable en live (tap, resync) |
+| **`CrossFader` global en plus de `BlendParams` par couche** (§3bis.4) | le geste de régie mélange deux groupes entiers ; `BlendParams` mélange une couche avec celle du dessous — les deux répondent à des échelles différentes |
+| **`composition` ne dépend que de `core`** (§10) | la grille doit rester testable sans GPU ni audio, pour la même raison que `core`/`osc`/`shape` |
+| **La grille (étape 4) précède le rendu (étape 5)** (§12) | toutes les étapes suivantes s'y raccrochent ; construire par-dessus une grille déjà en place évite une réécriture |
+| **Lua (`mlua`) pour le scripting de composition**, pas Rhai (§23.4) | maturité et vitesse l'emportent sur la pureté Rust pour un langage écrit en direct par l'utilisateur ; Rhai rapporté plus lent et sans LSP |
+| **Format de shaders d'effets custom laissé ouvert** (ISF adapté vs WGSL natif, §23.4) | compatibilité écosystème VJ vs simplicité d'implémentation — à trancher avant l'étape 16, pas avant d'avoir plus de recul |
+| **`egui`, pas `iced`, pour la crate `ui`** (§23) | intégration wgpu directe (texture native en quelques lignes), écosystème node-graph existant (`egui_node_graph`, `egui-snarl`), et mode immédiat qui lit/écrit l'état du `Graph` sans state parallèle — `iced` imposerait une machine `Message`/`update()` en plus, contre l'invariant « l'état vit dans le graphe » |
+| **`scene3d` modulée en direct par `Signal`/`Param`**, pas un flux déjà joué (§22bis) | TouchDesigner — seule référence du projet qui fait du 3D node-based en live — recuit toujours sa scène depuis l'état courant des paramètres au moment du Render TOP ; aucun raccourci de pré-rendu documenté |
+| **Instancing comme primitive de `scene3d`**, pas un système de particules séparé (§22bis) | modèle confirmé chez TouchDesigner (Geometry COMP, page Instance) pour le cas « beaucoup d'objets » visé à l'étape 13 |
+| **Pool de textures scratch réutilisables par format** (§22) | évite l'allocation par frame pour les buffers temporaires (snapshots, masques), généralise le ping-pong déjà en place pour `FeedbackLayer` |
 | **État des nœuds dans le graphe**, pas dans les modules (§16.1) | modules purs et testables, sérialisation et reset gratuits, pas d'emprunt mutable sur un nœud partagé |
 | **`Ctx` porte le cache, pas `&Graph`** (§16.2) | le graphe mute l'état du nœud courant pendant `eval` ; et un `Signal` n'a pas à voir la topologie, seulement les valeurs de ses dépendances |
 | **Phase accumulée**, pas `sin(2π·f·t)` (osc) | en FM, la formule directe fait sauter la phase à chaque changement de fréquence — discontinuité visible |
@@ -811,22 +978,42 @@ s'ouvrir dans six mois.
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
   "meta": { "name": "...", "created": "2026-09-10T...", "app": "0.1.0" },
-  "nodes": [
-    { "id": 0, "gen": 0, "kind": "osc",
-      "params": { "waveform": "sine",
-                  "freq":  { "fixed": 0.5 },
-                  "amp":   { "modulated": { "base": 1.0, "depth": 0.3, "source": 4 } } } }
+  "decks": [
+    { "id": 0, "name": "Set principal",
+      "layers": [
+        { "id": 10, "clips": [
+          { "id": 100, "source": "shape",
+            "nodes": [
+              { "id": 0, "gen": 0, "kind": "osc",
+                "params": { "waveform": "sine",
+                            "freq":  { "fixed": 0.5 },
+                            "amp":   { "modulated": { "base": 1.0, "depth": 0.3, "source": 4 } } } }
+            ],
+            "effects": [ /* ... */ ]
+          }
+        ] }
+      ]
+    }
   ],
-  "layers": [ /* ... */ ],
+  "columns": [ /* ... */ ],
+  "tempo": { "bpm": 120.0 },
   "state": null
 }
 ```
 
+**Chaque clip porte son propre tableau `nodes`** (§3) — pas un graphe global partagé.
+Un clip copié-collé d'un deck à l'autre emporte son graphe avec lui, sans résoudre de
+dépendances externes.
+
 **JSON, pas un format binaire.** Un patch se relit, se diffe dans git, se corrige à la
 main quand le logiciel refuse de l'ouvrir. La taille et la vitesse de chargement sont
 sans enjeu ici.
+
+**Migration v1 → v2 :** le format v1 (un seul graphe global, `layers` plat) se migre en
+enveloppant le patch dans un deck unique et en rattachant le graphe existant au premier
+clip — voir §19.2. La fixture `tests/fixtures/patch_v1.json` n'est jamais régénérée.
 
 **L'état n'est pas sauvegardé par défaut** (`"state": null`). Un patch décrit une
 *configuration*, pas un instant. Le sauvegarder est optionnel et explicite — utile pour
@@ -963,7 +1150,7 @@ tessellées présentent un liseré sombre au mélange.
 
 ## 22. Contrat des couches
 
-> Section d'intention : elle sera précisée à l'usage, à partir de l'étape 4.
+> Section d'intention : elle sera précisée à l'usage, à partir de l'étape 5 (§12).
 
 ```rust
 pub trait Layer {
@@ -977,6 +1164,12 @@ pub struct BlendParams {
     pub mode: BlendMode,         // Normal, Add, Multiply, Screen, Difference...
 }
 ```
+
+**Relation avec `CrossFader` (§3bis.4).** `BlendParams` reste la seule donnée que le
+compositeur lit pour mélanger une couche avec celle du dessous. Le `CrossFader` ne
+contourne pas le compositeur : sa `phase` pilote les `opacity` des deux groupes de
+layers qu'il relie, via leurs `Param::Modulated`. Le compositeur n'a donc jamais
+conscience d'un fader global — seulement des `BlendParams` qui en résultent.
 
 **Propriété des textures.** Chaque couche possède la sienne et la prête en lecture au
 compositeur (`&TextureView`). Le compositeur ne libère jamais une texture qu'il n'a pas
@@ -994,11 +1187,93 @@ produit un résultat indéfini selon le backend.
 prêtes dans une file ; `render` prend la plus proche de `t` et **ne bloque jamais**. Si
 aucune frame n'est prête, on réaffiche la précédente.
 
+**Pool de textures scratch réutilisables, un pool par format.** Inspiré d'une lecture
+du crate `darkly` (compositeur wgpu open source) : plutôt que d'allouer une texture
+par besoin temporaire (snapshot de `FeedbackLayer`, buffer intermédiaire d'un effet),
+un pool par format (ex. un pool `Rgba16Float` pour les couches, un pool dédié pour les
+masques) prête et reprend des textures, avec une règle stricte — **une texture du pool
+n'est jamais réutilisée tant qu'une référence active la cite**. Même logique que le
+ping-pong déjà en place pour `FeedbackLayer`, généralisée : évite la pression mémoire
+d'une allocation par frame tout en gardant la garantie lire/écrire différente.
+**Limite de cette référence :** la lecture de `darkly` s'est arrêtée à sa documentation
+publique, pas à son code source complet — son format de texture interne exact (il
+pourrait être en `Rgba8`, pas en `Rgba16Float` comme §21 l'impose) n'est pas confirmé.
+Le pattern du pool est repris ; son choix de format colorimétrique ne l'est pas sans
+vérification.
+
+---
+
+## 22bis. `scene3d` — analyse TouchDesigner
+
+> Section d'intention : précisée avant l'étape 13 (§12), pas à l'implémentation.
+
+**Décision, enfin tranchée : la scène 3D est modulée en direct, frame par frame, par
+le graphe `Signal`/`Param`** — pas un flux d'entrée déjà « joué » qu'on se contenterait
+de mixer comme une vidéo. Cette question était restée ouverte depuis la réorientation ;
+l'analyse de TouchDesigner (seul logiciel de référence du projet qui fait réellement du
+3D node-based en live) la tranche.
+
+**Ce que confirme la documentation officielle de TouchDesigner (derivative.ca) :**
+
+- **Familles de nœuds** : SOP (géométrie historique, points/polygones), POP (successeur
+  GPU — points, primitives, particules, compute), COMP (hiérarchie d'objets, caméras,
+  lumières, conteneurs), TOP (image 2D), MAT (matériaux). Un **Geometry COMP** réunit
+  une chaîne SOP/POP + un MAT en objet rendable.
+- **Le pont 3D → 2D est le Render TOP** : il consomme Geometry COMP(s) + Camera COMP +
+  Light COMP et produit une image 2D plate (un TOP), **toujours recuite en direct
+  depuis l'état courant des paramètres** — aucun raccourci de pré-rendu documenté. C'est
+  la confirmation directe : pas de « scène déjà jouée », la scène est réévaluée chaque
+  fois qu'elle est tirée. C'est le même rôle que jouera `Scene3dLayer` pour FrogenX :
+  produire une texture consommée par le compositeur 2D (§6, §22), sans que celui-ci ait
+  besoin de connaître le contenu 3D.
+- **Modèle de cook** : évaluation paresseuse tirée par la demande (une sortie regardée
+  ou connectée) et déclenchée par une raison (un paramètre a changé, l'amont a recuit) —
+  à la fois *pull* et *push*. **Diverge de FrogenX** : le `Graph` de FrogenX évalue tout
+  le graphe topologiquement à chaque frame avec un cache plat (§13), plus simple et
+  déterministe, moins efficace sur de larges sous-graphes inchangés. Pas de changement
+  prévu pour `core` — mais `scene3d` pourra, à terme, avoir intérêt à un cache de
+  sous-arbre si le culling (§12, étape 13) ne suffit pas ; à réévaluer à l'implémentation,
+  pas maintenant.
+- **Liaison de paramètres** : chaque paramètre TD a 4 modes — Constant, Expression,
+  Export (canal → paramètre, à sens unique), **Bind (canal ↔ paramètre, à double sens)**.
+  Le `Param::Modulated{base,depth,source}` de FrogenX (§2.2) couvre l'équivalent d'Export,
+  pas de Bind. **Gap identifié, pas comblé** : si un contrôle UI doit un jour réécrire
+  dans sa propre source de modulation (ex. un slider qui ajuste le LFO qui le pilote),
+  `Param` n'a pas de mécanisme pour ça aujourd'hui. À surveiller, pas à résoudre avant
+  qu'un besoin concret apparaisse.
+- **Instancing** : le Geometry COMP a une page Instance intégrée — transform/couleur par
+  instance piloté par un canal CHOP, une instance par échantillon/ligne/pixel/point.
+  Pas un système de particules séparé. C'est la réponse à « beaucoup d'objets » : une
+  primitive d'instancing dans `scene3d`, pas un système ad hoc par cas d'usage.
+
+**Non confirmé, à ne pas citer comme acquis** : le détail des particules GPU/compute de
+TouchDesigner, et si des cycles sont permis ailleurs que dans les nœuds de feedback
+explicites — ni confirmé ni contredit par la documentation consultée.
+
 ---
 
 ## 23. UI et graphe
 
 > Section d'intention : elle sera précisée à l'étape où l'UI arrive.
+
+**Décision : `egui`, pas `iced`.** Comparés explicitement avant l'implémentation de
+l'étape UI, pour quatre raisons :
+
+- **Intégration wgpu** : `egui-wgpu` expose `register_native_texture` pour dessiner une
+  texture rendue en externe (le monitor live, la grille de clips) comme une simple
+  image — quelques lignes. En `iced`, la même chose demande d'implémenter un
+  `Shader`/`Primitive` personnalisé sur son `Renderer` bas niveau, peu documenté.
+- **Écosystème node-graph** : `egui_node_graph`/`egui-snarl` existent déjà et sont
+  directement réutilisables pour l'éditeur de patch par clip (§3bis, §2). `iced` n'a
+  pas d'équivalent — il faudrait le construire depuis son `Canvas`.
+- **Correspondance architecturale** : `egui` est **immédiat** — chaque frame lit et
+  écrit directement l'état existant (`ui.slider(&mut param.value)`), sans état de
+  widget parallèle. `iced` est Elm-style (`Message` + `update()`) : il faudrait faire
+  vivre une machine à états en plus du `Graph`, ce qui va contre l'invariant « l'état
+  vit dans le graphe » (§2.3).
+- **Précédent** : `egui` a des usages réels dans l'outillage créatif/temps réel en Rust
+  (visualisateurs wgpu, outils live-coding) ; aucun équivalent trouvé côté `iced` pour
+  ce type de logiciel.
 
 egui est **immédiat** et tourne dans le thread principal, dans la même boucle que le
 rendu. Il n'y a donc pas de concurrence à gérer — mais il y a un ordre à respecter.
@@ -1022,6 +1297,133 @@ du reste du code. Poser ce modèle tard obligerait à réécrire toute l'UI.
 
 Les commandes de **câblage** sont validées (détection de cycle, §3) et peuvent être
 **refusées** avec un message — c'est le régime « édition » du §18.1.
+
+### 23.1 Charte graphique de référence — Resolume Arena
+
+**Décision : l'UI de FrogenX part de la charte graphique et de la disposition de
+Resolume Arena**, observées sur une capture de l'application réelle (v7.28.1) et
+confirmées par ses fichiers de layout (`Preferences/recentLayout.xml`,
+`Presets/Interface/*.xml`). Cette charte est un point de départ, amené à évoluer
+avec les fonctionnalités développées — pas une contrainte figée.
+
+**Palette (valeurs relatives, à affiner en hex pendant l'implémentation UI) :**
+
+| Rôle | Ton | Usage |
+|---|---|---|
+| Fond principal | anthracite quasi noir | zone de grille, dashboards, monitors |
+| Fond des en-têtes | gris sombre, légèrement plus clair que le fond principal | barres de colonnes, toolbar |
+| **Accent unique** | cyan/menthe vif | sélection active — layer sélectionné, onglet actif, bouton play, clip/effet mis en avant |
+| Accent secondaire | vert terne | toggles actifs mais non sélectionnés |
+| Texte principal | blanc cassé | tous les labels |
+| Texte secondaire | gris moyen | labels désactivés, placeholders |
+| Bordures | noir quasi pur | séparateurs entre panneaux |
+
+**Un seul accent porte toute la sélection**, plutôt qu'une couleur par catégorie
+d'élément — layer actif, onglet actif, transport, effet actif partagent la même
+teinte. C'est délibéré chez Resolume : dans un environnement de régie sombre, une
+palette monochrome avec un accent unique reste lisible sous faible éclairage et ne
+rivalise jamais avec les couleurs du contenu vidéo affiché dans les vignettes et les
+monitors, qui doivent rester les éléments les plus saturés à l'écran. FrogenX reprend
+ce principe plutôt que la palette dans l'absolu : fond sombre neutre, un seul accent
+réservé à l'état actif, jamais de couleur UI qui concurrence le rendu.
+
+### 23.2 Disposition de référence
+
+```
+┌──────────────────────────────────────────────────────┐
+│ Barre de menu                                         │
+├──────────────────────────────────────────────────────┤
+│ Grille (Layers × Clips/Columns) — §3bis               │  zone haute,
+│                                                        │  hauteur fixe desired
+├──────────────────────────────────────────────────────┤
+│ Toolbar (transport, tempo, tap, resync — §3bis.3)     │
+├───────────┬────────────┬─────────────┬────────────────┤
+│ Monitors  │ Dashboard  │ Dashboard   │ Navigateur      │
+│ (sortie + │ contextuel │ du clip     │ (sources,       │
+│  preview) │ (colonne/  │ sélectionné │  effets,        │
+│           │  groupe/   │ + sa chaîne │  compositions,  │
+│           │  layer)    │ d'effets    │  enregistrement)│
+└───────────┴────────────┴─────────────┴────────────────┘
+```
+
+**Quatre zones flexibles sous la grille**, redimensionnables indépendamment — pas une
+disposition figée mais un système de conteneurs flexibles, comme chez Resolume
+(`FlexContainer`/`TabbedContainer` imbriqués dans leur layout). FrogenX adopte le même
+principe plutôt qu'une mise en page statique : chaque panneau peut être masqué,
+redimensionné ou déplacé, pour les mêmes raisons qui ont fait ce choix chez eux — un
+poste de VJ tourne sur des configurations d'écran très variées (un moniteur, deux,
+une sortie dédiée à la régie).
+
+**Correspondance avec le modèle FrogenX :** la grille haute est `Deck`/`LayerGroup`/
+`Layer`/`Column`/`Clip` (§3bis.1) ; le dashboard contextuel affiche les `Param` de
+l'objet sélectionné à n'importe quel niveau de la hiérarchie ; le panneau Clip affiche
+la chaîne `ShapeOp` (ou son équivalent vidéo/3D) du clip actif (§3bis.2) ; le
+navigateur liste les types de nœuds disponibles — direct héritage du couple
+`Effects`/`Sources` de l'API Resolume déjà documenté en §13.
+
+### 23.3 Modèle d'effets — inspiré de Resolume Wire
+
+**Decision : le catalogue d'effets et de sources de FrogenX s'inspire du moteur
+interne "Wire" de Resolume** (`WireLib.dll`/`WireNodes.dll`, fichiers `.wired` dans
+`plugins/wire/`) plutôt que d'être conçu dans l'abstrait. Wire est lui-même un
+système d'effets node-based — chaque `.wired` est un graphe de nœuds sérialisé,
+exactement le même genre d'objet qu'un `Clip` de FrogenX avec sa chaîne `ShapeOp` et
+son `Graph` de modulation (§3bis.2).
+
+**Ce que ça confirme pour FrogenX, sans copier le code :**
+- Un effet n'est pas une fonction opaque mais un **petit graphe réutilisable et
+  partageable** — cohérent avec `ShapeOp::Chain` (§16.3 bis) et avec le fait qu'un
+  patch se sauvegarde en JSON lisible (§19).
+- Les effets natifs (`plugins/afx/*.dll` côté audio) et les effets node-based
+  (`plugins/wire/*.wired` côté vidéo) coexistent chez Resolume : un effet peut être
+  soit un module compilé, soit un graphe composé d'autres modules. FrogenX a déjà
+  cette distinction implicitement (`ShapeOp` natif vs. `Chain` de `ShapeOp`) — Wire
+  confirme qu'il vaut la peine de l'exposer à l'utilisateur comme deux façons
+  équivalentes d'ajouter un effet au catalogue, pas seulement comme un détail
+  d'implémentation.
+- Chaque effet déclare des **presets nommés réutilisables** (confirmé en §13) :
+  FrogenX en manque aujourd'hui. Un preset par `ShapeOp`/chaîne d'effets rejoint la
+  feuille de route (§12) comme extension du format de patch (§19), sans remettre en
+  cause son schéma de base.
+
+### 23.4 Effets custom — deux surfaces distinctes
+
+**Décision : FrogenX ouvre deux surfaces de scripting séparées**, chacune pour un
+besoin différent — écrire un effet visuel pixel par pixel n'est pas le même geste que
+scripter la logique d'un patch. Les confondre dans un seul langage forcerait l'un des
+deux usages à de mauvais compromis.
+
+**Scripting de composition : Lua, via `mlua`.** Choisi plutôt que `Rhai` (pur Rust)
+pour la maturité et la vitesse — trente ans d'usage en production, `mlua` se compile
+statiquement sans dépendance système à installer, et c'est le langage qu'un non-
+développeur a le plus de chances de déjà connaître dans le monde du live visuel. Rhai
+reste plus proche du reste du codebase (zéro FFI C), mais les retours communautaires
+le rapportent nettement plus lent que Lua et sans outillage (pas de LSP) — un mauvais
+compromis pour un langage que l'utilisateur va écrire en direct, en répétition ou en
+régie. Un script Lua peut émettre des `Command` (§23) pour piloter le graphe, mais ne
+mute jamais le `Graph` directement — même contrat que l'UI.
+
+**Format de shaders pour les effets pixel : décision ouverte, non tranchée.** Deux
+options, documentées ici pour être tranchées plus tard plutôt que devinées :
+
+| Option | Pour | Contre |
+|---|---|---|
+| **Compatible ISF** (Interactive Shader Format, adapté en WGSL) | Standard déjà utilisé par Resolume, VDMX, TouchDesigner — un effet écrit pour l'un fonctionne (ou presque) dans FrogenX, adoption facilitée pour un public déjà équipé | ISF est GLSL-centré ; nécessite une transpilation GLSL→WGSL à l'import (risque de divergence de comportement selon le pilote/backend, pas garantie identique à l'original) |
+| **Format WGSL natif propre à FrogenX** | Cohérent avec le choix wgpu/WGSL déjà acté (§9.1) ; pas de couche de transpilation à maintenir | Aucune compatibilité avec l'écosystème existant ; un utilisateur venant de Resolume/VDMX repart de zéro |
+
+**Ce que les deux options doivent respecter, quel que soit le choix final :**
+- Jamais de panique en évaluation (§18.1) — un shader custom défaillant dégrade
+  (image noire, effet ignoré, compteur `Diagnostics` incrémenté), ne plante jamais le
+  rendu.
+- Les paramètres exposés par un effet custom restent des `Param` (§16.4), pas des
+  uniformes bruts — un effet custom doit être modulable exactement comme un effet
+  natif, sinon il devient un citoyen de seconde classe dans le graphe.
+- Compilation/validation du shader se fait en régime **édition** (§18.1), jamais en
+  frame — un shader qui ne compile pas est refusé au chargement, pas découvert à
+  l'exécution.
+
+À trancher avant l'implémentation (feuille de route, §12) : cette section reste une
+spécification des contraintes, pas encore un contrat fermé comme §16 à §20.
 
 ---
 
