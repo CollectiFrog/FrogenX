@@ -1,37 +1,36 @@
-//! Le trait `ShapeGenerator` et le contrat des polylignes — §16.3.
+//! Le trait `ShapeGenerator` et le contrat des formes — §16.3.
 
+use crate::path::Path;
 use frogenx_core::{Ctx, Graph};
-use glam::Vec2;
 
 /// Tout ce qui produit une forme.
 ///
-/// Une forme est une **polyligne** : une suite de points. Simple, uniforme, et
-/// suffisant pour tout ce qui suit — un cercle est une polyligne assez dense
-/// pour paraître lisse.
+/// Une forme est un [`Path`] : des points découpés en contours, chacun fermé
+/// ou ouvert. Un cercle est un contour fermé assez dense pour paraître lisse.
 ///
-/// **Écriture dans un buffer fourni, pas de `Vec` retourné (§16.3).** Le rendu
-/// tourne à 60 fps ; allouer un `Vec` par forme et par frame produit une
-/// pression mémoire inutile. L'appelant possède le buffer et le réutilise.
+/// **Écriture dans un buffer fourni, pas de `Path` retourné (§16.3).** Le rendu
+/// tourne à 60 fps ; allouer par forme et par frame produit une pression
+/// mémoire inutile. L'appelant possède le `Path` et le réutilise.
 ///
 /// **Convention d'espace (§17) :** coordonnées normalisées, origine au centre,
 /// `[-1, 1]` sur le petit côté. Un patch rendu en 720p ou en 4K donne donc la
 /// même image.
 ///
-/// **Convention de fermeture :** une forme fermée ne répète **pas** son premier
-/// point à la fin. C'est au rasteriseur de refermer le contour. Répéter le
-/// point dupliquerait un sommet à la tessellation et compliquerait tous les
-/// opérateurs (une répétition radiale sur 6 branches produirait 6 doublons).
+/// **Convention de fermeture :** un contour fermé ne répète **pas** son premier
+/// point à la fin — c'est le drapeau `closed` qui dit au rasteriseur de le
+/// refermer. Répéter le point dupliquerait un sommet à la tessellation.
 pub trait ShapeGenerator {
-    /// Remplit `out` avec les points de la forme.
+    /// Remplit `out` avec la forme.
     ///
     /// L'implémentation **doit** commencer par `out.clear()` — l'appelant
-    /// fournit un buffer potentiellement déjà rempli.
+    /// fournit un `Path` potentiellement déjà rempli — et laisser `out`
+    /// valide au sens de [`Path::is_valid`].
     ///
     /// `g` sert à résoudre les `Param` via [`Param::get`](frogenx_core::Param::get) :
     /// les formes sont générées **après** `eval_frame` (§20.1), donc les valeurs
     /// sont déjà dans le cache. `ctx` donne accès à `dt` et aux features audio
     /// pour les générateurs qui en ont besoin.
-    fn generate(&self, t: f64, ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>);
+    fn generate(&self, t: f64, ctx: &Ctx, g: &Graph, out: &mut Path);
 }
 
 /// Nombre de segments utilisé pour discrétiser une courbe lisse.
@@ -52,14 +51,25 @@ pub const MAX_POINTS: usize = 16_384;
 pub(crate) mod test_util {
     use super::*;
     use frogenx_core::{AudioFeatures, Ctx, Graph};
+    use glam::Vec2;
 
     /// Génère une forme dans un contexte minimal, pour les tests.
-    pub fn gen(shape: &dyn ShapeGenerator, g: &Graph) -> Vec<Vec2> {
+    ///
+    /// **Vérifie l'invariant des plages à chaque appel** : tout test qui génère
+    /// une forme teste du même coup que générateurs et opérateurs laissent un
+    /// `Path` valide.
+    pub fn gen_path(shape: &dyn ShapeGenerator, g: &Graph) -> Path {
         let audio = AudioFeatures::default();
         let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
-        let mut out = Vec::new();
+        let mut out = Path::new();
         shape.generate(0.0, &ctx, g, &mut out);
+        assert!(out.is_valid(), "Path invalide : {:?}", out.contours);
         out
+    }
+
+    /// Les points seuls, pour les tests qui ne regardent pas les contours.
+    pub fn gen(shape: &dyn ShapeGenerator, g: &Graph) -> Vec<Vec2> {
+        gen_path(shape, g).points
     }
 
     /// Vrai si tous les points sont finis — aucun NaN ne doit sortir d'une forme.

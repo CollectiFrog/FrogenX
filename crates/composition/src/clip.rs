@@ -2,8 +2,9 @@
 //! `docs/ARCHITECTURE.md`.
 
 use frogenx_core::Graph;
-use frogenx_shape::ShapeOp;
+use frogenx_shape::{ShapeGenerator, ShapeOp};
 
+use crate::crossfader::FadeCurve;
 use crate::position::PositionSignal;
 use crate::transport::Transport;
 
@@ -11,8 +12,13 @@ use crate::transport::Transport;
 /// lui-même — un clip procédural module ses propres paramètres via son
 /// `Graph`, exactement comme avant la réorientation (§3bis.2).
 pub enum ClipSource {
-    /// Forme procédurale : un `Graph` de modulation propre au clip.
-    Shape(Graph),
+    /// Forme procédurale : le générateur produit le `Path`, le graphe module
+    /// ses paramètres. Un graphe seul ne produirait aucune forme — les effets
+    /// du clip n'auraient rien à transformer (§3bis.2).
+    Shape {
+        graph: Graph,
+        generator: Box<dyn ShapeGenerator>,
+    },
     // `Scene3d(Graph)` et `Video(VideoTrack)` arrivent aux étapes 13 et 12
     // de la feuille de route (§12) — non représentés avant que `scene3d` et
     // le décodage vidéo n'existent, pour ne pas figer un contrat deviné.
@@ -25,15 +31,18 @@ pub enum ClipSource {
 /// transition qui avance seule a le même besoin que `Transport.position`
 /// (§3bis.3) : ce n'est pas un `Param` statique, c'est un accumulateur.
 pub enum ClipTransition {
-    /// Coupure instantanée — le seul mode dont le rendu est spécifié avant
-    /// l'étape 5 (§12) : `Fade`/`Wipe` dépendent du compositeur de couches,
-    /// que `composition` ne doit pas connaître (§10).
+    /// Coupure instantanée. `composition` ne rend rien : le mélange de deux
+    /// clips pendant un `Fade`/`Wipe` est le travail du compositeur de
+    /// couches (étape 5 et suivantes, §12), que `composition` ne doit pas
+    /// connaître (§10). Ce type fixe seulement la forme du contrat.
     Cut,
     Fade {
         phase: PositionSignal,
+        curve: FadeCurve,
     },
     Wipe {
         phase: PositionSignal,
+        curve: FadeCurve,
         direction: WipeDirection,
     },
 }
@@ -61,9 +70,9 @@ pub struct Clip {
 
 impl Clip {
     /// Un clip de forme procédurale, sans effet, coupure instantanée.
-    pub fn shape(graph: Graph, transport: Transport) -> Self {
+    pub fn shape(graph: Graph, generator: Box<dyn ShapeGenerator>, transport: Transport) -> Self {
         Self {
-            source: ClipSource::Shape(graph),
+            source: ClipSource::Shape { graph, generator },
             effects: Vec::new(),
             transport,
             transition: ClipTransition::Cut,
@@ -85,7 +94,8 @@ impl Clip {
 mod tests {
     use super::*;
     use crate::transport::{PlayMode, Transport};
-    use frogenx_core::{NodeId, Param};
+    use frogenx_core::{AudioFeatures, Ctx, NodeId, Param};
+    use frogenx_shape::{Ellipse, Path, RadialRepeat};
 
     fn dummy_position() -> NodeId {
         // Un Clip de test n'a pas besoin que `position` résolve réellement
@@ -98,6 +108,7 @@ mod tests {
     fn un_clip_shape_sans_effet_a_une_chaine_vide() {
         let clip = Clip::shape(
             Graph::new(),
+            Box::new(Ellipse::circle(0.5)),
             Transport::Timeline {
                 position: dummy_position(),
                 speed: Param::fixed(1.0),
@@ -108,9 +119,36 @@ mod tests {
     }
 
     #[test]
+    fn la_source_shape_produit_une_forme_que_les_effets_transforment() {
+        // Le manque corrigé au §3bis.2 : avec `Shape(Graph)`, le clip n'avait
+        // aucun moyen de produire une forme, et ses effets rien à transformer.
+        let clip = Clip::shape(
+            Graph::new(),
+            Box::new(Ellipse::circle(0.5)),
+            Transport::Timeline {
+                position: dummy_position(),
+                speed: Param::fixed(1.0),
+            },
+        )
+        .with_effect(Box::new(RadialRepeat::new(3.0)));
+
+        let ClipSource::Shape { graph, generator } = &clip.source;
+        let audio = AudioFeatures::default();
+        let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+        let mut path = Path::new();
+        generator.generate(0.0, &ctx, graph, &mut path);
+        for op in &clip.effects {
+            op.apply(0.0, &ctx, graph, &mut path);
+        }
+        assert_eq!(path.contours.len(), 3, "le cercle répété trois fois");
+        assert!(path.is_valid());
+    }
+
+    #[test]
     fn with_transition_remplace_la_coupure_par_un_fondu() {
         let clip = Clip::shape(
             Graph::new(),
+            Box::new(Ellipse::circle(0.5)),
             Transport::BpmSync {
                 position: dummy_position(),
                 duration_beats: Param::fixed(4.0),
@@ -119,6 +157,7 @@ mod tests {
         )
         .with_transition(ClipTransition::Fade {
             phase: PositionSignal::fixed_speed(1.0),
+            curve: FadeCurve::SmoothStep,
         });
         assert!(matches!(clip.transition, ClipTransition::Fade { .. }));
     }

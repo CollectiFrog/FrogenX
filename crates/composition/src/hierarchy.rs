@@ -236,7 +236,11 @@ mod tests {
 
     fn dummy_clip() -> Clip {
         let (_g, transport) = dummy_transport();
-        Clip::shape(Graph::new(), transport)
+        Clip::shape(
+            Graph::new(),
+            Box::new(frogenx_shape::Ellipse::circle(0.5)),
+            transport,
+        )
     }
 
     #[test]

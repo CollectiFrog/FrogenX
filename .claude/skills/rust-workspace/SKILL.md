@@ -15,14 +15,15 @@ cargo fmt --all
 Elles vivent sous `crates/`, le workspace est à la racine.
 
 ```
-crates/core/    Signal, Param, Graph, Clock          ← aucune dépendance   ✅
-crates/osc/     oscillateurs, LFO, bruit, enveloppes ← core                ✅
-crates/audio/   cpal, FFT, features → Signal
-crates/shape/   primitives + opérateurs
-crates/layer/   trait Layer : Shape / Feedback / Video
-crates/render/  wgpu, compositeur, post-fx
-crates/output/  OutputSink : preview / NDI / Spout / Syphon / recorder
-crates/ui/      egui : rack, câblage, monitoring
+crates/core/         Signal, Param, Graph, Clock               ← aucune dépendance  ✅
+crates/osc/          oscillateurs, LFO, bruit, enveloppes      ← core               ✅
+crates/shape/        Path, primitives + opérateurs             ← core, osc, glam    ✅
+crates/composition/  grille : Deck/Layer/Column/Clip, tempo    ← core, shape        ✅
+crates/audio/        cpal, FFT, features → Signal
+crates/layer/        Gpu, trait RenderLayer, ShapeLayer, tessellation (CPU pur)
+crates/render/       compositeur, cible offscreen, readback
+crates/output/       OutputSink : preview / NDI / Spout / Syphon / recorder
+crates/ui/           egui : grille de clips, rack, câblage, monitoring
 ```
 
 **Ajouter une crate** demande deux éditions du `Cargo.toml` racine — `members` **et**
@@ -31,12 +32,19 @@ parlante.
 
 ## La règle de dépendance
 
-**Les flèches vont vers le haut de la liste.** `core` ne dépend de rien. `shape` ne
-connaît ni wgpu ni l'audio. `render` ne sait pas ce qu'est un oscillateur.
+**Les flèches vont vers le haut de la liste.** `core` ne dépend de rien. `shape` et
+`composition` ne connaissent ni wgpu ni l'audio. `render` ne sait pas ce qu'est un
+oscillateur.
 
-Ce n'est pas une préférence esthétique : c'est ce qui garde `core`, `osc` et `shape`
-testables sans GPU, sans carte son et sans fenêtre — donc en CI, rapidement. Une
-dépendance qui fuit vers le bas rend soudain une couche entière impossible à tester.
+Ce n'est pas une préférence esthétique : c'est ce qui garde `core`, `osc`, `shape` et
+`composition` testables sans GPU, sans carte son et sans fenêtre — donc en CI,
+rapidement. Une dépendance qui fuit vers le bas rend soudain une couche entière
+impossible à tester. La question qui compte n'est pas « combien de crates en amont »,
+mais « est-ce que l'une d'elles connaît le GPU, la carte son ou une fenêtre » — c'est
+ce qui autorise `composition → shape` (§10).
+
+Dans `layer`, la tessellation reste un **module qui ne connaît pas wgpu** : la crate
+dépend du GPU, mais ce module-là reste testable sans (§10, §24.3).
 
 **Avant d'ajouter une dépendance à un `Cargo.toml` :** vérifier le sens de la flèche. Si
 `shape` a besoin de quelque chose de `render`, l'abstraction est au mauvais endroit —
@@ -50,13 +58,21 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 
 | Domaine | Crate | Statut |
 |---|---|---|
-| Maths | `glam` | à venir (shape) |
-| Rendu | `wgpu`, `winit` | à venir (render) |
+| Maths | `glam` | ✅ (shape) |
+| Sérialisation | `serde` | ✅ (composition) |
+| Rendu | `wgpu` **30** | étape 5 (layer, render) — majeure épinglée |
+| Tessellation | `lyon_tessellation` | étape 5 (layer) |
+| GPU, utilitaires | `bytemuck`, `pollster` | étape 5 |
+| Image | `png` | étape 5 (première image, tests) |
+| Fenêtrage | `winit` | étape 6 |
 | UI | `egui` | à venir |
-| Tessellation | `lyon` | à venir |
 | Audio | `cpal`, `rustfft` | à venir |
 | Lock-free | `rtrb`, `triple_buffer` | à venir |
-| Sérialisation | `serde` | à venir |
+
+**`wgpu` est épinglé à une majeure, et `rust-version` suit son minimum** (§11). wgpu
+change d'API à chaque majeure, environ tous les trois mois : une montée de version est
+un commit délibéré, jamais un effet de bord d'un `cargo update`. Relever la majeure
+oblige à relever `rust-version` du workspace si son minimum augmente.
 
 **Le bruit ne prend pas la crate `noise`** : implémenté dans `osc` pour garantir le
 déterminisme à graine explicite (§20.3) plutôt que le supposer à travers les versions

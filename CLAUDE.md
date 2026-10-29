@@ -63,9 +63,11 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
   explicite, enveloppes attaque/relâchement, opérateurs (`Sum`, `Product`, `Mix`,
   `Trigger`, `SampleHold`).
-- `crates/shape` : primitives (`Ellipse`, `Polygon` à côtés flottants, `Star`, `Rect`,
-  `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et opérateurs
-  en place (`Deform`, `NoiseDisplace`, `RadialRepeat`, `Transform`, `Smooth`, `Chain`).
+- `crates/shape` : une forme est un `Path` (buffer plat de points découpé en contours
+  fermés ou ouverts, §16.3). Primitives (`Ellipse`, `Polygon` à côtés flottants, `Star`,
+  `Rect`, `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et
+  opérateurs en place (`Deform`, `NoiseDisplace`, `RadialRepeat`, `Transform`, `Smooth`,
+  `Chain`).
 - `crates/composition` : la grille (§3bis) — dépend de `core` et `shape`.
 
 **Après l'étape 4 : étape 5 — la première image à l'écran.** `crates/layer` +

@@ -180,7 +180,7 @@ engageait un vrai contrat.
 
 ```rust
 pub struct Clip {
-    pub source: ClipSource,       // Shape(Graph) | Scene3d(Graph) | Video(VideoTrack)
+    pub source: ClipSource,       // Shape { graph, generator } | Scene3d(Graph) | Video(VideoTrack)
     pub effects: Vec<ShapeOp>,    // ou son équivalent vidéo/3D — chaîne en place (§16.3 bis)
     pub transport: Transport,     // Timeline ou BpmSync (§3bis.3)
     pub transition: ClipTransition,
@@ -196,6 +196,16 @@ paramètres via son `Graph`, exactement comme avant la réorientation.
 **Chaque clip porte son `Graph`** (voir le changement au §3). Les effets d'un clip sont
 une chaîne `ShapeOp`-like en place, cohérente avec la décision déjà prise en §16.3 bis —
 elle s'étend aux effets vidéo et 3D sans remettre en cause le contrat.
+
+**`ClipSource::Shape` porte un générateur, pas seulement un graphe.** Correction du
+premier état de `composition`, où la variante était `Shape(Graph)` : un graphe de
+modulation seul ne produit aucune forme, et `Clip.effects` était alors une chaîne
+d'opérateurs sans rien à transformer. La variante devient `Shape { graph, generator }`
+— le graphe module, le générateur (`Box<dyn ShapeGenerator>`, §16.3) produit le `Path`
+que les effets transforment. Le **branchement** de la grille sur le rendu (le clip
+actif d'une piste alimente une `ShapeLayer`) reste à l'étape 7 du §12 ; seul le type
+est corrigé maintenant, pour que l'étape 5 ne construise pas sur un clip incapable de
+décrire sa propre forme.
 
 **`ClipTransition` suit le même principe que `Transport.position` (§3bis.3) : une
 progression qui avance seule est un accumulateur, pas un `Param` statique.**
@@ -220,8 +230,12 @@ maintenant pour fixer la forme du contrat, mais leur logique de rendu (mélanger
 clips pendant la transition) dépend du compositeur de couches qui n'existe qu'à partir
 de l'étape 5. Les construire avant aurait anticipé une dépendance que `composition` ne
 doit pas avoir (§10 : testable sans GPU). **Ce n'est pas un report silencieux** : le
-type existe, son comportement pour `Fade`/`Wipe` lève `todo!()` documenté jusqu'à
-l'étape 5, jamais une valeur fausse qui passerait un test par accident.
+type existe et `composition` n'a **aucun** code de rendu — ni pour `Cut`, ni pour
+`Fade`/`Wipe`. C'est le compositeur qui lira la transition du clip et mélangera les
+deux couches ; tant qu'il n'existe pas, rien ne peut produire une valeur fausse qui
+passerait un test par accident. (Une version antérieure de ce paragraphe annonçait un
+`todo!()` : il n'a jamais été écrit, et il aurait été une panique en évaluation,
+interdite par le §18.1.)
 
 ### 3bis.3 Transport et tempo
 
@@ -378,12 +392,14 @@ mesures et temps musicaux.
 
 ```rust
 trait ShapeGenerator {
-    fn generate(&self, t: f64, ctx: &Ctx) -> Vec<Vec2>;
+    fn generate(&self, t: f64, ctx: &Ctx, g: &Graph, out: &mut Path);
 }
 ```
 
-Une forme est une **polyligne** : une suite de points. Simple, uniforme, et suffisant
-pour tout ce qui suit.
+Une forme est un **ensemble de contours** : un buffer plat de points, découpé en plages,
+chacune fermée ou ouverte. Un cercle est un contour fermé ; un arc, un contour ouvert ;
+une rosace produite par répétition radiale, plusieurs contours fermés. Le détail et la
+raison de ce choix sont au §16.3.
 
 ### 5.2 Primitives
 
@@ -440,11 +456,24 @@ le même pipeline naïvement.
 rasterisée est une texture. Une frame vidéo décodée est une texture.
 
 ```rust
-trait Layer {
-    fn render(&mut self, t: f64, ctx: &Ctx) -> &TextureView;
+trait RenderLayer {
+    fn prepare(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu); // travail CPU
+    fn encode(&self, encoder: &mut CommandEncoder);                  // passe GPU
+    fn output(&self) -> &TextureView;                                // texture prêtée
     fn blend(&self) -> BlendParams;   // opacité, mode — modulables par Signal
 }
 ```
+
+Contrat complet et raison du découpage en trois appels : §22.
+
+**Pourquoi `RenderLayer` et non `Layer`.** Depuis la grille de composition (§3bis),
+`composition::Layer` désigne une **piste** de la grille : une suite de clips dont un
+seul est actif. Le trait de cette section désigne autre chose : un objet qui **produit
+une texture**. Les deux coexisteront dans `render` et dans `ui` — une piste de la grille
+pilote la couche de rendu de son clip actif. Deux types homonymes dans les mêmes
+fichiers obligeraient à qualifier chaque usage et rendraient chaque message d'erreur
+ambigu. Les implémentations gardent leur nom (`ShapeLayer`, `FeedbackLayer`,
+`VideoLayer`, `Scene3dLayer`) : le suffixe y est sans ambiguïté.
 
 ```
 [ShapeLayer]     ─┐
@@ -604,8 +633,9 @@ place en dernier.
 
 ## 10. Structure des crates
 
-Les crates vivent sous `crates/`, le workspace est à la racine. Seule `core` existe
-à ce jour ; les suivantes sont créées au fil de la feuille de route (§12).
+Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`
+et `composition` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+route (§12).
 
 ```
 frogenx/
@@ -614,12 +644,22 @@ frogenx/
 ├── shape/     # primitives + opérateurs              ✅ (core, osc, glam)
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
-├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController (core, shape)
-├── layer/     # trait Layer : Shape / Scene3d / Feedback / Video
-├── render/    # wgpu, compositeur, post-fx
+├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController ✅ (core, shape)
+├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation (lyon, CPU pur)
+├── render/    # compositeur, cible offscreen, readback GPU → CPU
 ├── output/    # OutputSink : preview / NDI / Spout / Syphon / Art-Net / recorder
 └── ui/        # egui : grille de clips, rack par clip, monitoring
 ```
+
+**Découpage `layer` / `render` (étape 5).** `layer` porte le contexte `Gpu` (device et
+queue), le trait `RenderLayer` (§22) et ses implémentations ; `render` porte ce qui
+**consomme** les couches — le compositeur, la cible offscreen finale et la relecture
+GPU → CPU (§8.2). La tessellation (polylignes → triangles, `lyon`) vit dans `layer`,
+mais dans un **module qui ne connaît pas wgpu** : elle prend un `Path` (§16.3) et rend
+des sommets et des indices en mémoire CPU. C'est le morceau de l'étape 5 où se
+logent les cas limites (contour dégénéré, auto-intersection, contour ouvert), et il
+reste ainsi testable en CI sans GPU, comme `shape` (§24.3). Seuls l'upload des buffers
+et la passe de rendu exigent un adaptateur.
 
 **`composition` dépend de `core` et `shape`, pas seulement de `core`.** Révision du
 sketch initial de §3bis.2 : `Clip.effects` référence une chaîne `ShapeOp` (§16.3 bis),
@@ -667,18 +707,30 @@ maintenable à mesure qu'il grossit.
 | Domaine | Crate | Rôle |
 |---|---|---|
 | Maths | `glam` ✅ | vecteurs, matrices |
-| Rendu | `wgpu`, `winit` | GPU multiplateforme, fenêtrage |
+| Rendu | `wgpu` 30 | GPU multiplateforme (étape 5) |
+| Fenêtrage | `winit` | fenêtre de preview (étape 6) |
 | UI | `egui` | grille de clips, rack de modules, câblage |
-| Bruit | `noise` | Perlin, simplex |
-| Tessellation | `lyon` | polylignes → triangles |
+| Bruit | interne à `osc` ✅ | value noise et fBm à graine explicite — pas la crate `noise` (§13, §20.3) |
+| Tessellation | `lyon_tessellation` | `Path` → triangles, remplissage et trait (étape 5) |
+| GPU, utilitaires | `bytemuck`, `pollster` | octets des buffers de sommets ; attente synchrone de l'adaptateur (étape 5) |
+| Image | `png` | écriture de la première image et des snapshots de test (étape 5) |
 | Audio | `cpal` | capture multiplateforme |
 | FFT | `rustfft` | analyse spectrale |
 | Lock-free | `rtrb`, `triple_buffer` | passage audio → rendu |
-| Sérialisation | `serde` | sauvegarde de patchs |
+| Sérialisation | `serde` ✅ | sauvegarde de patchs |
 | Encodage | binaire `ffmpeg` (pipe) | enregistrement, décodage de clips (§9.3) |
 | Éclairage | `artnet` ou équivalent | sortie Art-Net / DMX (§3bis, §8) |
 | Scripting | `mlua` | logique de composition personnalisée (§23.4) |
 | Contrôle live | `midir` (MIDI), `rosc` (OSC) | pilotage de l'interface et des effets par surface externe (§22bis.1) |
+
+**`wgpu` est épinglé à une version majeure précise (30), et `rust-version` du workspace
+suit son minimum (1.87).** wgpu publie une version majeure environ tous les trois mois,
+avec des changements d'API à chaque fois : une contrainte lâche ferait changer l'API
+sous les pieds du projet à la première mise à jour. Une montée de version est un
+changement délibéré, fait dans son propre commit, avec les tests de rendu (§24) comme
+filet. Le `rust-version` du workspace passe de 1.80 à 1.87 en conséquence : déclarer un
+minimum inférieur à celui d'une dépendance serait un mensonge que `cargo` ne détecte
+qu'à la compilation chez celui qui a la vieille toolchain.
 
 ---
 
@@ -695,7 +747,7 @@ couches complètes empilées.
 | 3a | ✅ Oscillateurs, LFO, bruit, enveloppes | sources de modulation — *fait* |
 | 3b | ✅ Primitives + opérateurs de formes | polylignes testables — *fait* |
 | 4 | `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** |
-| 5 | `Layer` + `ShapeLayer` + compositeur, offscreen | **première image à l'écran** |
+| 5 | `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) |
 | 6 | `OutputSink` + preview | pipeline de sortie en place |
 | 7 | LFO câblé sur une fréquence, depuis un clip de la grille | **le modulaire prend vie dans la grille** |
 | 8 | Audio → features → `Signal` | **visuel audio-réactif** |
@@ -715,7 +767,7 @@ modulaire se prouve *dans* la grille), la 8 (l'audio-réactivité, cœur du proj
 
 **L'étape 4 passe devant le rendu, à rebours du vertical slice habituel**, parce que
 la grille est désormais la structure que toutes les étapes suivantes organisent. Y
-raccrocher `Layer`/`OutputSink`/`VideoLayer` après coup serait une réécriture ; les
+raccrocher `RenderLayer`/`OutputSink`/`VideoLayer` après coup serait une réécriture ; les
 construire directement au-dessus d'une grille déjà en place ne l'est pas.
 
 **Les étapes 5 et 6 restent l'investissement anticipé** du plan : elles coûtent peu
@@ -770,6 +822,16 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Phase accumulée**, pas `sin(2π·f·t)` (osc) | en FM, la formule directe fait sauter la phase à chaque changement de fréquence — discontinuité visible |
 | **Bruit implémenté en interne**, pas la crate `noise` | le déterminisme à graine explicite (§20.3) doit être garanti, pas supposé à travers les versions d'une dépendance |
 | **`ShapeOp` en place**, distinct de `ShapeGenerator` (§16.3 bis) | des opérateurs enveloppants exigeraient un buffer par maillon — l'allocation par frame que le §16.3 évite |
+| **Une forme est un `Path` : buffer plat + plages de contours fermés/ouverts**, pas une polyligne unique (§16.3) | une polyligne unique ne sait dire ni où un contour finit ni s'il est fermé — `RadialRepeat` et `Smooth` produisaient des défauts invisibles jusqu'au premier rendu ; le buffer plat évite l'allocation par contour d'un `Vec<Vec<Vec2>>` |
+| **Contrat des couches en trois appels** (`prepare` / `encode` / `output`), pas `render -> &TextureView` (§22) | rendre une texture depuis un emprunt mutable interdisait au compositeur de tenir toutes les textures à la fois ; séparer le CPU du GPU permet une préparation parallèle future sans changer le contrat de chaque couche |
+| **Trait `RenderLayer`**, pas `Layer` (§6) | `composition::Layer` est une piste de la grille ; deux types homonymes dans `render` et `ui` rendraient chaque usage et chaque erreur ambigus |
+| **Tessellation dans `layer`, en module CPU pur** ; compositeur et readback dans `render` (§10) | les cas limites de l'étape 5 se logent dans la tessellation : elle reste testable en CI sans GPU |
+| **Compositeur par passes shader en ping-pong**, pas `BlendState` natif (§22) | `Difference` exige de lire la destination, impossible en mélange matériel ; le calcul prémultiplié s'écrit en clair, une fois |
+| **MSAA 4× avec repli 1× diagnostiqué** (§22) | le support varie selon le backend ; une capacité absente dégrade, ne panique pas (§18.1) |
+| **Couleur = quatre `Param` saisis en sRGB**, convertis en linéaire prémultiplié pendant `prepare` (§21) | une couleur est un champ qu'on module ; un `[f32; 4]` nu serait un câble impossible à brancher |
+| **`wgpu` épinglé à une majeure, `rust-version` alignée sur son minimum** (§11) | une majeure tous les trois mois, avec changements d'API ; une montée de version doit être délibérée |
+| **Tests GPU qui se sautent sans adaptateur**, tout le reste testé sans GPU (§24.3) | un test qui échoue faute de GPU finit désactivé ; ce qui est pur ne doit jamais attendre un GPU |
+| **`ClipSource::Shape { graph, generator }`**, pas `Shape(Graph)` (§3bis.2) | un graphe seul ne produit aucune forme ; les effets du clip n'avaient rien à transformer |
 | **Contour non refermé par duplication** (§16.3) | un point répété dupliquerait un sommet à la tessellation et produirait des doublons sous répétition radiale |
 | **Saturation de la géométrie chez chaque primitive** (§18.4) | une modulation dégénérée doit dégrader la forme, jamais allouer des millions de points ni figer l'application |
 | **Écriture dans un buffer fourni** pour les formes (§16.3) | évite une allocation par forme et par frame à 60 fps |
@@ -820,6 +882,8 @@ concrètement, par étage du §1 :
 | **Formes** | nombre de points, fermeture du contour, symétries, morphing continu du polygone |
 | **Opérateurs** | composition, idempotence quand elle est attendue, préservation du nombre de points |
 | **Audio** | features sur signaux **synthétiques** (sinus pur → centroïde connu ; silence → RMS nul) |
+| **Tessellation** | sans GPU : un contour fermé produit des triangles qui couvrent son aire, un contour ouvert n'est jamais rempli, plusieurs contours restent disjoints (pas de triangle à cheval), un contour dégénéré (moins de 3 points, points confondus, non-fini) rend zéro triangle sans paniquer |
+| **Couches** | par relecture de pixels, sur un GPU s'il existe : un carré plein au centre donne au pixel central la couleur **linéaire prémultipliée** attendue et laisse le coin transparent ; conversion sRGB → linéaire vérifiée sans GPU sur des valeurs de référence |
 | **Sorties** | un `OutputSink` factice reçoit bien les frames, dans l'ordre, sans perte en mode `Fixed` |
 | **Grille de composition** | construction/suppression dans la hiérarchie sans invalider les identifiants des niveaux non touchés (§3bis.1) ; une `Column` déclenche bien la même tranche sur tous les `Layer` (§3bis.1) ; `TempoController::tap` calcule un BPM correct sur une séquence d'événements synthétiques ; `CrossFader.phase` à 0/0.5/1 produit les `BlendParams::opacity` attendus sur les deux groupes (§3bis.4) ; `PositionSignal` avance déterministiquement à un `t`/`dt` injecté, jamais l'horloge système (§3bis.3) |
 
@@ -940,14 +1004,52 @@ une frame est longue.
 ### 16.3 Le trait `ShapeGenerator`
 
 ```rust
+pub struct Contour {
+    pub start: u32,    // index du premier point dans `Path::points`
+    pub end: u32,      // exclusif
+    pub closed: bool,
+}
+
+pub struct Path {
+    pub points: Vec<Vec2>,
+    pub contours: Vec<Contour>,
+}
+
 pub trait ShapeGenerator {
-    fn generate(&self, t: f64, ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>);
+    fn generate(&self, t: f64, ctx: &Ctx, g: &Graph, out: &mut Path);
 }
 ```
 
 **Écriture dans un buffer fourni, pas de `Vec` retourné.** Le rendu tourne à 60 fps ;
 allouer un `Vec` par forme et par frame produit une pression mémoire inutile. Le
 compositeur possède les buffers et les réutilise (`out.clear()` puis remplissage).
+
+**Une forme est un ensemble de contours, pas une polyligne unique.** Correction du
+contrat initial (`out: &mut Vec<Vec2>`), décidée avant l'étape 5 parce qu'une polyligne
+unique ne sait dire ni où un contour finit, ni s'il est fermé. Deux défauts latents en
+découlaient dans `shape`, invisibles tant que rien n'était dessiné — les tests
+comptaient des points, ils ne traçaient rien :
+
+- `RadialRepeat` ajoutait ses copies **à la suite dans le même buffer**. Le
+  rasteriseur aurait tracé un segment parasite de la fin de chaque copie au début de
+  la suivante.
+- `Smooth` bouclait par modulo sur tout le buffer. Sur un `Arc` ouvert, il moyennait
+  le premier point avec le dernier et rapprochait les deux extrémités ; après une
+  répétition radiale, il lissait d'une copie à l'autre.
+
+**Pourquoi un buffer plat découpé en plages, plutôt qu'un `Vec` par contour.** Un
+`Vec<Vec<Vec2>>` serait plus lisible, mais coûterait une allocation par contour et par
+frame — exactement ce que le paragraphe précédent interdit. Avec le buffer plat, les
+opérateurs ponctuels (`Deform`, `NoiseDisplace`, `Transform`) restent une boucle sur
+tous les points, sans connaître les contours ; seuls les opérateurs qui regardent les
+voisins (`Smooth`) itèrent contour par contour. Un séparateur dans le buffer (un point
+`NaN` entre deux contours) aurait évité de changer la signature, mais contredit le
+§18.3 : aucun non-fini ne circule.
+
+**Invariant, vérifié par les tests :** les plages de `contours` se suivent, ne se
+chevauchent pas et couvrent exactement `points` ; aucune plage n'est vide. Le
+générateur pose le drapeau `closed` (`Arc` ouvert, les autres primitives fermées), les
+opérateurs le conservent, et `RadialRepeat` ajoute un contour par copie.
 
 Le `&Graph` est nécessaire parce que les paramètres d'une forme sont des `Param`, dont
 la résolution exige le graphe. Une forme est générée **après** `eval_frame` (§20.1),
@@ -967,9 +1069,13 @@ Décision prise en implémentant `shape`, que la partie I ne tranchait pas.
 
 ```rust
 pub trait ShapeOp {
-    fn apply(&self, t: f64, ctx: &Ctx, g: &Graph, pts: &mut Vec<Vec2>);
+    fn apply(&self, t: f64, ctx: &Ctx, g: &Graph, path: &mut Path);
 }
 ```
+
+Un opérateur reçoit le `Path` entier (§16.3). Il **doit préserver l'invariant des
+plages** : un opérateur ponctuel ne touche qu'à `points` ; un opérateur qui ajoute ou
+retire des points met `contours` à jour dans le même appel.
 
 **Pourquoi un trait distinct plutôt qu'un opérateur enveloppant un générateur.**
 L'enveloppement (`Deform::new(Circle)`) donnerait une composition naturelle, mais chaque
@@ -1304,6 +1410,17 @@ linéaire ; seule la surface de présentation est `*Srgb`.**
 **Alpha prémultiplié** dans toute la chaîne de composition — sinon les bords des formes
 tessellées présentent un liseré sombre au mélange.
 
+**La couleur d'une forme est quatre `Param`, saisis en sRGB.** Remplissage et trait
+d'une `ShapeLayer` portent chacun `r`, `g`, `b`, `a`, tous `Param` — jamais un
+`[f32; 4]` en dur : une couleur est exactement le genre de champ qu'on voudra moduler
+par un LFO ou une feature audio, et un tableau nu serait le « câble impossible à
+brancher demain » du §16.4. Les valeurs sont **saisies et sérialisées en sRGB** (la
+ligne « palettes, UI, patchs » du tableau ci-dessus : ce que l'humain lit et saisit),
+puis converties en linéaire et prémultipliées **une fois, pendant `prepare`** (§22),
+avant d'atteindre le GPU. Chaque canal est saturé dans `[0, 1]` chez la couche, son
+consommateur — jamais dans le `Signal` qui le module (§18.4). La conversion
+sRGB → linéaire est une fonction pure, testée sans GPU sur des valeurs de référence.
+
 ---
 
 ## 22. Contrat des couches
@@ -1311,8 +1428,13 @@ tessellées présentent un liseré sombre au mélange.
 > Section d'intention : elle sera précisée à l'usage, à partir de l'étape 5 (§12).
 
 ```rust
-pub trait Layer {
-    fn render(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu) -> &TextureView;
+pub trait RenderLayer {
+    /// Travail CPU : génération des formes, tessellation, upload des buffers.
+    fn prepare(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu);
+    /// Enregistre la passe de rendu de la couche dans l'encodeur partagé.
+    fn encode(&self, encoder: &mut CommandEncoder);
+    /// Prête la texture de la couche au compositeur, en lecture.
+    fn output(&self) -> &TextureView;
     fn blend(&self) -> BlendParams;
     fn resize(&mut self, size: UVec2, gpu: &Gpu);
 }
@@ -1322,6 +1444,57 @@ pub struct BlendParams {
     pub mode: BlendMode,         // Normal, Add, Multiply, Screen, Difference...
 }
 ```
+
+**Pourquoi trois appels, et non `render(&mut self, …) -> &TextureView`.** Correction du
+contrat initial, décidée avant l'étape 5. Le contrat d'origine rendait une référence
+issue d'un emprunt **mutable** : la texture de la couche 1 restait empruntée tant
+qu'on l'utilisait, ce qui interdisait d'appeler `render` sur la couche 2 — alors que le
+compositeur a besoin des textures de **toutes** les couches en même temps. Il soumettait
+aussi implicitement un travail GPU par couche, quand les couches doivent enregistrer
+leurs passes dans un **seul** encodeur, soumis une fois par frame.
+
+Le cycle du compositeur devient donc : `prepare` sur chaque couche (emprunt mutable,
+l'une après l'autre), `encode` sur chaque couche, puis `output` sur toutes (emprunts
+en lecture, qui coexistent).
+
+**Pourquoi séparer `prepare` d'`encode`, quand deux appels auraient suffi à régler
+l'emprunt.** `render(&mut self, …, encoder)` suivi d'`output(&self)` réglait déjà le
+problème. La séparation est retenue pour isoler le travail CPU (générer, tessellater,
+remplir les buffers) de l'enregistrement GPU : le jour où la préparation devient un
+goulot, les couches pourront être préparées en parallèle sur plusieurs cœurs sans
+changer le contrat que `FeedbackLayer`, `VideoLayer` et `Scene3dLayer` auront entretemps
+implémenté. Le coût — un appel de plus par implémentation — est payé une fois ; une
+modification du contrat de toutes les couches existantes, elle, se paierait à chaque
+couche.
+
+**`encode` prend `&self`.** Tout ce qui change d'une frame à l'autre (buffers de
+sommets, uniformes) est écrit pendant `prepare`. `encode` ne fait que référencer des
+ressources déjà prêtes : c'est ce qui garantit qu'aucun travail CPU coûteux ne se
+glisse dans l'enregistrement des passes.
+
+**Le compositeur mélange par passes shader en ping-pong, pas par `BlendState` natif.**
+Il tient deux textures d'accumulation `Rgba16Float`. Pour chaque couche, une passe plein
+écran lit l'accumulé et la texture de la couche, applique le mode de `BlendParams` et
+l'opacité, et écrit dans l'autre texture d'accumulation ; les deux s'échangent à la
+couche suivante — le même ping-pong que `FeedbackLayer`, pour la même raison : lire et
+écrire la même texture est interdit. Les `BlendState` de wgpu auraient suffi pour
+`Normal` et `Add`, mais `Difference` exige de **lire** la destination, ce que le
+mélange matériel ne permet pas ; et le calcul prémultiplié (§21) y reste implicite,
+réparti entre des facteurs de blend. En shader, tous les modes de `BlendMode` passent
+par la même mécanique et le calcul prémultiplié s'écrit en clair, une fois, en WGSL —
+approche également retenue par `darkly` (§13). Coût : une passe plein écran par couche,
+négligeable face au rendu des couches elles-mêmes. Ce choix est **interne** au
+compositeur : il ne touche pas le contrat `RenderLayer`.
+
+**Antialiasing : MSAA 4×, avec repli.** Une `ShapeLayer` rend dans une cible
+multiéchantillonnée `Rgba16Float`, résolue vers sa texture de sortie. Le support du
+MSAA 4× pour ce format est **vérifié à l'initialisation** (les capacités varient selon
+le backend et le matériel) ; s'il manque, la couche rend en 1× et le signale par un
+diagnostic de rendu (propre à `layer`, pas un compteur de `core::Diagnostics`, qui ne
+doit rien savoir du GPU) plutôt que d'échouer — le régime « jamais de panique » du
+§18.1 vaut aussi pour une capacité matérielle absente. L'antialiasing analytique
+(franges calculées par la tessellation) reste une piste si le MSAA s'avère insuffisant
+sur les traits fins ; il n'est pas construit avant d'en avoir mesuré le besoin.
 
 **Relation avec `CrossFader` (§3bis.4).** `BlendParams` reste la seule donnée que le
 compositeur lit pour mélanger une couche avec celle du dessous. Le `CrossFader` ne
@@ -1672,6 +1845,17 @@ Les tests unitaires tournent sur **les trois plateformes** — c'est là qu'on a
 `cfg` cassés que `cargo check` local ne compile pas (§9). Les tests de snapshot ne
 tournent qu'où un GPU est disponible, et leur absence ailleurs ne fait pas échouer la
 CI.
+
+**Mécanique, à partir de l'étape 5.** Les tests qui ont besoin du GPU demandent un
+adaptateur par une fonction d'aide qui rend `Option<Gpu>`. Sans adaptateur, le test
+s'arrête **avec succès** et le signale sur sa sortie (`GPU absent, test sauté`) —
+jamais un échec, jamais une panique. Tout ce qui peut être testé sans GPU l'est sans
+GPU : la tessellation, la conversion de couleur, le placement des formes dans l'espace
+normalisé (§17) sont des fonctions pures. Les tests de pixels de l'étape 5 vérifient
+des valeurs précises en quelques points (centre, coin) avec une petite tolérance ; les
+snapshots d'image entière avec tolérance perceptuelle (§24.2) viennent plus tard, quand
+il y aura des images assez riches pour que la comparaison point par point ne suffise
+plus.
 
 ### 24.4 Fixtures de patchs
 

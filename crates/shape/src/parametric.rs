@@ -4,6 +4,7 @@
 //! pilotent `(x, y)`, ou un signal pilote le rayon en fonction de l'angle.
 
 use crate::generator::{ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
+use crate::path::Path;
 use frogenx_core::{Ctx, Graph, Param};
 use glam::Vec2;
 use std::f32::consts::TAU;
@@ -13,6 +14,18 @@ fn resolution(n: f32, min: usize) -> usize {
         return min;
     }
     (n.round().max(min as f32) as usize).min(MAX_POINTS)
+}
+
+/// Vrai si une courbe échantillonnée sur `θ ∈ [0, 2π)` revient à son point de
+/// départ en `θ = 2π` — donc si son contour est **fermé**.
+///
+/// Lissajous et la rose ne se referment que pour certains rapports (§5.3). On
+/// teste le critère lui-même plutôt que de deviner « rapport entier » à partir
+/// des paramètres : c'est exact pour toutes les valeurs, y compris celles
+/// qu'un test d'entier manquerait (une rose à `k` demi-entier, un Lissajous à
+/// déphasage particulier).
+fn revient_au_depart(depart: Vec2, arrivee: Vec2, echelle: f32) -> bool {
+    (arrivee - depart).length() <= 1e-3 * echelle.abs().max(1e-6)
 }
 
 /// Courbe de Lissajous — deux oscillations perpendiculaires.
@@ -47,7 +60,7 @@ impl Lissajous {
 }
 
 impl ShapeGenerator for Lissajous {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let fx = self.freq_x.get(g);
         let fx = if fx.is_finite() { fx } else { 1.0 };
@@ -59,13 +72,12 @@ impl ShapeGenerator for Lissajous {
         let amp = if amp.is_finite() { amp } else { 1.0 };
         let n = resolution(self.segments.get(g), 3);
 
+        let point =
+            |th: f32| Vec2::new(((th * fx) + phase * TAU).sin() * amp, (th * fy).sin() * amp);
         for i in 0..n {
-            let th = i as f32 / n as f32 * TAU;
-            out.push(Vec2::new(
-                ((th * fx) + phase * TAU).sin() * amp,
-                (th * fy).sin() * amp,
-            ));
+            out.points.push(point(i as f32 / n as f32 * TAU));
         }
+        out.end_contour(revient_au_depart(point(0.0), point(TAU), amp));
     }
 }
 
@@ -96,7 +108,7 @@ impl Rose {
 }
 
 impl ShapeGenerator for Rose {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let k = self.k.get(g);
         let k = if k.is_finite() {
@@ -107,13 +119,16 @@ impl ShapeGenerator for Rose {
         let r = self.radius.get(g).max(0.0);
         let n = resolution(self.segments.get(g), 3);
 
-        for i in 0..n {
-            let th = i as f32 / n as f32 * TAU;
+        let point = |th: f32| {
             // Le rayon peut être négatif : c'est ce qui dessine les pétales
             // opposés, et c'est voulu.
             let rad = (k * th).cos() * r;
-            out.push(Vec2::new(th.cos() * rad, th.sin() * rad));
+            Vec2::new(th.cos() * rad, th.sin() * rad)
+        };
+        for i in 0..n {
+            out.points.push(point(i as f32 / n as f32 * TAU));
         }
+        out.end_contour(revient_au_depart(point(0.0), point(TAU), r));
     }
 }
 
@@ -165,7 +180,7 @@ impl Superformula {
 }
 
 impl ShapeGenerator for Superformula {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let fini = |v: f32, defaut: f32| if v.is_finite() { v } else { defaut };
         let m = fini(self.m.get(g), 5.0).clamp(-64.0, 64.0);
@@ -195,15 +210,20 @@ impl ShapeGenerator for Superformula {
                 0.0
             };
             let r = if r.is_finite() { r * radius } else { 0.0 };
-            out.push(Vec2::new(th.cos() * r, th.sin() * r));
+            out.points.push(Vec2::new(th.cos() * r, th.sin() * r));
         }
+        // Toujours fermé : un rayon fonction de l'angle, balayé sur un tour,
+        // délimite une région étoilée autour de l'origine. Si r(0) ≠ r(2π),
+        // la fermeture ajoute un segment radial — le bord naturel de cette
+        // région, pas un artefact.
+        out.end_contour(true);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generator::test_util::{gen, tous_finis};
+    use crate::generator::test_util::{gen, gen_path, tous_finis};
     use frogenx_core::{Constant, Graph};
 
     const EPS: f32 = 1e-3;
@@ -358,6 +378,36 @@ mod tests {
         let rmin = pts.iter().map(|p| p.length()).fold(f32::MAX, f32::min);
         let rmax = pts.iter().map(|p| p.length()).fold(0.0, f32::max);
         assert!(rmax - rmin > 0.5, "la modulation doit dessiner des pétales");
+    }
+
+    #[test]
+    fn lissajous_est_ferme_seulement_quand_la_courbe_revient_au_depart() {
+        let g = Graph::new();
+        let entier = gen_path(&Lissajous::new(3.0, 2.0), &g);
+        assert!(entier.contours[0].closed, "3:2 se referme (§5.3)");
+
+        // 1.5:1 — en θ = 2π, x vaut sin(3π + π/2) = -1 au lieu de 1 : la
+        // courbe ne revient pas. La refermer tracerait une corde parasite.
+        let non_entier = gen_path(&Lissajous::new(1.5, 1.0), &g);
+        assert!(!non_entier.contours[0].closed, "1.5:1 reste ouvert");
+    }
+
+    #[test]
+    fn la_rose_est_fermee_seulement_quand_k_boucle_en_un_tour() {
+        let g = Graph::new();
+        assert!(gen_path(&Rose::new(5.0, 1.0), &g).contours[0].closed);
+        // k = 2.5 : la rose ne se referme qu'après deux tours.
+        assert!(!gen_path(&Rose::new(2.5, 1.0), &g).contours[0].closed);
+    }
+
+    #[test]
+    fn la_superformule_est_toujours_fermee() {
+        let g = Graph::new();
+        for m in [3.0, 4.5, 7.0] {
+            let path = gen_path(&Superformula::new(m), &g);
+            assert_eq!(path.contours.len(), 1);
+            assert!(path.contours[0].closed, "m={m}");
+        }
     }
 
     #[test]

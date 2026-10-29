@@ -5,6 +5,7 @@
 //! (§5.4) qui produit la richesse.
 
 use crate::generator::{ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
+use crate::path::Path;
 use frogenx_core::{Ctx, Graph, Param};
 use glam::Vec2;
 use std::f32::consts::TAU;
@@ -52,7 +53,7 @@ impl Ellipse {
 }
 
 impl ShapeGenerator for Ellipse {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         // Un rayon négatif viendrait d'une modulation trop profonde : on le
         // sature plutôt que de produire une forme retournée.
@@ -63,8 +64,9 @@ impl ShapeGenerator for Ellipse {
 
         for i in 0..n {
             let a = i as f32 / n as f32 * TAU;
-            out.push(Vec2::new(a.cos() * r, a.sin() * r * e));
+            out.points.push(Vec2::new(a.cos() * r, a.sin() * r * e));
         }
+        out.end_contour(true);
     }
 }
 
@@ -131,7 +133,7 @@ fn polygon_radius(a: f32, sides: f32) -> f32 {
 }
 
 impl ShapeGenerator for Polygon {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let sides = self.sides.get(g);
         // Sous 2 côtés la formule dégénère ; au-delà de 64 c'est un cercle.
@@ -152,8 +154,10 @@ impl ShapeGenerator for Polygon {
             let pr = polygon_radius(a, sides);
             let radius = (pr * (1.0 - round) + round) * r;
             let angle = a + rot;
-            out.push(Vec2::new(angle.cos() * radius, angle.sin() * radius));
+            out.points
+                .push(Vec2::new(angle.cos() * radius, angle.sin() * radius));
         }
+        out.end_contour(true);
     }
 }
 
@@ -186,7 +190,7 @@ impl Star {
 }
 
 impl ShapeGenerator for Star {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let p = self.points.get(g);
         let p = if p.is_finite() {
@@ -204,8 +208,10 @@ impl ShapeGenerator for Star {
         for i in 0..branches * 2 {
             let a = i as f32 / (branches * 2) as f32 * TAU + rot;
             let radius = if i % 2 == 0 { r } else { r * inner };
-            out.push(Vec2::new(a.cos() * radius, a.sin() * radius));
+            out.points
+                .push(Vec2::new(a.cos() * radius, a.sin() * radius));
         }
+        out.end_contour(true);
     }
 }
 
@@ -236,7 +242,7 @@ impl Rect {
 }
 
 impl ShapeGenerator for Rect {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let w = self.width.get(g).max(0.0) * 0.5;
         let h = self.height.get(g).max(0.0) * 0.5;
@@ -246,12 +252,13 @@ impl ShapeGenerator for Rect {
         let cs = resolution(self.corner_segments.get(g), 1);
 
         if cr <= f32::EPSILON {
-            out.extend_from_slice(&[
+            out.points.extend_from_slice(&[
                 Vec2::new(w, h),
                 Vec2::new(-w, h),
                 Vec2::new(-w, -h),
                 Vec2::new(w, -h),
             ]);
+            out.end_contour(true);
             return;
         }
 
@@ -265,9 +272,11 @@ impl ShapeGenerator for Rect {
         for (centre, base) in centres {
             for i in 0..=cs {
                 let a = base + (i as f32 / cs as f32) * TAU * 0.25;
-                out.push(centre + Vec2::new(a.cos() * cr, a.sin() * cr));
+                out.points
+                    .push(centre + Vec2::new(a.cos() * cr, a.sin() * cr));
             }
         }
+        out.end_contour(true);
     }
 }
 
@@ -299,7 +308,7 @@ impl Arc {
 }
 
 impl ShapeGenerator for Arc {
-    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Vec<Vec2>) {
+    fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let start = self.start.get(g);
         let start = if start.is_finite() { start } else { 0.0 };
@@ -308,18 +317,20 @@ impl ShapeGenerator for Arc {
         let r = self.radius.get(g).max(0.0);
         let n = resolution(self.segments.get(g), 2);
 
-        // Polyligne ouverte : n+1 points pour n segments.
+        // Contour ouvert : n+1 points pour n segments, jamais refermé — même
+        // à 360°, refermer ajouterait un segment de longueur nulle.
         for i in 0..=n {
             let a = start + sweep * (i as f32 / n as f32);
-            out.push(Vec2::new(a.cos() * r, a.sin() * r));
+            out.points.push(Vec2::new(a.cos() * r, a.sin() * r));
         }
+        out.end_contour(false);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generator::test_util::{ecart_max, gen, tous_finis};
+    use crate::generator::test_util::{ecart_max, gen, gen_path, tous_finis};
     use frogenx_core::{Constant, Graph};
 
     const EPS: f32 = 1e-4;
@@ -584,9 +595,37 @@ mod tests {
         let g = Graph::new();
         let audio = frogenx_core::AudioFeatures::default();
         let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
-        let mut out = vec![Vec2::new(99.0, 99.0); 50];
+        let mut out = Path::new();
+        out.points.extend([Vec2::new(99.0, 99.0); 50]);
+        out.end_contour(true);
         Ellipse::circle(1.0).generate(0.0, &ctx, &g, &mut out);
-        assert_eq!(out.len(), SMOOTH_SEGMENTS);
-        assert!(!out.contains(&Vec2::new(99.0, 99.0)), "buffer non nettoyé");
+        assert_eq!(out.points.len(), SMOOTH_SEGMENTS);
+        assert_eq!(out.contours.len(), 1, "l'ancien contour doit disparaître");
+        assert!(
+            !out.points.contains(&Vec2::new(99.0, 99.0)),
+            "buffer non nettoyé"
+        );
+    }
+
+    #[test]
+    fn chaque_primitive_produit_un_seul_contour_au_bon_drapeau() {
+        // §16.3 : le générateur pose le drapeau ; seul l'arc est ouvert.
+        let g = Graph::new();
+        let fermees: Vec<Box<dyn ShapeGenerator>> = vec![
+            Box::new(Ellipse::circle(1.0)),
+            Box::new(Polygon::new(5.0, 1.0)),
+            Box::new(Star::new(5.0, 1.0, 0.5)),
+            Box::new(Rect::new(1.0, 1.0)),
+            Box::new(Rect::new(1.0, 1.0).with_corner_radius(Param::fixed(0.2))),
+        ];
+        for (i, forme) in fermees.iter().enumerate() {
+            let path = gen_path(forme.as_ref(), &g);
+            assert_eq!(path.contours.len(), 1, "cas {i}");
+            assert!(path.contours[0].closed, "cas {i} : doit être fermé");
+        }
+
+        let arc = gen_path(&Arc::new(0.0, TAU * 0.5, 1.0), &g);
+        assert_eq!(arc.contours.len(), 1);
+        assert!(!arc.contours[0].closed, "l'arc est un contour ouvert");
     }
 }

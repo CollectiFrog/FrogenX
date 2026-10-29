@@ -15,7 +15,7 @@ doc. Mise à jour **dans le même commit** que le code — « plus tard » n'arr
 | Une **étape** de feuille de route franchie | §12 |
 | Un **piège** rencontré à l'usage | la section concernée (voir §14) |
 | Un **comportement observable** modifié | partout où il est décrit |
-| Un **trait public** (`Signal`, `Layer`, `OutputSink`, `ShapeGenerator`) | son extrait de code dans la section correspondante |
+| Un **trait public** (`Signal`, `RenderLayer`, `OutputSink`, `ShapeGenerator`, `ShapeOp`) | son extrait de code dans la section correspondante |
 
 ## Le §13 est le cœur
 

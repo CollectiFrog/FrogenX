@@ -2,16 +2,18 @@
 //!
 //! Les formes de FrogenX : primitives, générateurs paramétriques et opérateurs.
 //!
-//! Une forme est une **polyligne** — une suite de `Vec2` en coordonnées
-//! normalisées, origine au centre, `[-1, 1]` sur le petit côté (§17). Un patch
-//! rendu en 720p ou en 4K donne donc la même image.
+//! Une forme est un [`Path`] — des `Vec2` en coordonnées normalisées, origine
+//! au centre, `[-1, 1]` sur le petit côté (§17), découpés en **contours**
+//! fermés ou ouverts. Un cercle est un contour fermé, un arc un contour ouvert,
+//! une rosace répétée plusieurs contours fermés. Un patch rendu en 720p ou en
+//! 4K donne la même image.
 //!
 //! Cette crate ne connaît **ni wgpu ni l'audio** (§10) : elle est testable sans
 //! GPU ni carte son.
 //!
 //! ## Les deux traits
 //!
-//! - [`ShapeGenerator`] produit une polyligne dans un buffer fourni.
+//! - [`ShapeGenerator`] produit une forme dans un [`Path`] fourni.
 //! - [`ShapeOp`] la transforme **en place**.
 //!
 //! Pourquoi deux traits plutôt qu'un opérateur qui envelopperait un générateur :
@@ -30,7 +32,7 @@
 //! ```
 //! use frogenx_core::{AudioFeatures, Ctx, Graph, Param};
 //! use frogenx_osc::Lfo;
-//! use frogenx_shape::{Chain, Deform, Ellipse, ShapeGenerator};
+//! use frogenx_shape::{Chain, Deform, Ellipse, Path, ShapeGenerator};
 //!
 //! let mut g = Graph::new();
 //! let lfo = g.add(Box::new(Lfo::new(frogenx_osc::Waveform::Sine, 0.2)));
@@ -42,18 +44,22 @@
 //!
 //! let audio = AudioFeatures::default();
 //! let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
-//! let mut points = Vec::new();
-//! blob.generate(0.0, &ctx, &g, &mut points);
+//! let mut forme = Path::new(); // réutilisé d'une frame à l'autre
+//! blob.generate(0.0, &ctx, &g, &mut forme);
 //!
-//! assert_eq!(points.len(), 128);
+//! assert_eq!(forme.points.len(), 128);
+//! assert_eq!(forme.contours.len(), 1);
+//! assert!(forme.contours[0].closed);
 //! ```
 
 pub mod generator;
 pub mod ops;
 pub mod parametric;
+pub mod path;
 pub mod primitives;
 
 pub use generator::{ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 pub use ops::{Chain, Deform, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform};
 pub use parametric::{Lissajous, Rose, Superformula};
+pub use path::{Contour, Path};
 pub use primitives::{Arc, Ellipse, Polygon, Rect, Star};
