@@ -55,9 +55,9 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1, 2, 3a et 3b faites, étape 4 en cours** — grille de composition
-(`crates/composition`) : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`,
-`TempoController`, `PositionSignal` (docs/ARCHITECTURE.md §3bis).
+**Étapes 1 à 5 faites** — 212 tests verts, dont 10 tests de pixels sur GPU (sautés
+proprement sans adaptateur). Première image : `cargo run -p frogenx-render --example
+first_image` → `target/first_image.png`.
 
 - `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
@@ -68,12 +68,18 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
   `Rect`, `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et
   opérateurs en place (`Deform`, `NoiseDisplace`, `RadialRepeat`, `Transform`, `Smooth`,
   `Chain`).
-- `crates/composition` : la grille (§3bis) — dépend de `core` et `shape`.
+- `crates/composition` : la grille (§3bis) — `Deck`/`LayerGroup`/`Layer`/`Column`/
+  `Clip`, `CrossFader`, `TempoController`, `PositionSignal`. Dépend de `core` et `shape`.
+- `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
+  `ShapeLayer`, tessellation lyon (module sans wgpu), couleur en `Param` sRGB.
+- `crates/render` : `Compositor` (passes shader en ping-pong, 5 modes), relecture
+  GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
 
-**Après l'étape 4 : étape 5 — la première image à l'écran.** `crates/layer` +
-`crates/render` : trait `Layer`, `ShapeLayer`, compositeur, rendu offscreen wgpu.
-C'est l'étape qui change de nature — première dépendance GPU, et la règle §10 devient
-critique.
+**Prochaine étape : 6 — `OutputSink` + preview.** Première fenêtre (`winit`), et le
+pipeline de sortie qui alimentera ensuite NDI, l'enregistrement, Art-Net (§8).
+
+wgpu est épinglé en **30** : lire ses signatures dans les sources de la version
+épinglée, pas de mémoire (skill `rust-workspace`).
 
 ```bash
 cargo test --workspace

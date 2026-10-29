@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/osc", "crates/shape", "crates/composition"]
+members = [
+    "crates/core",
+    "crates/osc",
+    "crates/shape",
+    "crates/composition",
+    "crates/layer",
+    "crates/render",
+]
 
 # Versions communes à toutes les crates (voir rust-workspace).
 # Chaque crate référence `dep.workspace = true` — évite les versions
@@ -11,8 +18,17 @@ frogenx-core = { path = "crates/core" }
 frogenx-osc = { path = "crates/osc" }
 frogenx-shape = { path = "crates/shape" }
 frogenx-composition = { path = "crates/composition" }
+frogenx-layer = { path = "crates/layer" }
+frogenx-render = { path = "crates/render" }
 glam = "0.29"
 serde = { version = "1", features = ["derive"] }
+# Majeure épinglée (§11) : wgpu change d'API à chaque majeure. Monter de
+# version est un commit délibéré, jamais l'effet d'un `cargo update`.
+wgpu = "30"
+lyon_tessellation = "1.0"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+png = "0.18"
 
 [workspace.package]
 version = "0.1.0"

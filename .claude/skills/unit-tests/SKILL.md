@@ -9,8 +9,10 @@ cargo test -p frogenx-core             # un crate
 cargo test -p frogenx-osc -- --nocapture     # avec sortie
 ```
 
-`core`, `osc` et `shape` tournent **sans GPU ni carte son** — donc en CI, rapidement.
-C'est la règle de dépendance du §10 de `docs/ARCHITECTURE.md`, et elle existe pour ça.
+`core`, `osc`, `shape` et `composition` tournent **sans GPU ni carte son** — donc en
+CI, rapidement. Dans `layer` et `render`, les modules `tessellate`, `color`, `space`,
+`blend` et `convert` aussi. C'est la règle de dépendance du §10 de
+`docs/ARCHITECTURE.md`, et elle existe pour ça.
 
 ## Quoi tester, par étage
 
@@ -20,8 +22,10 @@ C'est la règle de dépendance du §10 de `docs/ARCHITECTURE.md`, et elle existe
 | **Signaux à état** | sortie **et** `NodeState` résultant, sur plusieurs frames enchaînées |
 | **Graphe** | tri topologique correct, détection de cycle, **cache : un nœud partagé n'est évalué qu'une fois** |
 | **Paramètres** | `Fixed` constant ; `Modulated` == `base + depth * source` |
-| **Formes** | nombre de points, fermeture du contour, symétries, morphing continu du polygone |
-| **Opérateurs** | composition, idempotence quand elle est attendue, préservation du nombre de points |
+| **Formes** | nombre de points, drapeau fermé/ouvert de chaque contour, symétries, morphing continu du polygone |
+| **Opérateurs** | composition, idempotence quand elle est attendue, préservation du nombre de points ; **commutation** avec `RadialRepeat` pour ceux qui regardent les voisins |
+| **Tessellation** | aire couverte, contour ouvert jamais rempli, contours disjoints sans triangle à cheval, dégénérés sans panique |
+| **Couches** | pixels relus en quelques points, comparés à une référence CPU (`srgb_to_linear`, `blend_premul`) |
 | **Audio** | features sur signaux **synthétiques** : sinus pur → centroïde connu, silence → RMS nul |
 | **Sorties** | un `OutputSink` factice reçoit les frames, dans l'ordre, sans perte en mode `Fixed` |
 | **Patchs** | chaque fixture d'ancienne version se migre et se charge (§19.2) |
@@ -93,10 +97,36 @@ résultat visuel reste correct, seul le coût explose.
 valeur est précisément d'être anciennes. Un changement de format ajoute une fixture, il
 n'en modifie aucune.
 
+## `gen()` vérifie l'invariant des plages
+
+Dans `shape`, l'utilitaire de test `gen` / `gen_path` vérifie à **chaque appel** que le
+`Path` produit est valide (`Path::is_valid`). Tout test qui génère une forme teste donc
+gratuitement l'invariant des contours — ne pas contourner `gen` pour appeler
+`generate` à la main, sauf pour tester justement un `Path` invalide.
+
 ## GPU et matériel
 
 Injecter une abstraction plutôt que renoncer au test : `OutputSink` factice, source
-audio synthétique. Pour le rendu réel, snapshots d'images avec **tolérance
-perceptuelle** (§24.2) — jamais d'égalité stricte, qui échoue d'un GPU à l'autre et
-finit désactivée. Les tests d'intégration réels **ne remplacent pas** les tests
+audio synthétique. Les tests d'intégration réels **ne remplacent pas** les tests
 unitaires.
+
+**Tests de pixels (`crates/render/tests/pixels.rs`).** Ils ouvrent un GPU par
+`Gpu::headless()`, qui rend `Option` :
+
+```rust
+let Some(gpu) = gpu() else { return };   // sans adaptateur : succès, message affiché
+```
+
+Sans GPU, le test **réussit** et l'écrit sur sa sortie — jamais d'échec ni de panique,
+sinon il finit désactivé (§24.3). Ils vérifient quelques pixels précis (centre, coin)
+contre une **référence CPU**, avec une tolérance de l'ordre de 3e-3 (textures en
+demi-flottants). Pour savoir s'ils ont vraiment tourné sur un GPU, les lancer avec
+`-- --nocapture` et chercher « GPU absent ».
+
+Le mélange des couches a deux implémentations, `blend.rs` (CPU) et `composite.wgsl`
+(GPU) : le test `chaque_mode_de_melange_du_gpu_suit_la_reference_cpu` les compare mode
+par mode. Toute modification de l'une se reporte dans l'autre.
+
+Les snapshots d'image entière avec **tolérance perceptuelle** (§24.2) viendront quand
+les images seront trop riches pour quelques points — jamais d'égalité stricte, qui
+échoue d'un GPU à l'autre.

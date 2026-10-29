@@ -20,8 +20,8 @@ crates/osc/          oscillateurs, LFO, bruit, enveloppes      ← core         
 crates/shape/        Path, primitives + opérateurs             ← core, osc, glam    ✅
 crates/composition/  grille : Deck/Layer/Column/Clip, tempo    ← core, shape        ✅
 crates/audio/        cpal, FFT, features → Signal
-crates/layer/        Gpu, trait RenderLayer, ShapeLayer, tessellation (CPU pur)
-crates/render/       compositeur, cible offscreen, readback
+crates/layer/        Gpu, trait RenderLayer, ShapeLayer, tessellation ← core, shape, wgpu ✅
+crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       OutputSink : preview / NDI / Spout / Syphon / recorder
 crates/ui/           egui : grille de clips, rack, câblage, monitoring
 ```
@@ -60,10 +60,16 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 |---|---|---|
 | Maths | `glam` | ✅ (shape) |
 | Sérialisation | `serde` | ✅ (composition) |
-| Rendu | `wgpu` **30** | étape 5 (layer, render) — majeure épinglée |
-| Tessellation | `lyon_tessellation` | étape 5 (layer) |
-| GPU, utilitaires | `bytemuck`, `pollster` | étape 5 |
-| Image | `png` | étape 5 (première image, tests) |
+| Rendu | `wgpu` **30** | ✅ (layer, render) — majeure épinglée |
+| Tessellation | `lyon_tessellation` | ✅ (layer) |
+| GPU, utilitaires | `bytemuck`, `pollster` | ✅ (layer, render) |
+| Image | `png` | ✅ (render) |
+
+**Avant d'écrire du code wgpu, lire les signatures dans les sources de la version
+épinglée** (`~/.cargo/registry/src/*/wgpu-30*`, `wgpu-types-30*`), pas de mémoire :
+d'une majeure à l'autre, `PipelineLayoutDescriptor` a pris des `Option` et
+`immediate_size`, `multiview` est devenu `multiview_mask`, `get_mapped_range` rend un
+`Result`, `request_adapter` aussi.
 | Fenêtrage | `winit` | étape 6 |
 | UI | `egui` | à venir |
 | Audio | `cpal`, `rustfft` | à venir |

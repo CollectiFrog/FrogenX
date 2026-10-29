@@ -596,6 +596,12 @@ bloque le pipeline et effondre le framerate.
 mappe la frame N-2 pendant que la frame N se dessine. C'est ce détail qui sépare 60 fps
 de 20 fps pendant un enregistrement.
 
+**État à l'étape 5 :** seule une relecture **synchrone** existe
+(`frogenx_render::read_rgba16f`) — elle attend le GPU, ce qui est correct pour la
+première image et les tests de pixels, et **interdit** dans la boucle live. L'anneau
+ci-dessus arrive avec l'enregistrement (étape 10, §12) ; ne pas réutiliser la version
+synchrone pour cela.
+
 **Deux modes, adossés à `Clock` (§4) :**
 
 - **Temps réel** — encodage pendant la performance ; des frames peuvent être perdues si
@@ -633,8 +639,8 @@ place en dernier.
 
 ## 10. Structure des crates
 
-Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`
-et `composition` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
+`composition`, `layer` et `render` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -645,8 +651,8 @@ frogenx/
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController ✅ (core, shape)
-├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation (lyon, CPU pur)
-├── render/    # compositeur, cible offscreen, readback GPU → CPU
+├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
+├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # OutputSink : preview / NDI / Spout / Syphon / Art-Net / recorder
 └── ui/        # egui : grille de clips, rack par clip, monitoring
 ```
@@ -746,8 +752,8 @@ couches complètes empilées.
 | 2 | ✅ Graphe de patch (arena, tri topo, cache) | modulation évaluable — *fait* |
 | 3a | ✅ Oscillateurs, LFO, bruit, enveloppes | sources de modulation — *fait* |
 | 3b | ✅ Primitives + opérateurs de formes | polylignes testables — *fait* |
-| 4 | `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** |
-| 5 | `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) |
+| 4 | ✅ `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** — *fait* |
+| 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
 | 6 | `OutputSink` + preview | pipeline de sortie en place |
 | 7 | LFO câblé sur une fréquence, depuis un clip de la grille | **le modulaire prend vie dans la grille** |
 | 8 | Audio → features → `Signal` | **visuel audio-réactif** |
@@ -831,6 +837,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Couleur = quatre `Param` saisis en sRGB**, convertis en linéaire prémultiplié pendant `prepare` (§21) | une couleur est un champ qu'on module ; un `[f32; 4]` nu serait un câble impossible à brancher |
 | **`wgpu` épinglé à une majeure, `rust-version` alignée sur son minimum** (§11) | une majeure tous les trois mois, avec changements d'API ; une montée de version doit être délibérée |
 | **Tests GPU qui se sautent sans adaptateur**, tout le reste testé sans GPU (§24.3) | un test qui échoue faute de GPU finit désactivé ; ce qui est pur ne doit jamais attendre un GPU |
+| **Le compositeur reçoit un graphe par couche** (`LayerInput`), pas un graphe global (§22.1) | chaque clip porte son graphe (§3) ; l'opacité d'une couche doit se résoudre dans le sien |
+| **Remplissage en règle non nulle**, contours fermés seulement (§22.1) | les copies d'une répétition radiale qui se chevauchent restent pleines au lieu de se trouer ; un contour ouvert n'a pas d'intérieur |
+| **Formules de mélange en double : WGSL + référence CPU testée** (§22.1) | un shader ne se teste pas seul ; la version Rust sert d'oracle aux tests de pixels, mode par mode |
 | **`ClipSource::Shape { graph, generator }`**, pas `Shape(Graph)` (§3bis.2) | un graphe seul ne produit aucune forme ; les effets du clip n'avaient rien à transformer |
 | **Contour non refermé par duplication** (§16.3) | un point répété dupliquerait un sommet à la tessellation et produirait des doublons sous répétition radiale |
 | **Saturation de la géométrie chez chaque primitive** (§18.4) | une modulation dégénérée doit dégrader la forme, jamais allouer des millions de points ni figer l'application |
@@ -1425,7 +1434,9 @@ sRGB → linéaire est une fonction pure, testée sans GPU sur des valeurs de r�
 
 ## 22. Contrat des couches
 
-> Section d'intention : elle sera précisée à l'usage, à partir de l'étape 5 (§12).
+> Implémenté à l'étape 5 (`crates/layer`, `crates/render`) pour `ShapeLayer` et le
+> compositeur ; ce qui a été fixé à l'implémentation est au §22.1. `FeedbackLayer`,
+> `VideoLayer` et le pool de textures scratch restent des intentions.
 
 ```rust
 pub trait RenderLayer {
@@ -1531,6 +1542,52 @@ publique, pas à son code source complet — son format de texture interne exact
 pourrait être en `Rgba8`, pas en `Rgba16Float` comme §21 l'impose) n'est pas confirmé.
 Le pattern du pool est repris ; son choix de format colorimétrique ne l'est pas sans
 vérification.
+
+### 22.1 Ce que l'étape 5 a fixé
+
+**Le compositeur reçoit un graphe par couche.** `Compositor::render` prend des
+`LayerInput { layer, graph }`, pas un `&Graph` unique : chaque clip porte son propre
+graphe (§3), donc l'opacité de chaque couche — un `Param` — se résout dans le graphe de
+sa couche. Un graphe partagé aurait fait résoudre le `Param` d'un clip contre les nœuds
+d'un autre.
+
+**Piège : un buffer d'uniformes par couche, pas un seul réécrit.** Les écritures de
+`queue.write_buffer` sont toutes appliquées **avant** la soumission de l'encodeur. Un
+buffer d'uniformes unique, réécrit avant chaque passe de mélange, ne verrait que la
+dernière valeur : toutes les couches se mélangeraient avec l'opacité et le mode de la
+dernière. Le compositeur garde donc un buffer par couche, qui grandit avec leur
+nombre.
+
+**Deux implémentations du mélange, une référence.** Les formules vivent dans
+`composite.wgsl` (GPU) et dans `frogenx_render::blend` (CPU, sans wgpu). La version CPU
+est la référence : un test de pixels compare, mode par mode, la sortie du GPU à
+`blend_premul`. Toute modification de l'une se reporte dans l'autre — sinon le test
+casse, et c'est voulu. Les modes séparables suivent la formule du W3C Compositing,
+écrite directement sur les valeurs prémultipliées, sans division par alpha.
+
+**`ShapeLayer` : remplissage, puis trait par-dessus, dans une seule passe.** Le
+remplissage ne concerne que les contours **fermés**, tous tessellés ensemble en règle
+**non nulle** : là où deux copies d'une répétition radiale se chevauchent, la zone reste
+pleine (union) au lieu de se trouer. Un contour ouvert n'est jamais rempli. Le trait
+s'applique à tous les contours ; sa largeur est en unités de l'espace normalisé (§17),
+donc proportionnelle à la résolution comme le reste de la forme. Positions (déjà en
+NDC) et couleurs (déjà en linéaire prémultiplié) sont calculées pendant `prepare` : le
+shader de la couche ne décide rien.
+
+**Une couche vide est effacée.** Sans triangle à dessiner, `encode` ouvre quand même sa
+passe, avec un `Clear` transparent : la couche doit sortir vide, pas garder l'image de
+la frame précédente. De même, le compositeur part d'une accumulation transparente —
+sans couche, la sortie est transparente.
+
+**Les buffers de sommets grandissent, ne rétrécissent jamais.** Par puissances de
+deux, à partir de 64 Kio : une forme qui pulse (une répétition radiale modulée, par
+exemple) ne réalloue pas à chaque frame.
+
+**La première image est déterministe à l'octet près.** En `Clock::Fixed`, deux
+exécutions de l'exemple `first_image` produisent le même PNG (même somme de contrôle).
+C'est le §20.3 vérifié de bout en bout, du graphe jusqu'au fichier — sur une même
+machine ; d'un GPU à l'autre, l'antialiasing peut différer, d'où la tolérance des
+snapshots (§24.2).
 
 ---
 
