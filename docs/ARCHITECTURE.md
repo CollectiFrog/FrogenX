@@ -329,6 +329,19 @@ coût strictement supérieur à celui de le faire dès le début, pour un `deriv
 change rien au comportement. `serde` passe donc de « à venir » à dépendance active de
 `composition` dans `[workspace.dependencies]` (§11), dès l'étape 4 du §12.
 
+**Découvert à l'implémentation : `Param` et `NodeId` (`core`) ne dérivent pas
+`serde`, donc `Transport`/`Clip` non plus, directement.** `core::Param` encode une
+source de modulation (`NodeId`) ; sa forme sérialisée passe par le schéma JSON nommé
+du format de patch (§19.1 : `{"fixed": ...}` / `{"modulated": {...}}`), pas par un
+`derive` direct sur la structure Rust en mémoire. `Transport` (§3bis.3) et `Clip`
+(§3bis.2), qui portent tous deux un `Param`/`NodeId`, suivent donc la même règle : pas
+de `#[derive(Serialize, Deserialize)]` sur ces types eux-mêmes. Ce n'est pas une
+régression par rapport à la décision ci-dessus — les cinq identifiants *arena*
+(`DeckId`…) restent sérialisables directement, c'est seulement ce qui référence un
+`Param`/`NodeId` de `core` qui doit passer par le format de patch. La traduction
+`Transport`/`Clip` ↔ JSON du patch est le travail de l'étape où §19.1 s'étend pour
+porter la grille (§3bis.5), pas de ce commit.
+
 ---
 
 ## 4. Le temps
@@ -741,6 +754,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`ClipTransition` réutilise `PositionSignal`** pour sa progression, `Fade`/`Wipe` non rendus avant l'étape 5 (§3bis.2) | une transition qui avance seule a le même besoin que `Transport.position` ; leur rendu dépend d'un compositeur de couches que `composition` ne doit pas connaître (§10) |
 | **`serde` dès le premier commit de `composition`**, pas ajouté après (§3bis.5) | un schéma figé par du code qui en dépend coûte une migration immédiate (§19.2) ; le coût de l'ajouter dès le début est quasi nul |
 | **`composition` dépend de `shape`**, pas seulement de `core` (§10) | `Clip.effects` référence une chaîne `ShapeOp` dont le type vit dans `shape` ; `shape` elle-même ne connaît ni GPU ni carte son, donc cette dépendance ne casse pas la testabilité sans GPU qui motive la règle de dépendance, elle déplace seulement la position de `composition` dans la chaîne |
+| **`Transport`/`Clip` ne dérivent pas `serde` directement** (§3bis.5) | ils portent un `Param`/`NodeId` de `core`, qui ne dérive pas `serde` lui-même — leur forme sérialisée passe par le schéma JSON nommé du format de patch (§19.1), pas par un `derive` sur la structure en mémoire |
 | **`CrossFader` global en plus de `BlendParams` par couche** (§3bis.4) | le geste de régie mélange deux groupes entiers ; `BlendParams` mélange une couche avec celle du dessous — les deux répondent à des échelles différentes |
 | **`composition` ne dépend que de `core`** (§10) | la grille doit rester testable sans GPU ni audio, pour la même raison que `core`/`osc`/`shape` |
 | **La grille (étape 4) précède le rendu (étape 5)** (§12) | toutes les étapes suivantes s'y raccrochent ; construire par-dessus une grille déjà en place évite une réécriture |

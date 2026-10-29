@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/osc", "crates/shape"]
+members = ["crates/core", "crates/osc", "crates/shape", "crates/composition"]
 
 # Versions communes à toutes les crates (voir rust-workspace).
 # Chaque crate référence `dep.workspace = true` — évite les versions
@@ -10,7 +10,9 @@ members = ["crates/core", "crates/osc", "crates/shape"]
 frogenx-core = { path = "crates/core" }
 frogenx-osc = { path = "crates/osc" }
 frogenx-shape = { path = "crates/shape" }
+frogenx-composition = { path = "crates/composition" }
 glam = "0.29"
+serde = { version = "1", features = ["derive"] }
 
 [workspace.package]
 version = "0.1.0"

@@ -1,0 +1,17 @@
+[package]
+name = "frogenx-composition"
+description = "Grille de composition — Deck/LayerGroup/Layer/Column/Clip (§3bis)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Dépend de core et shape (§10 : les flèches vont vers le haut). Clip.effects
+# référence une chaîne ShapeOp (§3bis.2) dont le type vit dans shape — shape
+# ne connaît ni GPU ni carte son, donc cette dépendance ne casse pas la
+# testabilité sans GPU. serde dès ce premier commit (§3bis.5) : un schéma
+# figé par du code qui en dépend coûte une migration immédiate (§19.2).
+[dependencies]
+frogenx-core.workspace = true
+frogenx-shape.workspace = true
+serde.workspace = true
