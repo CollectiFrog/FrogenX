@@ -663,8 +663,12 @@ Chaque sortie CPU a son thread et une file bornée (2 à 3 frames) que `Outputs`
 | `Clock::Realtime` | dépôt sans attente ; si la file est pleine, la frame est perdue et comptée (`Degraded { dropped }`) | la boucle de rendu ne ralentit jamais |
 | `Clock::Fixed` | dépôt bloquant : la boucle attend la sortie la plus lente | aucune frame perdue — indices contigus |
 
+`DropPolicy::Lossy` et `Lossless` portent ces deux lignes, dans `fanout`, un module qui
+ne connaît pas wgpu.
+
 La politique est écrite **une fois**, et elle se teste ; si chaque sortie la décidait,
-une seule erreur dans l'une d'elles ferait perdre des frames d'un rendu offline. Les
+une seule erreur dans l'une d'elles ferait perdre des frames d'un rendu offline. Une
+sortie qui panique n'emporte que son thread : elle passe en `Failed`. Les
 sorties GPU tournent sur le thread principal (la surface y vit) et ne bloquent pas.
 
 **`index` rend la perte visible.** Une sortie détecte un trou en comparant deux indices
@@ -677,7 +681,7 @@ c'est l'ouverture de la sortie qui échoue — en édition, avec un message.
 
 **Ce que l'étape 6 implémente :** le contrat complet, l'étage `Outputs` et sa
 politique `Realtime`/`Fixed`, la passe de conversion, `Engine` (§8.3), la sortie
-`PngSequenceSink`, la preview (`GpuSink`) et des sorties factices pour les tests.
+`PngSequenceSink`, `Preview` (`GpuSink`) et des sorties factices pour les tests.
 Jusqu'à l'étape 10, le chemin CPU s'appuie sur la relecture **synchrone** (§8.2) : elle
 n'est permise qu'en `Fixed`, donc **`Outputs` refuse une sortie CPU en `Realtime`** à
 l'ajout — en édition, avec un message. L'anneau asynchrone lèvera ce refus. La
@@ -731,7 +735,7 @@ casser Spout et Syphon — une raison de plus à l'épinglage du §11.
 |---|---|---|
 | **`unsafe` par backend**, confiné dans `output/spout.rs` et `output/syphon.rs` sous `cfg` ; aucune autre crate n'en contient | élevé | élevé — une faute de synchronisation donne des images déchirées ou un plantage pilote, pas une erreur Rust |
 | **Synchronisation entre processus** : le récepteur ne lit qu'une fois notre rendu terminé (fence partagée, ou flush + attente, ou le verrou propre à Spout) — c'est le rôle de `after_submit` | élevé | élevé — intermittent, dépend du pilote |
-| **Backend imposé** : sous Vulkan, Spout est indisponible ; l'ouverture rend `Err` (§8.0) | faible | moyen |
+| **Backend imposé** : sous Vulkan, Spout est indisponible ; l'ouverture rend `Err` (§8.0). Vulkan est ce que wgpu choisit aujourd'hui sous Windows sur une RTX : il faudra demander DX12 explicitement | faible | moyen |
 | **Même GPU des deux côtés** : sur un portable à deux GPU (Optimus), émetteur et récepteur peuvent être sur deux adaptateurs ; se détecte, s'affiche en `status()` | faible | moyen |
 | **Format 8 bits** (BGRA8 ou RGBA8 attendu par les récepteurs) : la passe de conversion unique du §8.0 écrit directement dans la texture partagée | faible | faible |
 | **Tests en boucle locale** : le test ouvre lui-même le handle partagé (device D3D11 ou client Syphon dans le même processus), relit et compare ; sauté proprement hors Windows / macOS ou sans GPU (§24.3). Un vrai récepteur se vérifie à la main | moyen | moyen |
@@ -746,9 +750,9 @@ bloque le pipeline et effondre le framerate.
 mappe la frame N-2 pendant que la frame N se dessine. C'est ce détail qui sépare 60 fps
 de 20 fps pendant un enregistrement.
 
-**État à l'étape 5 :** seule une relecture **synchrone** existe
-(`frogenx_render::read_rgba16f`) — elle attend le GPU, ce qui est correct pour la
-première image et les tests de pixels, et **interdit** dans la boucle live. L'anneau
+**État actuel :** seule une relecture **synchrone** existe
+(`frogenx_render::read_rgba16f`, `read_rgba8`) — elle attend le GPU, ce qui est correct
+pour le rendu offline et les tests, et **interdit** dans la boucle live. L'anneau
 ci-dessus arrive avec l'enregistrement (étape 10, §12) ; ne pas réutiliser la version
 synchrone pour cela.
 
@@ -791,12 +795,14 @@ l'approprier. `output` ne connaît donc **pas** `winit` : la preview reçoit une
 groupe préfigurant un clip (§3, §22.1). L'étape 7 la remplacera par la grille de
 `composition`.
 
-**`Gpu::with_surface(cible)`** complète `headless()`. L'ordre est imposé par wgpu :
+**`Gpu::with_surface(display, cible)`** complète `headless()`. L'ordre est imposé par wgpu :
 instance, surface, puis adaptateur compatible avec cette surface ; `Gpu` conserve donc
 son `Instance`, nécessaire pour recréer une surface perdue. Générique sur la cible,
 `layer` ne connaît pas `winit`.
 
-**Encodage de la preview.** La passe de conversion regarde le format de sa cible :
+**Encodage de la preview.** La passe a deux modes (`ConversionMode`) : `Straight` pour
+une `CpuFrame`, au pixel près, et `OverBlack` pour une cible opaque, filtré et mis à
+l'échelle. Dans les deux cas, elle regarde le format de sa cible :
 `is_srgb()` → le matériel encode, sinon le shader. Elle écrit ainsi dans une surface
 `*Srgb`, dans une texture `Unorm` que le récepteur lit comme du sRGB (Spout), et dans
 les deux cas sans double encodage. La surface est opaque : le RGB prémultiplié se lit
@@ -821,9 +827,17 @@ choix, testée). Jamais `Immediate`, qui déchire l'image sur un projecteur.
 |---|---|
 | `Success` | affiche |
 | `Suboptimal` | affiche, puis reconfigure |
-| `Timeout`, `Occluded` | saute la frame |
+| `Occluded` | saute la frame, sans la compter : une fenêtre masquée n'a rien d'anormal |
+| `Timeout`, `Validation` | saute la frame et la compte (`Degraded`) |
 | `Outdated` | reconfigure, saute la frame |
-| `Lost` | passe en `Degraded` ; `app` recrée la surface et la lui rend |
+| `Lost` | compte la frame ; `app` recrée la surface et la lui rend |
+
+**`PreviewHandle`.** `Outputs` possède la preview, mais c'est `app` qui connaît la
+fenêtre : `Preview::new` rend aussi une poignée, par laquelle `app` signale une nouvelle
+taille, voit qu'une surface est perdue et en fournit une autre. Tout s'applique au début
+d'une frame : wgpu **panique** s'il reconfigure une surface dont une texture est encore
+vivante, ou si la taille est nulle — celle d'une fenêtre réduite, que la preview saute
+donc sans configurer.
 
 **Vérifier une fenêtre.** Tout ce qui peut s'extraire se teste sans elle : `Engine` avec
 des sorties factices, la passe hors écran, les fonctions pures. Un mode `--frames N`
@@ -856,7 +870,7 @@ place en dernier.
 ## 10. Structure des crates
 
 Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
-`composition`, `layer` et `render` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+`composition`, `layer`, `render`, `output` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -869,9 +883,9 @@ frogenx/
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController ✅ (core, shape)
 ├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
-├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB : preview / NDI / Spout / Syphon / Art-Net / recorder
+├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, Preview, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
 ├── ui/        # egui : grille de clips, rack par clip, monitoring
-└── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire winit
+└── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit ✅
 ```
 
 **Découpage `layer` / `render` (étape 5).** `layer` porte le contexte `Gpu` (device et
@@ -933,7 +947,7 @@ maintenable à mesure qu'il grossit.
 |---|---|---|
 | Maths | `glam` ✅ | vecteurs, matrices |
 | Rendu | `wgpu` 30 | GPU multiplateforme (étape 5) |
-| Fenêtrage | `winit` 0.30 | fenêtre et boucle d'événements, dans `app` seulement (§8.3) |
+| Fenêtrage | `winit` 0.30 ✅ | fenêtre et boucle d'événements, dans `app` seulement (§8.3) |
 | UI | `egui` | grille de clips, rack de modules, câblage — `egui-wgpu` 0.36+ pour wgpu 30 |
 | Bruit | interne à `osc` ✅ | value noise et fBm à graine explicite — pas la crate `noise` (§13, §20.3) |
 | Tessellation | `lyon_tessellation` | `Path` → triangles, remplissage et trait (étape 5) |
@@ -979,7 +993,7 @@ couches complètes empilées.
 | 3b | ✅ Primitives + opérateurs de formes | polylignes testables — *fait* |
 | 4 | ✅ `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** — *fait* |
 | 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
-| 6 | `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** |
+| 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
 | 7 | LFO câblé sur une fréquence, depuis un clip de la grille | **le modulaire prend vie dans la grille** |
 | 8 | Audio → features → `Signal` | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
@@ -1040,6 +1054,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **La passe de conversion suit le format de sa cible** (`is_srgb()`) (§8.3) | surface `*Srgb` et texture `Unorm` lue comme du sRGB coexistent : décider au cas par cas évite le double encodage, qui délave l'image |
 | **Letterbox pour la preview** (§8.3) | étirer ment sur la sortie, recadrer cache les bords sans le dire |
 | **Le moteur a sa propre échéance**, pas la synchro de l'écran (§8.3) | wgpu répond `Occluded` sur une fenêtre masquée : réduire la preview ne doit pas arrêter NDI ni l'enregistrement |
+| **Tests GPU exécutés un par un** (§24.3) | des devices wgpu ouverts en parallèle bloquent environ 3 % des exécutions, défaut antérieur à l'étape 6 et de cause non identifiée ; un réglage unique évite qu'un futur test GPU l'oublie |
 | **`Mailbox`, sinon `Fifo`, jamais `Immediate`** (§8.3) | `Immediate` déchire l'image sur un projecteur ; `Fifo` existe partout |
 | **Sorties CPU refusées en `Realtime` avant l'étape 10** (§8.0) | sans l'anneau, seule la relecture synchrone existe : l'accepter en live effondrerait le framerate en silence ; un refus à l'ajout est clair |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
@@ -1133,7 +1148,7 @@ concrètement, par étage du §1 :
 | **Audio** | features sur signaux **synthétiques** (sinus pur → centroïde connu ; silence → RMS nul) |
 | **Tessellation** | sans GPU : un contour fermé produit des triangles qui couvrent son aire, un contour ouvert n'est jamais rempli, plusieurs contours restent disjoints (pas de triangle à cheval), un contour dégénéré (moins de 3 points, points confondus, non-fini) rend zéro triangle sans paniquer |
 | **Couches** | par relecture de pixels, sur un GPU s'il existe : un carré plein au centre donne au pixel central la couleur **linéaire prémultipliée** attendue et laisse le coin transparent ; conversion sRGB → linéaire vérifiée sans GPU sur des valeurs de référence |
-| **Sorties** | sans GPU ni fenêtre, avec des `CpuSink` factices : en `Fixed`, une sortie lente reçoit les indices `0, 1, 2, …` sans trou ; en `Realtime`, elle perd des frames, les compte dans `Degraded { dropped }`, et la boucle ne ralentit pas ; une relecture n'a lieu que si une sortie CPU est active ; une sortie `Failed` n'est plus alimentée mais reste listée. Sur GPU s'il existe : la passe de conversion 8 bits donne les valeurs sRGB de référence (`linear_to_srgb`) ; un `GpuSink` factice voit `after_submit` appelé une fois par frame, après `encode` |
+| **Sorties** | sans GPU ni fenêtre, avec des `CpuSink` factices : en `Fixed`, une sortie lente reçoit les indices `0, 1, 2, …` sans trou ; en `Realtime`, elle perd des frames, les compte dans `Degraded { dropped }`, et la boucle ne ralentit pas ; une relecture n'a lieu que si une sortie CPU est active ; une sortie `Failed` n'est plus alimentée mais reste listée. Sur GPU s'il existe : la passe de conversion 8 bits suit sa référence CPU (`linear_premul_to_srgb8`), à 1/255 près, sur cible `Unorm` comme `*Srgb` ; deux sorties CPU partagent le même `Arc` (une seule relecture) ; un `GpuSink` factice voit `after_submit` appelé une fois par frame, après `encode` |
 | **Grille de composition** | construction/suppression dans la hiérarchie sans invalider les identifiants des niveaux non touchés (§3bis.1) ; une `Column` déclenche bien la même tranche sur tous les `Layer` (§3bis.1) ; `TempoController::tap` calcule un BPM correct sur une séquence d'événements synthétiques ; `CrossFader.phase` à 0/0.5/1 produit les `BlendParams::opacity` attendus sur les deux groupes (§3bis.4) ; `PositionSignal` avance déterministiquement à un `t`/`dt` injecté, jamais l'horloge système (§3bis.3) |
 
 **Ce qui rend cela possible :** la règle de dépendance du §10. `core`, `osc` et `shape`
@@ -1585,7 +1600,9 @@ patch venu d'une version plus récente ne peut pas être deviné.
 ```
 
 **L'étape 9 est en deux temps autour de la soumission** (§8.0) : ce qui doit
-s'enregistrer dans l'encodeur avant `submit`, ce qui ne peut venir qu'après. La
+s'enregistrer dans l'encodeur avant `submit`, ce qui ne peut venir qu'après. `Outputs`
+a son propre encodeur : le compositeur a déjà soumis le sien à l'étape 8, et
+`GpuFrame` lui lit une texture finie. La
 `CpuFrame` déposée en (d) est, avec l'anneau du §8.2, celle d'une frame antérieure ;
 elle porte son propre `t`.
 
@@ -2169,6 +2186,14 @@ des valeurs précises en quelques points (centre, coin) avec une petite toléran
 snapshots d'image entière avec tolérance perceptuelle (§24.2) viennent plus tard, quand
 il y aura des images assez riches pour que la comparaison point par point ne suffise
 plus.
+
+**Les tests tournent un par un** (`RUST_TEST_THREADS = "1"`, dans `.cargo/config.toml`).
+Plusieurs devices wgpu ouverts en parallèle bloquaient environ 3 % des exécutions d'un
+binaire de tests, indéfiniment, sur un test différent à chaque fois : mesuré à 3 sur
+120 avant toute modification de `Gpu`, à 5 sur 120 après, et à 0 sur 300 une fois les
+tests en série. **La cause exacte n'est pas identifiée** — pilote, Vulkan ou wgpu. L'application n'ouvre qu'un seul device et n'y
+est donc a priori pas exposée. Ne pas retirer ce réglage sans refaire cette mesure : le
+défaut n'apparaît pas sur quelques exécutions.
 
 ### 24.4 Fixtures de patchs
 

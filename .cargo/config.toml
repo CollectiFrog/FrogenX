@@ -1,0 +1,5 @@
+# Un test à la fois : plusieurs devices wgpu ouverts en parallèle bloquent
+# environ 3 % des exécutions (§24.3 de docs/ARCHITECTURE.md). La suite entière
+# reste rapide, et un futur test GPU ne peut pas l'oublier.
+[env]
+RUST_TEST_THREADS = "1"

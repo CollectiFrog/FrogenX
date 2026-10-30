@@ -3,9 +3,22 @@ name: poc-video
 description: Produce a video POC from FrogenX — deterministic offline render, ffmpeg encoding settings, and the patch/audio choices that make a demo read well. Use when asked for a demo clip, a rendered sequence, or a visual proof.
 ---
 
-> **Statut : amorce.** Les commandes ci-dessous sont la cible, pas du vécu — le
-> pipeline de rendu n'existe pas encore (étapes 4, 9 de §12). Corriger ce fichier avec
-> les vraies invocations dès le premier POC produit, et retirer cet avertissement.
+## Produire un clip aujourd'hui
+
+Vérifié : 240 frames en 1280×720, deux rendus identiques à l'octet près.
+
+```bash
+cargo run --release -p frogenx-app --example sequence -- target/sequence 240
+ffmpeg -framerate 60 -i target/sequence/frame_%06d.png \
+       -c:v libx264 -pix_fmt yuv420p -crf 15 target/sequence.mp4
+```
+
+La scène vit dans `crates/app/examples/sequence.rs` (un `SceneGroup`, préfigurant un
+clip). `PngSequenceSink` écrit `frame_000000.png`, `frame_000001.png`, etc. ; penser à
+`Engine::finish`, sans quoi les dernières frames restent en file.
+
+Vider le dossier avant de rendre moins de frames : `ffmpeg` prendrait aussi celles
+d'un rendu précédent.
 
 ## Toujours rendre en mode déterministe
 
@@ -20,10 +33,11 @@ re-rendre exactement n'est pas un POC, c'est un accident.
 
 ## Encodage
 
-Pipe vers le binaire `ffmpeg` (§8.2) — pas de bindings, et ffmpeg choisit lui-même
-l'encodeur matériel de la plateforme.
+À terme (étape 10) : pipe vers le binaire `ffmpeg` (§8.2) — pas de bindings, et ffmpeg
+choisit lui-même l'encodeur matériel de la plateforme. **Ce pipe n'existe pas encore** ;
+d'ici là, passer par la séquence PNG ci-dessus.
 
-Pour une diffusion générale (H.264, compatible partout) :
+Pour une diffusion générale (H.264, compatible partout), la cible du pipe :
 ```bash
 ffmpeg -f rawvideo -pix_fmt rgba -s 1920x1080 -r 60 -i - \
        -c:v libx264 -pix_fmt yuv420p -crf 18 -preset slow out.mp4

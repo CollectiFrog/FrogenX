@@ -8,6 +8,8 @@ pub const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Device et queue wgpu, plus l'adaptateur pour interroger ses capacités.
 pub struct Gpu {
+    /// Conservée pour recréer une surface perdue (§8.3).
+    pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -21,8 +23,29 @@ impl Gpu {
     /// décider si l'absence de GPU est une erreur (§24.3).
     pub fn headless() -> Option<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Self::open(instance, None)
+    }
+
+    /// Ouvre un GPU capable de présenter sur `target`, et rend sa surface.
+    ///
+    /// L'ordre est imposé par wgpu : instance, surface, puis adaptateur
+    /// compatible avec cette surface. `layer` ne connaît pas `winit` : `display`
+    /// et `target` viennent de l'appelant (§8.3).
+    pub fn with_surface(
+        display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>,
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+    ) -> Option<(Self, wgpu::Surface<'static>)> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(display));
+        let surface = instance.create_surface(target).ok()?;
+        let gpu = Self::open(instance, Some(&surface))?;
+        Some((gpu, surface))
+    }
+
+    fn open(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Option<Self> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: surface,
             ..Default::default()
         }))
         .ok()?;
@@ -32,10 +55,17 @@ impl Gpu {
         }))
         .ok()?;
         Some(Self {
+            instance,
             adapter,
             device,
             queue,
         })
+    }
+
+    /// Le backend obtenu. Une sortie qui en exige un (Spout, DX12 sous
+    /// Windows) le vérifie à son ouverture, en édition (§8.0).
+    pub fn backend(&self) -> wgpu::Backend {
+        self.adapter.get_info().backend
     }
 
     /// Nombre d'échantillons MSAA utilisable pour `format` : 4 si l'adaptateur

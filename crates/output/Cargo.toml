@@ -1,0 +1,18 @@
+[package]
+name = "frogenx-output"
+description = "Sorties : GpuSink, CpuSink, étage Outputs, passe de conversion 8 bits sRGB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Consomme la texture finale du compositeur (§8, §10). Ne connaît pas `winit` :
+# c'est `app` qui possède la fenêtre (§8.3). La politique de perte (`fanout`) ne
+# touche pas au GPU et se teste sans adaptateur.
+[dependencies]
+frogenx-layer.workspace = true
+frogenx-render.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+png.workspace = true

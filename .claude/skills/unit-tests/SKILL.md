@@ -9,10 +9,14 @@ cargo test -p frogenx-core             # un crate
 cargo test -p frogenx-osc -- --nocapture     # avec sortie
 ```
 
+Les tests tournent **un par un** (`.cargo/config.toml`) : en parallèle, des devices wgpu
+bloquent environ 3 % des exécutions (§24.3). Un binaire de test lancé à la main, hors de
+`cargo`, doit recevoir `--test-threads=1`.
+
 `core`, `osc`, `shape` et `composition` tournent **sans GPU ni carte son** — donc en
-CI, rapidement. Dans `layer` et `render`, les modules `tessellate`, `color`, `space`,
-`blend` et `convert` aussi. C'est la règle de dépendance du §10 de
-`docs/ARCHITECTURE.md`, et elle existe pour ça.
+CI, rapidement. Dans `layer`, `render` et `output`, les modules `tessellate`, `color`,
+`space`, `blend`, `convert`, `fanout` et `png_sequence` aussi. C'est la règle de
+dépendance du §10 de `docs/ARCHITECTURE.md`, et elle existe pour ça.
 
 ## Quoi tester, par étage
 
@@ -111,8 +115,9 @@ source audio synthétique. La politique de perte de l'étage `Outputs` se teste 
 GPU** : des `CpuFrame` fabriquées à la main suffisent. Les tests d'intégration réels **ne remplacent pas** les tests
 unitaires.
 
-**Tests de pixels (`crates/render/tests/pixels.rs`).** Ils ouvrent un GPU par
-`Gpu::headless()`, qui rend `Option` :
+**Tests GPU (`crates/render/tests/pixels.rs`, `crates/output/tests/gpu.rs`,
+`crates/app/tests/engine.rs`).** Ils ouvrent un GPU par `Gpu::headless()`, qui rend
+`Option` :
 
 ```rust
 let Some(gpu) = gpu() else { return };   // sans adaptateur : succès, message affiché
@@ -126,7 +131,14 @@ demi-flottants). Pour savoir s'ils ont vraiment tourné sur un GPU, les lancer a
 
 Le mélange des couches a deux implémentations, `blend.rs` (CPU) et `composite.wgsl`
 (GPU) : le test `chaque_mode_de_melange_du_gpu_suit_la_reference_cpu` les compare mode
-par mode. Toute modification de l'une se reporte dans l'autre.
+par mode. Toute modification de l'une se reporte dans l'autre. Même principe pour la
+passe de sortie : `conversion.wgsl` suit `linear_premul_to_srgb8`, à 1/255 près, sur
+une cible `Unorm` comme `*Srgb`
+(`la_passe_suit_sa_reference_cpu_quel_que_soit_le_format_de_la_cible`).
+
+**Tester le chemin complet par une image déjà connue.** `first_image` et la frame
+d'indice 79 de `sequence` montrent le même instant par deux chemins de conversion : si
+elles divergent de plus de 1/255, l'un d'eux encode deux fois ou pas du tout.
 
 Les snapshots d'image entière avec **tolérance perceptuelle** (§24.2) viendront quand
 les images seront trop riches pour quelques points — jamais d'égalité stricte, qui

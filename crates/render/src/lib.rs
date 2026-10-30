@@ -31,5 +31,5 @@ pub mod readback;
 pub use blend::{blend_premul, saturate_opacity};
 pub use compositor::{Compositor, LayerInput};
 pub use convert::{f16_to_f32, linear_premul_to_srgb8, linear_to_srgb};
-pub use image::write_png;
-pub use readback::read_rgba16f;
+pub use image::{write_png, write_png_rgba8};
+pub use readback::{read_rgba16f, read_rgba8};

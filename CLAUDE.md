@@ -55,9 +55,11 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 5 faites** — 212 tests verts, dont 10 tests de pixels sur GPU (sautés
-proprement sans adaptateur). Première image : `cargo run -p frogenx-render --example
-first_image` → `target/first_image.png`.
+**Étapes 1 à 6 faites.** `cargo run` ouvre l'application : la fenêtre, à 60 fps, sur une
+scène de démonstration provisoire. Rendus sans fenêtre : `cargo run -p frogenx-render
+--example first_image` (une image) ; `cargo run --release -p frogenx-app --example
+sequence` (un clip déterministe, skill `poc-video`). Les tests GPU se sautent proprement
+sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 
 - `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
@@ -74,11 +76,16 @@ first_image` → `target/first_image.png`.
   `ShapeLayer`, tessellation lyon (module sans wgpu), couleur en `Param` sRGB.
 - `crates/render` : `Compositor` (passes shader en ping-pong, 5 modes), relecture
   GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
+- `crates/output` : `GpuSink` (`encode`/`after_submit`), `CpuSink`, étage `Outputs`,
+  passe de conversion 8 bits sRGB, `Preview`, `PngSequenceSink`. `fanout` (files bornées, politique
+  de perte) ne connaît pas wgpu. `output` ne connaît pas `winit`.
+- `crates/app` : `Engine`, la boucle de frame du §20.1, sans fenêtre, et le binaire
+  `frogenx`, seul à connaître `winit`. Sa scène (`SceneGroup`, `demo`) est provisoire :
+  l'étape 7 la remplace par la grille.
 
-**Prochaine étape : 6 — `OutputSink` + preview.** Première fenêtre (`winit`), et le
-pipeline de sortie qui alimentera ensuite NDI, l'enregistrement, Art-Net (§8). Contrat
-tranché au §8.0 : `GpuSink` (deux phases `encode`/`after_submit`) et `CpuSink`, une
-relecture partagée, politique de perte dans l'étage `Outputs`, pas de `Result` par frame.
+**Prochaine étape : 7 — la grille pilote le rendu.** Le §12 ne contient pas encore
+d'étape d'interface ; le périmètre d'une première version utilisable reste à valider.
+Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version
 épinglée, pas de mémoire (skill `rust-workspace`).

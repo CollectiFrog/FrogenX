@@ -3,8 +3,10 @@
 //! **Ce module ne connaît pas wgpu.** Toute la chaîne travaille en linéaire
 //! prémultiplié, en demi-flottants (`Rgba16Float`). Ce n'est qu'à la sortie
 //! — un fichier, un écran — que l'image repasse en sRGB 8 bits, alpha droit.
-//! C'est la **seule** conversion vers sRGB de la chaîne : la faire deux fois
-//! délave l'image, l'oublier l'assombrit.
+//! Une image ne subit cette conversion **qu'une fois** : la faire deux fois
+//! délave l'image, l'oublier l'assombrit. [`linear_premul_to_srgb8`] est aussi
+//! la référence CPU de la passe de conversion de `frogenx-output` : toute
+//! modification ici se reporte dans `conversion.wgsl`, et inversement.
 
 /// Demi-flottant IEEE 754 binary16 → `f32`.
 ///
