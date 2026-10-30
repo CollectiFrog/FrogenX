@@ -33,7 +33,7 @@ Détail dans la skill `modular-design`, contrats complets en partie II de l'arch
 ## Règle de dépendance des crates
 
 `core` → `osc` → `shape` → `composition` → `audio` → `layer` → `render` → `output` →
-`ui`, les flèches vers le haut. `core` ne dépend de rien ; `shape` et `composition` ne
+`ui` → `app`, les flèches vers le haut. `core` ne dépend de rien ; `shape` et `composition` ne
 connaissent ni wgpu ni l'audio.
 
 Ce n'est pas de l'esthétique : c'est ce qui rend `core`, `osc`, `shape` et

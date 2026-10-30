@@ -588,7 +588,7 @@ pub struct GpuFrame<'a> {
 }
 
 pub struct CpuFrame {
-    pub pixels: Arc<[u8]>,            // RGBA8 encodé sRGB, lignes contiguës ; partagé, jamais copié par sortie
+    pub pixels: Arc<[u8]>,            // RGBA8 encodé sRGB, alpha droit, lignes contiguës ; partagé, jamais copié par sortie
     pub width: u32,
     pub height: u32,
     pub index: u64,
@@ -624,8 +624,10 @@ un flot inexploitable. Une panne en cours de route se lit dans `status()`. Une s
 `Failed` n'est plus alimentée mais **n'est pas retirée** — l'utilisateur la voit et
 décide. Le silence serait pire que l'erreur : l'enregistrement d'un concert de deux
 heures qui s'arrête à la dixième minute sans que personne ne le voie est le scénario
-que ce statut existe pour empêcher. Une surface perdue ou périmée (changement d'écran,
-redimensionnement) se reconfigure seule : c'est `Degraded`, pas `Failed`.
+que ce statut existe pour empêcher. Une surface périmée (changement d'écran,
+redimensionnement) se reconfigure seule ; une surface **perdue** demande à être recréée
+par `app`, qui possède la fenêtre (§8.3). Dans les deux cas c'est `Degraded`, pas
+`Failed`.
 
 **Deux phases pour les sorties GPU.** `encode` puis `after_submit` : la preview ne peut
 appeler `surface.present()` qu'après la soumission, Spout doit signaler son récepteur
@@ -644,8 +646,14 @@ partagée) et le chemin CPU (vers la texture relue). Elle convertit **avant** la
 relecture : on lit 4 octets par pixel au lieu de 8, et NDI, ffmpeg et Art-Net
 consomment tous du 8 bits. La règle du §21 tient : tout l'intermédiaire reste
 `Rgba16Float` linéaire, seules les cibles **finales** sont 8 bits encodées sRGB.
-**Alpha prémultiplié ou non dans les 8 bits : tranché à l'étape NDI**, quand un
-récepteur réel dira ce qu'il attend.
+
+**Une `CpuFrame` est en alpha droit.** Prévu pour l'étape NDI, ce choix a dû être
+avancé par la sortie PNG : dé-prémultiplier se fait **en linéaire, avant** l'encodage
+sRGB. Après la passe, c'est trop tard — diviser des octets sRGB par l'alpha donne une
+autre image. L'ordre de `linear_premul_to_srgb8` s'impose donc à la passe, et cette
+fonction lui sert de référence CPU dans les tests. Si un récepteur NDI veut du
+prémultiplié, c'est sa sortie qui le recalculera. Les cibles opaques (preview) gardent
+le RGB prémultiplié : une zone transparente s'y lit sur du noir (§8.3).
 
 **La politique de perte est portée par l'étage de sortie, pas par chaque sortie.**
 Chaque sortie CPU a son thread et une file bornée (2 à 3 frames) que `Outputs` tient :
@@ -668,10 +676,12 @@ backend : Spout exige DX12 sous Windows (§8.1). Si l'adaptateur obtenu ne convi
 c'est l'ouverture de la sortie qui échoue — en édition, avec un message.
 
 **Ce que l'étape 6 implémente :** le contrat complet, l'étage `Outputs` et sa
-politique `Realtime`/`Fixed`, la passe de conversion, la preview (`GpuSink`) et des
-sorties factices pour les tests. Le chemin CPU est typé et testé ; sa seule
-implémentation réelle utilise la relecture **synchrone** existante, autorisée en
-`Fixed` seulement (§8.2). L'anneau asynchrone arrive à l'étape 10.
+politique `Realtime`/`Fixed`, la passe de conversion, `Engine` (§8.3), la sortie
+`PngSequenceSink`, la preview (`GpuSink`) et des sorties factices pour les tests.
+Jusqu'à l'étape 10, le chemin CPU s'appuie sur la relecture **synchrone** (§8.2) : elle
+n'est permise qu'en `Fixed`, donc **`Outputs` refuse une sortie CPU en `Realtime`** à
+l'ajout — en édition, avec un message. L'anneau asynchrone lèvera ce refus. La
+politique `Realtime` de la file est néanmoins écrite et testée dès maintenant.
 
 ### 8.1 Partage inter-applications
 
@@ -759,6 +769,67 @@ démarrer, et surtout ffmpeg sélectionne lui-même l'encodeur matériel de chaq
 plateforme (NVENC, VideoToolbox, Media Foundation) — un problème de portabilité qu'on
 n'a pas à porter.
 
+**D'ici l'étape 10, `PngSequenceSink`** écrit une image par frame, nommée d'après son
+`index` (`frame_000000.png`). Elle donne un rendu offline déterministe sans encodeur ;
+`ffmpeg` assemble ensuite la séquence (skill `poc-video`). L'ouverture crée le dossier
+et rend un `Result` ; un disque plein en cours de rendu la fait passer en `Failed`.
+
+### 8.3 Le moteur, la fenêtre et le rythme
+
+> Tranché avant l'étape 6 (choix B à F).
+
+**`app`, au sommet de la chaîne, possède le processus.** La boucle d'événements de
+`winit` prend le contrôle du thread principal : une bibliothèque ne peut pas se
+l'approprier. `output` ne connaît donc **pas** `winit` : la preview reçoit une
+`wgpu::Surface` et sa taille. `app` a deux faces :
+
+- une **bibliothèque**, `Engine`, dont `frame(wall_dt)` déroule les étapes 1 à 10 du
+  §20.1 — sans fenêtre, donc testable, et utilisable pour un rendu offline ;
+- un **binaire**, qui possède `winit` et appelle `Engine`. egui s'y branchera.
+
+**La scène d'`Engine` est provisoire.** Une liste de groupes `{ graph, layers }`, chaque
+groupe préfigurant un clip (§3, §22.1). L'étape 7 la remplacera par la grille de
+`composition`.
+
+**`Gpu::with_surface(cible)`** complète `headless()`. L'ordre est imposé par wgpu :
+instance, surface, puis adaptateur compatible avec cette surface ; `Gpu` conserve donc
+son `Instance`, nécessaire pour recréer une surface perdue. Générique sur la cible,
+`layer` ne connaît pas `winit`.
+
+**Encodage de la preview.** La passe de conversion regarde le format de sa cible :
+`is_srgb()` → le matériel encode, sinon le shader. Elle écrit ainsi dans une surface
+`*Srgb`, dans une texture `Unorm` que le récepteur lit comme du sRGB (Spout), et dans
+les deux cas sans double encodage. La surface est opaque : le RGB prémultiplié se lit
+sur du noir.
+
+**Letterbox.** La preview conserve les proportions de la sortie et remplit le reste en
+noir. Étirer ferait mentir la preview sur ce qui part vers le projecteur ; recadrer
+cacherait les bords sans le dire. Le calcul du rectangle est une fonction pure, testée
+sans GPU. Filtrage bilinéaire : une forte réduction crénelle un peu, ce qui est
+acceptable pour un contrôle.
+
+**Le moteur a sa propre échéance ; la preview n'est qu'une consommatrice.** wgpu 30
+répond `Occluded` quand une fenêtre est masquée ou réduite : si la synchronisation de
+l'écran rythmait la boucle, réduire la fenêtre risquerait d'arrêter NDI et
+l'enregistrement. `app` cadence donc `Engine` sur une échéance (`ControlFlow::WaitUntil`,
+60 fps cible), et une preview indisponible saute sa frame sans rien ralentir.
+
+Présentation : `Mailbox` si la surface le propose, sinon `Fifo` (fonction pure de
+choix, testée). Jamais `Immediate`, qui déchire l'image sur un projecteur.
+
+| `get_current_texture` rend | La preview |
+|---|---|
+| `Success` | affiche |
+| `Suboptimal` | affiche, puis reconfigure |
+| `Timeout`, `Occluded` | saute la frame |
+| `Outdated` | reconfigure, saute la frame |
+| `Lost` | passe en `Degraded` ; `app` recrée la surface et la lui rend |
+
+**Vérifier une fenêtre.** Tout ce qui peut s'extraire se teste sans elle : `Engine` avec
+des sorties factices, la passe hors écran, les fonctions pures. Un mode `--frames N`
+ouvre la fenêtre, présente N frames et quitte : il prouve l'ouverture et la présentation,
+hors CI puisqu'il faut un écran. La fluidité reste une vérification à l'œil.
+
 ---
 
 ## 9. Portabilité
@@ -799,7 +870,8 @@ frogenx/
 ├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB : preview / NDI / Spout / Syphon / Art-Net / recorder
-└── ui/        # egui : grille de clips, rack par clip, monitoring
+├── ui/        # egui : grille de clips, rack par clip, monitoring
+└── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire winit
 ```
 
 **Découpage `layer` / `render` (étape 5).** `layer` porte le contexte `Gpu` (device et
@@ -828,7 +900,7 @@ aucun.
 
 **Conséquence sur l'ordre de la chaîne de dépendance (§0, en-tête du document) :**
 `composition` se place après `shape`, pas après `core` directement —
-`core → osc → shape → composition → audio → layer → render → output → ui`. `audio`
+`core → osc → shape → composition → audio → layer → render → output → ui → app`. `audio`
 reste indépendant de `composition` (une feature audio est un `Signal`, peu importe où
 il est consommé) ; son déplacement dans la liste est seulement pour lire la chaîne de
 gauche à droite dans l'ordre réel des flèches.
@@ -843,6 +915,7 @@ selon `ClipSource`, référencer une chaîne de `shape::ShapeOp` ou de son équi
 de l'`unsafe`** — confiné aux modules Spout et Syphon, sous `cfg` (§8.1). L'étage de
 sortie, la politique de perte et la passe de conversion n'en contiennent pas : la
 politique `Realtime`/`Fixed` se teste avec des sorties factices, sans GPU ni fenêtre.
+`output` ne connaît pas `winit` : c'est `app` qui possède la fenêtre (§8.3).
 
 **Règle de dépendance :** les flèches vont vers le haut de la liste. `core` ne dépend
 de rien. `shape`/`scene3d` ne connaissent ni wgpu ni l'audio. `render` ne sait pas ce
@@ -860,8 +933,8 @@ maintenable à mesure qu'il grossit.
 |---|---|---|
 | Maths | `glam` ✅ | vecteurs, matrices |
 | Rendu | `wgpu` 30 | GPU multiplateforme (étape 5) |
-| Fenêtrage | `winit` | fenêtre de preview (étape 6) |
-| UI | `egui` | grille de clips, rack de modules, câblage |
+| Fenêtrage | `winit` 0.30 | fenêtre et boucle d'événements, dans `app` seulement (§8.3) |
+| UI | `egui` | grille de clips, rack de modules, câblage — `egui-wgpu` 0.36+ pour wgpu 30 |
 | Bruit | interne à `osc` ✅ | value noise et fBm à graine explicite — pas la crate `noise` (§13, §20.3) |
 | Tessellation | `lyon_tessellation` | `Path` → triangles, remplissage et trait (étape 5) |
 | GPU, utilitaires | `bytemuck`, `pollster` | octets des buffers de sommets ; attente synchrone de l'adaptateur (étape 5) |
@@ -883,6 +956,12 @@ changement délibéré, fait dans son propre commit, avec les tests de rendu (§
 filet. Le `rust-version` du workspace passe de 1.80 à 1.87 en conséquence : déclarer un
 minimum inférieur à celui d'une dépendance serait un mensonge que `cargo` ne détecte
 qu'à la compilation chez celui qui a la vieille toolchain.
+
+**`winit` est épinglé en 0.30 parce qu'`egui` l'impose** : `egui-wgpu` 0.36 et 0.37, les
+seules versions pour wgpu 30, demandent `winit ^0.30.13`, et la 0.31 est encore en bêta
+à la date de ce choix. **L'étape UI relèvera `rust-version`** : ces mêmes versions
+d'`egui-wgpu` exigent Rust 1.95, contre 1.87 aujourd'hui. Vérifié sur crates.io ; à
+revérifier à l'étape UI.
 
 ---
 
@@ -955,6 +1034,14 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`index` de frame croissant** dans chaque frame de sortie (§8.0) | rend une perte détectable par la sortie elle-même, et le test « sans perte en `Fixed` » exact |
 | **Passe de conversion 8 bits sRGB unique**, avant la relecture (§8.0, §21) | trois consommateurs (preview, Spout/Syphon, chemin CPU) ; convertir avant de relire divise par deux les octets lus |
 | **`unsafe` confiné à `output`**, modules Spout/Syphon sous `cfg` (§8.1, §10) | l'interop de textures natives l'exige (`as_hal`, `create_texture_from_hal`) ; le confiner garde le reste du projet sûr et la surface de risque lisible |
+| **`CpuFrame` en alpha droit**, avancé de l'étape NDI à la sortie PNG (§8.0) | dé-prémultiplier doit se faire en linéaire, avant l'encodage sRGB : après la passe de conversion, c'est trop tard |
+| **Crate `app` : bibliothèque `Engine` + binaire `winit`**, `output` ne connaît pas `winit` (§8.3) | la boucle d'événements prend le contrôle du thread principal, ce qu'une bibliothèque ne peut pas s'approprier ; `Engine` sans fenêtre reste testable et sert le rendu offline |
+| **`winit` 0.30** (§11) | imposé par `egui-wgpu` pour wgpu 30 ; la 0.31 est en bêta |
+| **La passe de conversion suit le format de sa cible** (`is_srgb()`) (§8.3) | surface `*Srgb` et texture `Unorm` lue comme du sRGB coexistent : décider au cas par cas évite le double encodage, qui délave l'image |
+| **Letterbox pour la preview** (§8.3) | étirer ment sur la sortie, recadrer cache les bords sans le dire |
+| **Le moteur a sa propre échéance**, pas la synchro de l'écran (§8.3) | wgpu répond `Occluded` sur une fenêtre masquée : réduire la preview ne doit pas arrêter NDI ni l'enregistrement |
+| **`Mailbox`, sinon `Fifo`, jamais `Immediate`** (§8.3) | `Immediate` déchire l'image sur un projecteur ; `Fifo` existe partout |
+| **Sorties CPU refusées en `Realtime` avant l'étape 10** (§8.0) | sans l'anneau, seule la relecture synchrone existe : l'accepter en live effondrerait le framerate en silence ; un refus à l'ajout est clair |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
 | **Grille de clips (Deck/LayerGroup/Layer/Column) comme structure d'organisation** (§3bis) | répond à « quoi joue, quand » ; un patch modulaire unique ne permet pas de changer de répertoire de visuels à chaud en live |

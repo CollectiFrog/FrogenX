@@ -22,8 +22,9 @@ crates/composition/  grille : Deck/Layer/Column/Clip, tempo    ← core, shape  
 crates/audio/        cpal, FFT, features → Signal
 crates/layer/        Gpu, trait RenderLayer, ShapeLayer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
-crates/output/       GpuSink / CpuSink, étage Outputs : preview / NDI / Spout / Syphon / recorder ← layer, render, winit
+crates/output/       GpuSink / CpuSink, étage Outputs : preview / NDI / Spout / Syphon / recorder ← layer, render, wgpu
 crates/ui/           egui : grille de clips, rack, câblage, monitoring
+crates/app/          Engine (sans fenêtre) + binaire winit ← tout le reste
 ```
 
 **Ajouter une crate** demande deux éditions du `Cargo.toml` racine — `members` **et**
@@ -67,8 +68,8 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 | Tessellation | `lyon_tessellation` | ✅ (layer) |
 | GPU, utilitaires | `bytemuck`, `pollster` | ✅ (layer, render) |
 | Image | `png` | ✅ (render) |
-| Fenêtrage | `winit` | étape 6 (output) |
-| UI | `egui` | à venir |
+| Fenêtrage | `winit` **0.30** | étape 6, dans `app` seulement — version imposée par `egui-wgpu` (§11) |
+| UI | `egui`, `egui-wgpu` 0.36+ | à venir — demandera Rust 1.95 (§11) |
 | Audio | `cpal`, `rustfft` | à venir |
 | Lock-free | `rtrb`, `triple_buffer` | à venir |
 
