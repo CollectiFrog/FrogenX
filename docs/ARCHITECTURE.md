@@ -116,6 +116,11 @@ déplaçable, dupliquable et sérialisable seul, sans graphe de dépendances ext
 résoudre. Un besoin de modulation inter-clips (un LFO qui pilote plusieurs clips à la
 fois) se pose plus tard comme une extension explicite, pas comme le cas par défaut.
 
+**S'y ajoute un seul graphe de composition, porté par `Composition`** (§3bis.1). Il
+module ce qui appartient à la régie et non à un clip : l'opacité des pistes, le tempo,
+plus tard le crossfader. Il ne rompt pas la règle ci-dessus : aucun clip n'y accède, et
+il survit à tous les changements de clip.
+
 ---
 
 ## 3bis. La grille de composition
@@ -170,6 +175,16 @@ comportement incohérent en régime édition (§18.1). Chaque `Vec` reste aussi 
 contigu que son niveau le permet, et retirer un `Deck` ne renumérote jamais les `Clip`
 d'un autre deck.
 
+**Une piste porte son mélange.** `composition::Layer` possède ses `BlendParams`
+(opacité et mode, §22), dont les `Param` se résolvent dans le **graphe de composition**.
+Dans le clip, changer de clip ferait sauter le réglage que le VJ tient sur sa piste.
+`BlendParams` et `ColorParam` vivent donc dans `shape`, sans GPU : `composition` ne peut
+pas dépendre de `layer` sans perdre ses tests sans GPU (§10).
+
+**L'ordre de rendu est celui de la hiérarchie.** `Composition` a un deck actif, le
+premier ajouté par défaut ; ses groupes puis leurs pistes se composent de bas en haut.
+Une piste sans clip actif ne contribue pas à l'image.
+
 **Coût accepté :** cinq structs d'identifiant au lieu d'un seul générique, et une
 référence croisée (un `Layer` vers son `Deck` parent) passe par un identifiant typé de
 la relation plutôt qu'un simple entier. C'est du boilerplate mécanique, pas un risque —
@@ -180,7 +195,7 @@ engageait un vrai contrat.
 
 ```rust
 pub struct Clip {
-    pub source: ClipSource,       // Shape { graph, generator } | Scene3d(Graph) | Video(VideoTrack)
+    pub source: ClipSource,       // Shape { graph, generator, style } | Scene3d(Graph) | Video(VideoTrack)
     pub effects: Vec<ShapeOp>,    // ou son équivalent vidéo/3D — chaîne en place (§16.3 bis)
     pub transport: Transport,     // Timeline ou BpmSync (§3bis.3)
     pub transition: ClipTransition,
@@ -202,10 +217,20 @@ premier état de `composition`, où la variante était `Shape(Graph)` : un graph
 modulation seul ne produit aucune forme, et `Clip.effects` était alors une chaîne
 d'opérateurs sans rien à transformer. La variante devient `Shape { graph, generator }`
 — le graphe module, le générateur (`Box<dyn ShapeGenerator>`, §16.3) produit le `Path`
-que les effets transforment. Le **branchement** de la grille sur le rendu (le clip
-actif d'une piste alimente une `ShapeLayer`) reste à l'étape 7 du §12 ; seul le type
-est corrigé maintenant, pour que l'étape 5 ne construise pas sur un clip incapable de
-décrire sa propre forme.
+que les effets transforment. S'y ajoute `style` (`ShapeStyle` : remplissage et trait,
+§21) : sans lui, un clip saurait quelle forme produire, mais pas de quelle couleur.
+
+**Le clip décrit, la piste dessine (étape 7).** Un `ShapeRenderer` par piste possède les
+textures et les buffers ; à chaque frame, le clip actif lui prête son contenu
+(`ShapeContent`, §22.1). Une `ShapeLayer` par clip coûterait environ 80 Mo de textures
+par clip en 1080p avec le MSAA 4× — 8 Go pour une grille de 100 clips, dont un seul par
+piste s'affiche.
+
+**Seul le clip actif vit.** Un clip inactif n'est pas évalué : le coût d'une frame suit
+ce qui est à l'écran, pas la taille de la grille. **Déclencher un clip le fait repartir
+de zéro** (`Graph::reset_state`), y compris s'il était déjà actif : c'est ce qu'on attend
+d'un pad qu'on frappe. Reprendre là où il en était sera une option par clip, si l'usage
+la demande.
 
 **`ClipTransition` suit le même principe que `Transport.position` (§3bis.3) : une
 progression qui avance seule est un accumulateur, pas un `Param` statique.**
@@ -225,7 +250,9 @@ frame. C'est exactement le rôle de `PositionSignal` (§3bis.3) — réutilisé 
 que réinventé, et l'état de progression vit dans le `NodeState` du `Graph` du clip,
 pas dans `ClipTransition` lui-même, qui reste sans champ mutable (§2.3).
 
-**Portée livrée à l'étape 4 (§12) : `Cut` seul.** `Fade`/`Wipe` sont dans l'énum dès
+**Portée livrée à l'étape 7 : `Cut` seul.** `Fade` viendra après l'interface, `Wipe`
+après la première version : mélanger deux clips exige qu'une piste en dessine deux à la
+fois pendant la transition. `Fade`/`Wipe` sont dans l'énum dès
 maintenant pour fixer la forme du contrat, mais leur logique de rendu (mélanger deux
 clips pendant la transition) dépend du compositeur de couches qui n'existe qu'à partir
 de l'étape 5. Les construire avant aurait anticipé une dépendance que `composition` ne
@@ -257,6 +284,33 @@ pub struct TempoController {
 répond à « combien de temps dure un beat maintenant », une donnée musicale que plusieurs
 clips et layers doivent partager en même temps, et qui change en live (tap tempo, push/
 pull de synchro avec un DJ). C'est une couche au-dessus de `Clock`, pas une redéfinition.
+
+**Le tempo arrive aux clips par `Ctx.bpm`, depuis une source unique.** `Composition`
+résout `TempoController::tempo` une fois par frame, après avoir évalué son graphe, et le
+moteur le pose dans le `Ctx` de chaque clip actif (§16.2). Aucun clip n'est câblé au
+tempo un par un, et une nouvelle source n'a qu'une chose à faire : écrire le tempo. Le
+tap tempo le fait aujourd'hui, le BPM calculé depuis l'audio le fera à l'étape 8 (§7).
+Saturé à `[20, 400]` chez ce consommateur (§18.4) ; un tempo non fini rend 120.
+
+```rust
+// Un Signal qui vaut bpm / 60 / beats : une fréquence, en Hz.
+pub struct BeatRate { pub beats: Param }
+```
+
+**`BeatRate` rend un Signal calé sur le tempo sans rien lui apprendre de la musique.**
+Branché sur la `freq` d'un `Lfo`, il donne un cycle tous les `beats` battements ; branché
+sur la `speed` d'une `PositionSignal`, une position en battements (`Transport::bpm_sync`
+fait ce câblage). **Piège : il se déclare en dépendance** (`add_with_deps`), sinon
+l'ordre d'évaluation n'est pas garanti et le consommateur lit la valeur de la frame
+précédente.
+
+**Le tap tempo** garde au plus 8 instants, repart de zéro après 2 s de silence, et
+écrit un `Param::Fixed`.
+
+**Limite de l'étape 7 : `play_mode` n'a pas d'effet.** `position` avance, mais une forme
+procédurale n'a pas de fin naturelle : rien ne lit encore `duration_beats` ni
+`play_mode`. Ils prendront leur sens avec les clips vidéo (étape 12). Ne pas lire
+`Once` ou `PingPong` comme un comportement livré.
 
 **Pourquoi `position` n'est pas un `Param`.** `speed` et `duration_beats` sont bien
 réglables par l'utilisateur ou modulables par un `Signal` — ce sont des entrées,
@@ -542,6 +596,11 @@ nerveux. Attaque et release réglables par feature.
 **Source :** entrée live (`cpal`) d'abord. La lecture de fichier peut s'ajouter ensuite
 et apporte un avantage propre — connaître le futur du signal permet l'anticipation et
 une synchro parfaite.
+
+**Décidé pour la première version :** l'audio capturé sert aussi à **calculer le BPM**,
+qui alimente le `TempoController` (§3bis.3) en plus du tap tempo, et à **déclencher des
+effets vidéo** à partir des transitoires. Ni l'algorithme de détection du BPM, ni le
+modèle de déclenchement ne sont encore tranchés : ils le seront avec l'étape 8.
 
 ---
 
@@ -877,11 +936,11 @@ route (§12).
 frogenx/
 ├── core/      # Signal, Param, Graph, Clock          ← aucune dépendance ✅
 ├── osc/       # oscillateurs, LFO, enveloppes, bruit ✅
-├── shape/     # primitives + opérateurs              ✅ (core, osc, glam)
+├── shape/     # primitives, opérateurs, style (ColorParam, BlendParams) ✅ (core, osc, glam)
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
-├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController ✅ (core, shape)
-├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
+├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Command ✅ (core, shape)
+├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, Preview, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
 ├── ui/        # egui : grille de clips, rack par clip, monitoring
@@ -918,6 +977,14 @@ aucun.
 reste indépendant de `composition` (une feature audio est un `Signal`, peu importe où
 il est consommé) ; son déplacement dans la liste est seulement pour lire la chaîne de
 gauche à droite dans l'ordre réel des flèches.
+
+**`ColorParam`, `ShapeStyle`, `BlendParams` vivent dans `shape`, pas dans `layer`.**
+Un clip et une piste les portent, et `composition` ne peut pas dépendre de `layer` sans
+tirer wgpu. Ce sont quatre `Param` et une énumération : rien en eux ne touche au GPU.
+`layer` les réexporte.
+
+**`app` dépend de `composition`** : `Engine` tient la grille et la traduit en couches.
+`composition` ne connaît toujours rien du rendu.
 
 **`scene3d` suit la même règle que `shape`.** Primitives 3D (maillages, caméra,
 lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rôle que
@@ -994,7 +1061,7 @@ couches complètes empilées.
 | 4 | ✅ `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** — *fait* |
 | 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
 | 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
-| 7 | LFO câblé sur une fréquence, depuis un clip de la grille | **le modulaire prend vie dans la grille** |
+| 7 | La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — `cargo run`, touches 1 à 4 |
 | 8 | Audio → features → `Signal` | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
@@ -1092,7 +1159,13 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Couleur = quatre `Param` saisis en sRGB**, convertis en linéaire prémultiplié pendant `prepare` (§21) | une couleur est un champ qu'on module ; un `[f32; 4]` nu serait un câble impossible à brancher |
 | **`wgpu` épinglé à une majeure, `rust-version` alignée sur son minimum** (§11) | une majeure tous les trois mois, avec changements d'API ; une montée de version doit être délibérée |
 | **Tests GPU qui se sautent sans adaptateur**, tout le reste testé sans GPU (§24.3) | un test qui échoue faute de GPU finit désactivé ; ce qui est pur ne doit jamais attendre un GPU |
-| **Le compositeur reçoit un graphe par couche** (`LayerInput`), pas un graphe global (§22.1) | chaque clip porte son graphe (§3) ; l'opacité d'une couche doit se résoudre dans le sien |
+| **`LayerInput` porte deux graphes** : `graph` pour le contenu, `blend_graph` pour le mélange (§22.1) | chaque clip porte son propre graphe (§3), mais l'opacité d'une piste appartient à la régie : elle se résout dans le graphe de composition |
+| **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
+| **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
+| **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **Le tempo est dans `Ctx`, d'une source unique** (§3bis.3, §16.2) | tap et BPM audio écrivent au même endroit, tous les clips lisent au même endroit ; câbler chaque clip serait à refaire pour tout nouveau clip |
+| **Un graphe de composition, en plus du graphe de chaque clip** (§3) | l'opacité d'une piste et le tempo survivent aux changements de clip ; les mettre dans un clip les ferait sauter |
+| **`Command` dès l'étape 7, avant l'interface** (§23) | déclencher depuis un clavier, une interface ou le MIDI passe par le même chemin, testé sans GPU ; des appels directs seraient à réécrire |
 | **Remplissage en règle non nulle**, contours fermés seulement (§22.1) | les copies d'une répétition radiale qui se chevauchent restent pleines au lieu de se trouer ; un contour ouvert n'a pas d'intérieur |
 | **Formules de mélange en double : WGSL + référence CPU testée** (§22.1) | un shader ne se teste pas seul ; la version Rust sert d'oracle aux tests de pixels, mode par mode |
 | **`ClipSource::Shape { graph, generator }`**, pas `Shape(Graph)` (§3bis.2) | un graphe seul ne produit aucune forme ; les effets du clip n'avaient rien à transformer |
@@ -1149,6 +1222,7 @@ concrètement, par étage du §1 :
 | **Tessellation** | sans GPU : un contour fermé produit des triangles qui couvrent son aire, un contour ouvert n'est jamais rempli, plusieurs contours restent disjoints (pas de triangle à cheval), un contour dégénéré (moins de 3 points, points confondus, non-fini) rend zéro triangle sans paniquer |
 | **Couches** | par relecture de pixels, sur un GPU s'il existe : un carré plein au centre donne au pixel central la couleur **linéaire prémultipliée** attendue et laisse le coin transparent ; conversion sRGB → linéaire vérifiée sans GPU sur des valeurs de référence |
 | **Sorties** | sans GPU ni fenêtre, avec des `CpuSink` factices : en `Fixed`, une sortie lente reçoit les indices `0, 1, 2, …` sans trou ; en `Realtime`, elle perd des frames, les compte dans `Degraded { dropped }`, et la boucle ne ralentit pas ; une relecture n'a lieu que si une sortie CPU est active ; une sortie `Failed` n'est plus alimentée mais reste listée. Sur GPU s'il existe : la passe de conversion 8 bits suit sa référence CPU (`linear_premul_to_srgb8`), à 1/255 près, sur cible `Unorm` comme `*Srgb` ; deux sorties CPU partagent le même `Arc` (une seule relecture) ; un `GpuSink` factice voit `after_submit` appelé une fois par frame, après `encode` |
+| **Pilotage de la grille** | sans GPU : un déclenchement remet l'état du clip à zéro, un refus n'y touche pas ; l'ordre des pistes suit la hiérarchie ; `BeatRate` suit le tempo ; le tap tempo oublie après 2 s ; une `Command` invalide est refusée sans panique. Sur GPU : un clip inactif n'est pas évalué, changer de clip change l'image, une piste vide ne contribue pas, l'opacité d'une piste se résout dans le graphe de composition |
 | **Grille de composition** | construction/suppression dans la hiérarchie sans invalider les identifiants des niveaux non touchés (§3bis.1) ; une `Column` déclenche bien la même tranche sur tous les `Layer` (§3bis.1) ; `TempoController::tap` calcule un BPM correct sur une séquence d'événements synthétiques ; `CrossFader.phase` à 0/0.5/1 produit les `BlendParams::opacity` attendus sur les deux groupes (§3bis.4) ; `PositionSignal` avance déterministiquement à un `t`/`dt` injecté, jamais l'horloge système (§3bis.3) |
 
 **Ce qui rend cela possible :** la règle de dépendance du §10. `core`, `osc` et `shape`
@@ -1243,6 +1317,7 @@ pub struct Ctx<'a> {
     pub frame: u64,                   // compteur de frames depuis le début
     pub sample_rate: f64,             // fréquence d'échantillonnage audio
     pub audio: &'a AudioFeatures,     // instantané, lecture seule
+    pub bpm: f32,                     // tempo de la composition (§3bis.3)
     pub cache: &'a [f32],             // valeurs déjà calculées de la frame
 }
 ```
@@ -1584,10 +1659,11 @@ patch venu d'une version plus récente ne peut pas être deviné.
 ### 20.1 L'ordre, strict
 
 ```
+ 0. Commandes      → appliquées entre deux frames (§23)
  1. Clock          → t, dt                     (Realtime ou Fixed)
  2. Audio          → lecture du triple buffer  (non bloquante)
  3. Ctx            → construction              (une fois)
- 4. Graphe         → cache invalidé, évalué dans l'ordre topologique
+ 4. Graphes        → composition d'abord (tempo), puis clips actifs seulement
  5. Formes         → generate() dans les buffers réutilisés
  6. Tessellation   → polylignes → triangles (lyon)
  7. Couches        → chacune rend vers sa texture
@@ -1702,6 +1778,7 @@ puis converties en linéaire et prémultipliées **une fois, pendant `prepare`**
 avant d'atteindre le GPU. Chaque canal est saturé dans `[0, 1]` chez la couche, son
 consommateur — jamais dans le `Signal` qui le module (§18.4). La conversion
 sRGB → linéaire est une fonction pure, testée sans GPU sur des valeurs de référence.
+Le type vit dans `shape`, avec `ShapeStyle`, parce qu'un clip le porte (§10).
 
 ---
 
@@ -1818,11 +1895,18 @@ vérification.
 
 ### 22.1 Ce que l'étape 5 a fixé
 
-**Le compositeur reçoit un graphe par couche.** `Compositor::render` prend des
-`LayerInput { layer, graph }`, pas un `&Graph` unique : chaque clip porte son propre
-graphe (§3), donc l'opacité de chaque couche — un `Param` — se résout dans le graphe de
-sa couche. Un graphe partagé aurait fait résoudre le `Param` d'un clip contre les nœuds
-d'un autre.
+**Le compositeur reçoit deux graphes par couche.** `Compositor::render` prend des
+`LayerInput { layer, graph, blend_graph }`, pas un `&Graph` unique : chaque clip porte
+son propre graphe (§3), et un graphe partagé aurait fait résoudre le `Param` d'un clip
+contre les nœuds d'un autre. `graph` résout le contenu ; `blend_graph` résout l'opacité,
+qui appartient à la piste, donc au graphe de composition (§3bis.1).
+`LayerInput::new(layer, graph)` utilise le même graphe pour les deux.
+
+**`ShapeRenderer` et `ShapeContent` (étape 7).** `ShapeRenderer` possède ce qui coûte :
+textures, pipeline, buffers, mémoire réutilisée. `ShapeContent` n'est qu'un emprunt d'une
+frame : un générateur, des effets, un style. Un même renderer dessine donc n'importe
+quel clip sans rien réallouer, et sans garder trace du précédent. `ShapeLayer`, pour un
+contenu qu'elle possède, n'est plus qu'un renderer et son contenu.
 
 **Piège : un buffer d'uniformes par couche, pas un seul réécrit.** Les écritures de
 `queue.write_buffer` sont toutes appliquées **avant** la soumission de l'encodeur. Un
@@ -1994,6 +2078,14 @@ du reste du code. Poser ce modèle tard obligerait à réécrire toute l'UI.
 
 Les commandes de **câblage** sont validées (détection de cycle, §3) et peuvent être
 **refusées** avec un message — c'est le régime « édition » du §18.1.
+
+**Ce qui existe depuis l'étape 7.** Les commandes de **pilotage** de la grille, dans
+`composition`, donc testées sans GPU : déclencher un clip ou une colonne, vider une
+piste, régler son opacité, changer de deck, fixer le BPM, taper le tempo.
+`Composition::apply` rend un `bool` : une commande sur un identifiant périmé est refusée
+sans panique. `Engine` les applique entre deux frames. Tout pilote passe par là : les
+touches 1 à 4 aujourd'hui, l'interface, le MIDI et l'OSC ensuite. Les commandes de
+câblage ci-dessus arriveront avec l'éditeur de nœuds.
 
 ### 23.1 Charte graphique de référence — Resolume Arena
 

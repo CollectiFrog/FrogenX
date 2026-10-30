@@ -17,10 +17,10 @@ Elles vivent sous `crates/`, le workspace est à la racine.
 ```
 crates/core/         Signal, Param, Graph, Clock               ← aucune dépendance  ✅
 crates/osc/          oscillateurs, LFO, bruit, enveloppes      ← core               ✅
-crates/shape/        Path, primitives + opérateurs             ← core, osc, glam    ✅
-crates/composition/  grille : Deck/Layer/Column/Clip, tempo    ← core, shape        ✅
+crates/shape/        Path, primitives, opérateurs, style       ← core, osc, glam    ✅
+crates/composition/  grille, tempo, Command                    ← core, shape        ✅
 crates/audio/        cpal, FFT, features → Signal
-crates/layer/        Gpu, trait RenderLayer, ShapeLayer, tessellation ← core, shape, wgpu ✅
+crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
                      à venir : NDI / Spout / Syphon / recorder
