@@ -27,7 +27,7 @@ CI, rapidement. Dans `layer` et `render`, les modules `tessellate`, `color`, `sp
 | **Tessellation** | aire couverte, contour ouvert jamais rempli, contours disjoints sans triangle à cheval, dégénérés sans panique |
 | **Couches** | pixels relus en quelques points, comparés à une référence CPU (`srgb_to_linear`, `blend_premul`) |
 | **Audio** | features sur signaux **synthétiques** : sinus pur → centroïde connu, silence → RMS nul |
-| **Sorties** | un `OutputSink` factice reçoit les frames, dans l'ordre, sans perte en mode `Fixed` |
+| **Sorties** | `CpuSink` factice lent : indices contigus en `Fixed`, pertes comptées sans ralentir la boucle en `Realtime` ; relecture seulement si une sortie CPU est active ; `GpuSink` factice : `after_submit` une fois par frame, après `encode` (§8.0) |
 | **Patchs** | chaque fixture d'ancienne version se migre et se charge (§19.2) |
 
 ## L'état se teste en l'injectant
@@ -106,8 +106,9 @@ gratuitement l'invariant des contours — ne pas contourner `gen` pour appeler
 
 ## GPU et matériel
 
-Injecter une abstraction plutôt que renoncer au test : `OutputSink` factice, source
-audio synthétique. Les tests d'intégration réels **ne remplacent pas** les tests
+Injecter une abstraction plutôt que renoncer au test : `GpuSink` / `CpuSink` factice,
+source audio synthétique. La politique de perte de l'étage `Outputs` se teste **sans
+GPU** : des `CpuFrame` fabriquées à la main suffisent. Les tests d'intégration réels **ne remplacent pas** les tests
 unitaires.
 
 **Tests de pixels (`crates/render/tests/pixels.rs`).** Ils ouvrent un GPU par

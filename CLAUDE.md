@@ -76,7 +76,9 @@ first_image` → `target/first_image.png`.
   GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
 
 **Prochaine étape : 6 — `OutputSink` + preview.** Première fenêtre (`winit`), et le
-pipeline de sortie qui alimentera ensuite NDI, l'enregistrement, Art-Net (§8).
+pipeline de sortie qui alimentera ensuite NDI, l'enregistrement, Art-Net (§8). Contrat
+tranché au §8.0 : `GpuSink` (deux phases `encode`/`after_submit`) et `CpuSink`, une
+relecture partagée, politique de perte dans l'étage `Outputs`, pas de `Result` par frame.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version
 épinglée, pas de mémoire (skill `rust-workspace`).

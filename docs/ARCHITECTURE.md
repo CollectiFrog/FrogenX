@@ -559,11 +559,119 @@ scène ──▶ texture RGBA offscreen ─┬──▶ fenêtre (preview)
 **Bénéfice immédiat :** la résolution de sortie est découplée de la taille de fenêtre.
 Enregistrer en 4K dans une fenêtre de 800 px devient naturel.
 
+### 8.0 Le contrat des sorties
+
+> Tranché avant l'étape 6 (dilemme A). Le croquis initial —
+> `fn submit(&mut self, frame: &FrameTexture, t: f64) -> Result<()>` — laissait trois
+> questions ouvertes : que fait une sortie qui échoue, que reçoit-elle (texture GPU ou
+> pixels CPU), et qui décide qu'une frame peut être perdue. Les trois réponses
+> ci-dessous ; leurs raisons au §13.
+
+**Deux familles de sorties, deux traits.** Les sorties **GPU** (preview, Spout, Syphon)
+copient la texture sans quitter la carte. Les sorties **CPU** (NDI, enregistreur,
+Art-Net, séquence d'images) ont besoin d'octets en mémoire, donc d'une relecture
+GPU → CPU (§8.2) — l'opération la plus chère du pipeline. Un trait par famille : une
+sortie ne peut pas recevoir la mauvaise forme de frame, c'est le compilateur qui le
+garantit, pas un `match` à l'exécution.
+
 ```rust
-trait OutputSink {
-    fn submit(&mut self, frame: &FrameTexture, t: f64) -> Result<()>;
+pub enum SinkStatus {
+    Active,
+    Degraded { dropped: u32 },   // fonctionne, mais perd des frames ou se reconfigure
+    Failed(String),              // n'est plus alimentée ; reste visible dans l'UI
+}
+
+pub struct GpuFrame<'a> {
+    pub texture: &'a wgpu::Texture,   // sortie du compositeur : Rgba16Float linéaire prémultiplié (§21)
+    pub index: u64,                   // croissant, sans trou en Clock::Fixed
+    pub t: f64,                       // le t de CETTE frame
+}
+
+pub struct CpuFrame {
+    pub pixels: Arc<[u8]>,            // RGBA8 encodé sRGB, lignes contiguës ; partagé, jamais copié par sortie
+    pub width: u32,
+    pub height: u32,
+    pub index: u64,
+    pub t: f64,                       // le t de la frame relue, pas le t courant (§8.2 : 2 à 3 frames de retard)
+}
+
+pub trait GpuSink {
+    /// Phase 1 : enregistre ses copies / passes dans l'encodeur de la frame.
+    fn encode(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, frame: &GpuFrame<'_>);
+    /// Phase 2 : après `queue.submit` — présenter la surface, signaler le récepteur
+    /// Spout, publier la frame Syphon.
+    fn after_submit(&mut self, gpu: &Gpu);
+    fn status(&self) -> SinkStatus;
+}
+
+pub trait CpuSink: Send {
+    /// Appelée sur le thread propre à la sortie : peut bloquer (disque, réseau).
+    fn submit(&mut self, frame: &CpuFrame);
+    fn status(&self) -> SinkStatus;
+}
+
+pub enum OutputSink {
+    Gpu(Box<dyn GpuSink>),
+    Cpu(Box<dyn CpuSink>),
 }
 ```
+
+**Erreurs : deux régimes, comme partout (§18.1).** L'**ouverture** d'une sortie —
+bibliothèque NDI absente, fichier impossible à créer, surface refusée, backend
+incompatible avec Spout — est de l'édition : le constructeur rend un `Result`, le refus
+est clair. **`submit` et `encode` ne rendent rien** : une erreur par frame à 60 fps est
+un flot inexploitable. Une panne en cours de route se lit dans `status()`. Une sortie
+`Failed` n'est plus alimentée mais **n'est pas retirée** — l'utilisateur la voit et
+décide. Le silence serait pire que l'erreur : l'enregistrement d'un concert de deux
+heures qui s'arrête à la dixième minute sans que personne ne le voie est le scénario
+que ce statut existe pour empêcher. Une surface perdue ou périmée (changement d'écran,
+redimensionnement) se reconfigure seule : c'est `Degraded`, pas `Failed`.
+
+**Deux phases pour les sorties GPU.** `encode` puis `after_submit` : la preview ne peut
+appeler `surface.present()` qu'après la soumission, Spout doit signaler son récepteur
+une fois le rendu terminé, Syphon publie après la soumission. Une seule méthode aurait
+obligé chacune à soumettre son propre encodeur. Même forme que le contrat des couches
+en plusieurs appels (§22).
+
+**Une seule relecture, partagée.** L'**étage de sortie** (`Outputs`) relit la frame
+**une fois**, et seulement si au moins une sortie CPU est active ; toutes les sorties
+CPU reçoivent le même `Arc<[u8]>`. Avec NDI et l'enregistrement actifs, on ne paie pas
+deux relectures. L'anneau du §8.2 n'existe qu'à un endroit.
+
+**Une seule passe de conversion vers 8 bits sRGB**, composant de `output` partagé par
+trois consommateurs : la preview (vers sa surface), Spout/Syphon (vers la texture
+partagée) et le chemin CPU (vers la texture relue). Elle convertit **avant** la
+relecture : on lit 4 octets par pixel au lieu de 8, et NDI, ffmpeg et Art-Net
+consomment tous du 8 bits. La règle du §21 tient : tout l'intermédiaire reste
+`Rgba16Float` linéaire, seules les cibles **finales** sont 8 bits encodées sRGB.
+**Alpha prémultiplié ou non dans les 8 bits : tranché à l'étape NDI**, quand un
+récepteur réel dira ce qu'il attend.
+
+**La politique de perte est portée par l'étage de sortie, pas par chaque sortie.**
+Chaque sortie CPU a son thread et une file bornée (2 à 3 frames) que `Outputs` tient :
+
+| Mode d'horloge (§4) | Sortie lente | Garantie |
+|---|---|---|
+| `Clock::Realtime` | dépôt sans attente ; si la file est pleine, la frame est perdue et comptée (`Degraded { dropped }`) | la boucle de rendu ne ralentit jamais |
+| `Clock::Fixed` | dépôt bloquant : la boucle attend la sortie la plus lente | aucune frame perdue — indices contigus |
+
+La politique est écrite **une fois**, et elle se teste ; si chaque sortie la décidait,
+une seule erreur dans l'une d'elles ferait perdre des frames d'un rendu offline. Les
+sorties GPU tournent sur le thread principal (la surface y vit) et ne bloquent pas.
+
+**`index` rend la perte visible.** Une sortie détecte un trou en comparant deux indices
+successifs ; le test du §15.1 devient exact : en `Fixed`, une sortie factice reçoit
+`0, 1, 2, …` sans trou.
+
+**`Gpu` expose son backend** (`wgpu::Backend`), et acceptera une préférence de
+backend : Spout exige DX12 sous Windows (§8.1). Si l'adaptateur obtenu ne convient pas,
+c'est l'ouverture de la sortie qui échoue — en édition, avec un message.
+
+**Ce que l'étape 6 implémente :** le contrat complet, l'étage `Outputs` et sa
+politique `Realtime`/`Fixed`, la passe de conversion, la preview (`GpuSink`) et des
+sorties factices pour les tests. Le chemin CPU est typé et testé ; sa seule
+implémentation réelle utilise la relecture **synchrone** existante, autorisée en
+`Fixed` seulement (§8.2). L'anneau asynchrone arrive à l'étape 10.
 
 ### 8.1 Partage inter-applications
 
@@ -587,6 +695,38 @@ consomment déjà. Spout et Syphon sont une **optimisation tardive** — ils exp
 handles de textures natives (D3D11, IOSurface) dont la récupération depuis wgpu exige
 de descendre dans `wgpu-hal`, en `unsafe` spécifique à chaque backend.
 
+**Ce qu'ils ne transportent pas : une image.** Ils partagent un handle vers une texture
+GPU ; le récepteur (Resolume, TouchDesigner, OBS) lit la même mémoire vidéo. Ni
+relecture, ni encodage, latence quasi nulle — c'est tout leur intérêt, et c'est
+pourquoi ce sont des `GpuSink` (§8.0). Un repli par le chemin CPU (relire, puis
+réenvoyer en mémoire) serait simple et sans `unsafe`, mais perdrait cet intérêt.
+
+| | Spout (Windows) | Syphon (macOS) | Linux |
+|---|---|---|---|
+| Partagé | texture **D3D11**, handle partagé DXGI | texture Metal adossée à une **IOSurface** | pas de standard équivalent : DMA-BUF via PipeWire plus tard, NDI d'ici là |
+| Backend wgpu | **DX12** (interop vers D3D11) ; Vulkan possible mais bien plus lourd | Metal (seul backend) | — |
+| Liaison | bibliothèque C++ SpoutDX, ou protocole Spout réimplémenté sur la crate `windows` | `Syphon.framework` (BSD) via `objc2`, embarqué dans le bundle | — |
+
+**Points d'accès vérifiés dans wgpu 30.0.1** (en `unsafe`) : `Texture::as_hal` rend la
+ressource native (`ID3D12Resource`, `MTLTexture`) ; `Device::create_texture_from_hal`
+fait l'inverse — allouer soi-même une texture partageable et la présenter à wgpu comme
+une texture ordinaire ; `Queue::as_hal` et `Device::as_hal` donnent la file et le
+device natifs pour la synchronisation. Pas de fork de wgpu nécessaire. Mais
+`wgpu-hal` est **moins stable** que l'API publique : chaque montée de majeure peut
+casser Spout et Syphon — une raison de plus à l'épinglage du §11.
+
+**Impacts à l'étape 11, gradés :**
+
+| Impact | Effort | Risque |
+|---|---|---|
+| **`unsafe` par backend**, confiné dans `output/spout.rs` et `output/syphon.rs` sous `cfg` ; aucune autre crate n'en contient | élevé | élevé — une faute de synchronisation donne des images déchirées ou un plantage pilote, pas une erreur Rust |
+| **Synchronisation entre processus** : le récepteur ne lit qu'une fois notre rendu terminé (fence partagée, ou flush + attente, ou le verrou propre à Spout) — c'est le rôle de `after_submit` | élevé | élevé — intermittent, dépend du pilote |
+| **Backend imposé** : sous Vulkan, Spout est indisponible ; l'ouverture rend `Err` (§8.0) | faible | moyen |
+| **Même GPU des deux côtés** : sur un portable à deux GPU (Optimus), émetteur et récepteur peuvent être sur deux adaptateurs ; se détecte, s'affiche en `status()` | faible | moyen |
+| **Format 8 bits** (BGRA8 ou RGBA8 attendu par les récepteurs) : la passe de conversion unique du §8.0 écrit directement dans la texture partagée | faible | faible |
+| **Tests en boucle locale** : le test ouvre lui-même le handle partagé (device D3D11 ou client Syphon dans le même processus), relit et compare ; sauté proprement hors Windows / macOS ou sans GPU (§24.3). Un vrai récepteur se vérifie à la main | moyen | moyen |
+| **Dépendances natives** : bibliothèque Spout ou protocole réimplémenté ; framework Syphon embarqué | moyen | moyen |
+
 ### 8.2 Enregistrement
 
 **Le piège :** la lecture GPU → CPU est **asynchrone**. Lire la frame immédiatement
@@ -601,6 +741,11 @@ de 20 fps pendant un enregistrement.
 première image et les tests de pixels, et **interdit** dans la boucle live. L'anneau
 ci-dessus arrive avec l'enregistrement (étape 10, §12) ; ne pas réutiliser la version
 synchrone pour cela.
+
+**L'anneau vit dans l'étage de sortie (`Outputs`, §8.0), une seule fois**, quel que
+soit le nombre de sorties CPU actives. Il relit la texture **déjà convertie en 8 bits
+sRGB** (4 octets par pixel, pas 8). Chaque `CpuFrame` porte le `t` et l'`index` de la
+frame relue, pas ceux de la frame en cours de rendu.
 
 **Deux modes, adossés à `Clock` (§4) :**
 
@@ -653,7 +798,7 @@ frogenx/
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController ✅ (core, shape)
 ├── layer/     # Gpu, trait RenderLayer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
-├── output/    # OutputSink : preview / NDI / Spout / Syphon / Art-Net / recorder
+├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB : preview / NDI / Spout / Syphon / Art-Net / recorder
 └── ui/        # egui : grille de clips, rack par clip, monitoring
 ```
 
@@ -694,9 +839,10 @@ lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rô
 selon `ClipSource`, référencer une chaîne de `shape::ShapeOp` ou de son équivalent
 `scene3d` — même principe de dépendance que ci-dessus, appliqué symétriquement.
 
-**`scene3d` suit la même règle que `shape`.** Primitives 3D (maillages, caméra,
-lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rôle que
-`shape` jouait pour le 2D, étendu à la 3D plutôt que remplacé.
+**`output` dépend de `layer` et `render`, et c'est la seule crate autorisée à contenir
+de l'`unsafe`** — confiné aux modules Spout et Syphon, sous `cfg` (§8.1). L'étage de
+sortie, la politique de perte et la passe de conversion n'en contiennent pas : la
+politique `Realtime`/`Fixed` se teste avec des sorties factices, sans GPU ni fenêtre.
 
 **Règle de dépendance :** les flèches vont vers le haut de la liste. `core` ne dépend
 de rien. `shape`/`scene3d` ne connaissent ni wgpu ni l'audio. `render` ne sait pas ce
@@ -754,7 +900,7 @@ couches complètes empilées.
 | 3b | ✅ Primitives + opérateurs de formes | polylignes testables — *fait* |
 | 4 | ✅ `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** — *fait* |
 | 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
-| 6 | `OutputSink` + preview | pipeline de sortie en place |
+| 6 | `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** |
 | 7 | LFO câblé sur une fréquence, depuis un clip de la grille | **le modulaire prend vie dans la grille** |
 | 8 | Audio → features → `Signal` | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
@@ -801,6 +947,14 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | Feedback au niveau couche, pas signal | délai d'une frame bien défini, DAG préservé |
 | Audio via buffers lock-free | le callback temps réel ne peut ni allouer ni bloquer |
 | NDI avant Spout / Syphon | seule techno des trois plateformes ; les autres sont `unsafe` et tardives |
+| **Deux traits de sortie, `GpuSink` et `CpuSink`**, réunis dans `enum OutputSink` (§8.0) | une sortie ne peut pas recevoir la mauvaise forme de frame, garanti à la compilation ; la relecture GPU → CPU, l'opération la plus chère, n'est payée que si une sortie CPU est active |
+| **Une relecture unique partagée** (`Arc<[u8]>`) entre toutes les sorties CPU (§8.0, §8.2) | NDI + enregistrement actifs ne paient pas deux relectures ; l'anneau du §8.2 n'existe qu'à un endroit |
+| **Pas de `Result` par frame** : ouverture → `Result`, puis `status()` (`Active`/`Degraded`/`Failed`) (§8.0) | une erreur par frame contredit le §18.1 ; un échec silencieux perd un enregistrement sans que personne ne le voie — le statut le rend visible sans interrompre |
+| **`GpuSink` en deux phases** (`encode` / `after_submit`) (§8.0) | `surface.present()`, le signal Spout et la publication Syphon viennent tous **après** `queue.submit` ; une seule méthode obligerait chaque sortie à soumettre son propre encodeur |
+| **Politique de perte portée par l'étage `Outputs`**, pas par chaque sortie (§8.0) | `Realtime` perd et compte, `Fixed` attend : écrit une fois et testé ; décidé six fois, une erreur suffirait à trouer un rendu offline |
+| **`index` de frame croissant** dans chaque frame de sortie (§8.0) | rend une perte détectable par la sortie elle-même, et le test « sans perte en `Fixed` » exact |
+| **Passe de conversion 8 bits sRGB unique**, avant la relecture (§8.0, §21) | trois consommateurs (preview, Spout/Syphon, chemin CPU) ; convertir avant de relire divise par deux les octets lus |
+| **`unsafe` confiné à `output`**, modules Spout/Syphon sous `cfg` (§8.1, §10) | l'interop de textures natives l'exige (`as_hal`, `create_texture_from_hal`) ; le confiner garde le reste du projet sûr et la surface de risque lisible |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
 | **Grille de clips (Deck/LayerGroup/Layer/Column) comme structure d'organisation** (§3bis) | répond à « quoi joue, quand » ; un patch modulaire unique ne permet pas de changer de répertoire de visuels à chaud en live |
@@ -814,7 +968,6 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`composition` dépend de `shape`**, pas seulement de `core` (§10) | `Clip.effects` référence une chaîne `ShapeOp` dont le type vit dans `shape` ; `shape` elle-même ne connaît ni GPU ni carte son, donc cette dépendance ne casse pas la testabilité sans GPU qui motive la règle de dépendance, elle déplace seulement la position de `composition` dans la chaîne |
 | **`Transport`/`Clip` ne dérivent pas `serde` directement** (§3bis.5) | ils portent un `Param`/`NodeId` de `core`, qui ne dérive pas `serde` lui-même — leur forme sérialisée passe par le schéma JSON nommé du format de patch (§19.1), pas par un `derive` sur la structure en mémoire |
 | **`CrossFader` global en plus de `BlendParams` par couche** (§3bis.4) | le geste de régie mélange deux groupes entiers ; `BlendParams` mélange une couche avec celle du dessous — les deux répondent à des échelles différentes |
-| **`composition` ne dépend que de `core`** (§10) | la grille doit rester testable sans GPU ni audio, pour la même raison que `core`/`osc`/`shape` |
 | **La grille (étape 4) précède le rendu (étape 5)** (§12) | toutes les étapes suivantes s'y raccrochent ; construire par-dessus une grille déjà en place évite une réécriture |
 | **Lua (`mlua`) pour le scripting de composition**, pas Rhai (§23.4) | maturité et vitesse l'emportent sur la pureté Rust pour un langage écrit en direct par l'utilisateur ; Rhai rapporté plus lent et sans LSP |
 | **`egui`, pas `iced`, pour la crate `ui`** (§23) | intégration wgpu directe (texture native en quelques lignes), écosystème node-graph existant (`egui_node_graph`, `egui-snarl`), et mode immédiat qui lit/écrit l'état du `Graph` sans state parallèle — `iced` imposerait une machine `Message`/`update()` en plus, contre l'invariant « l'état vit dans le graphe » |
@@ -893,7 +1046,7 @@ concrètement, par étage du §1 :
 | **Audio** | features sur signaux **synthétiques** (sinus pur → centroïde connu ; silence → RMS nul) |
 | **Tessellation** | sans GPU : un contour fermé produit des triangles qui couvrent son aire, un contour ouvert n'est jamais rempli, plusieurs contours restent disjoints (pas de triangle à cheval), un contour dégénéré (moins de 3 points, points confondus, non-fini) rend zéro triangle sans paniquer |
 | **Couches** | par relecture de pixels, sur un GPU s'il existe : un carré plein au centre donne au pixel central la couleur **linéaire prémultipliée** attendue et laisse le coin transparent ; conversion sRGB → linéaire vérifiée sans GPU sur des valeurs de référence |
-| **Sorties** | un `OutputSink` factice reçoit bien les frames, dans l'ordre, sans perte en mode `Fixed` |
+| **Sorties** | sans GPU ni fenêtre, avec des `CpuSink` factices : en `Fixed`, une sortie lente reçoit les indices `0, 1, 2, …` sans trou ; en `Realtime`, elle perd des frames, les compte dans `Degraded { dropped }`, et la boucle ne ralentit pas ; une relecture n'a lieu que si une sortie CPU est active ; une sortie `Failed` n'est plus alimentée mais reste listée. Sur GPU s'il existe : la passe de conversion 8 bits donne les valeurs sRGB de référence (`linear_to_srgb`) ; un `GpuSink` factice voit `after_submit` appelé une fois par frame, après `encode` |
 | **Grille de composition** | construction/suppression dans la hiérarchie sans invalider les identifiants des niveaux non touchés (§3bis.1) ; une `Column` déclenche bien la même tranche sur tous les `Layer` (§3bis.1) ; `TempoController::tap` calcule un BPM correct sur une séquence d'événements synthétiques ; `CrossFader.phase` à 0/0.5/1 produit les `BlendParams::opacity` attendus sur les deux groupes (§3bis.4) ; `PositionSignal` avance déterministiquement à un `t`/`dt` injecté, jamais l'horloge système (§3bis.3) |
 
 **Ce qui rend cela possible :** la règle de dépendance du §10. `core`, `osc` et `shape`
@@ -905,8 +1058,8 @@ la testabilité du projet.**
 (§4), un test fixe `t` et vérifie une valeur exacte. C'est la seconde raison d'être de
 cette règle, après le rendu offline.
 
-**Pour ce qui touche au GPU et au matériel :** injecter une abstraction (un `OutputSink`
-factice, une source audio synthétique) plutôt que renoncer au test. Les tests
+**Pour ce qui touche au GPU et au matériel :** injecter une abstraction (un `GpuSink` ou
+`CpuSink` factice, une source audio synthétique) plutôt que renoncer au test. Les tests
 d'intégration réels restent utiles, mais ils ne remplacent pas les tests unitaires.
 
 ### 15.2 Toute modification met la documentation à jour
@@ -1337,9 +1490,17 @@ patch venu d'une version plus récente ne peut pas être deviné.
  6. Tessellation   → polylignes → triangles (lyon)
  7. Couches        → chacune rend vers sa texture
  8. Composition    → mélange vers la texture finale
- 9. Sorties        → chaque OutputSink reçoit la frame
+ 9. Sorties        → a. GpuSink::encode, passe 8 bits + copie de relecture (si une sortie CPU)
+                     b. queue.submit
+                     c. GpuSink::after_submit (present, signal Spout, publication Syphon)
+                     d. CpuFrame déposée dans la file de chaque CpuSink (§8.0)
 10. Diagnostics    → publiés vers l'UI, puis remis à zéro
 ```
+
+**L'étape 9 est en deux temps autour de la soumission** (§8.0) : ce qui doit
+s'enregistrer dans l'encodeur avant `submit`, ce qui ne peut venir qu'après. La
+`CpuFrame` déposée en (d) est, avec l'anneau du §8.2, celle d'une frame antérieure ;
+elle porte son propre `t`.
 
 **Le graphe est entièrement évalué (4) avant que la moindre forme ne soit générée
 (5).** C'est ce qui rend `Param::get()` sans coût et sans effet de bord, et ce qui
@@ -1362,8 +1523,8 @@ cette séparation, l'ordre de génération influencerait le résultat.
 │  lecture seule      │
 └──────────┬──────────┘
            ▼
-┌─ thread encodeur ───┐   readback GPU → pipe ffmpeg
-└─────────────────────┘
+┌─ un thread par CpuSink ─┐   NDI, pipe ffmpeg, Art-Net — file bornée tenue par Outputs
+└─────────────────────────┘
 ```
 
 **Règles de thread, chacune correspondant à un mode de défaillance réel :**
@@ -1372,9 +1533,13 @@ cette séparation, l'ordre de génération influencerait le résultat.
   produit des clics audibles.
 - Le thread principal **ne bloque jamais** sur l'audio. `triple_buffer` rend la
   dernière valeur disponible ; si l'analyse est en retard, on relit la précédente.
-- L'encodeur a **2 à 3 frames de retard** (§8.2) et ne doit jamais faire attendre le
-  rendu. S'il décroche en mode `Realtime`, on perd une frame — c'est le comportement
-  voulu. En mode `Fixed`, le rendu attend : aucune frame n'est perdue.
+- Les sorties CPU ont **2 à 3 frames de retard** (§8.2) et ne doivent jamais faire
+  attendre le rendu. Si l'une décroche en mode `Realtime`, on perd une frame — c'est le
+  comportement voulu, compté dans son `status()`. En mode `Fixed`, le rendu attend :
+  aucune frame n'est perdue. Cette politique appartient à l'étage `Outputs`, pas aux
+  sorties (§8.0).
+- Les sorties GPU (preview, Spout, Syphon) restent sur le thread principal, où vit la
+  surface de la fenêtre.
 
 ### 20.3 Déterminisme
 
@@ -1414,7 +1579,11 @@ jouent. Le coût mémoire est le double — acceptable.
 automatiquement à la lecture et à l'écriture. Mélanger une cible `Rgba8UnormSrgb` et
 une `Rgba16Float` dans la même chaîne produit une double conversion — image délavée ou
 trop sombre. **Une seule règle : tout ce qui est intermédiaire est `Rgba16Float`
-linéaire ; seule la surface de présentation est `*Srgb`.**
+linéaire ; seules les cibles finales sont 8 bits encodées sRGB** — la surface de
+présentation, la texture partagée Spout/Syphon, la texture relue pour les sorties CPU.
+Toutes trois sont écrites par **la même passe de conversion** (§8.0) : l'encodage sRGB
+existe à un seul endroit, qu'il soit fait par le matériel (format `*Srgb`) ou dans le
+shader (cible `Unorm` que le récepteur lit comme du sRGB, cas fréquent de Spout).
 
 **Alpha prémultiplié** dans toute la chaîne de composition — sinon les bords des formes
 tessellées présentent un liseré sombre au mélange.

@@ -22,7 +22,7 @@ crates/composition/  grille : Deck/Layer/Column/Clip, tempo    ← core, shape  
 crates/audio/        cpal, FFT, features → Signal
 crates/layer/        Gpu, trait RenderLayer, ShapeLayer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
-crates/output/       OutputSink : preview / NDI / Spout / Syphon / recorder
+crates/output/       GpuSink / CpuSink, étage Outputs : preview / NDI / Spout / Syphon / recorder ← layer, render, winit
 crates/ui/           egui : grille de clips, rack, câblage, monitoring
 ```
 
@@ -46,6 +46,9 @@ ce qui autorise `composition → shape` (§10).
 Dans `layer`, la tessellation reste un **module qui ne connaît pas wgpu** : la crate
 dépend du GPU, mais ce module-là reste testable sans (§10, §24.3).
 
+**`unsafe` : seulement dans `output`**, confiné aux modules Spout et Syphon sous `cfg`
+(interop de textures natives via `as_hal`, §8.1). Partout ailleurs, aucun.
+
 **Avant d'ajouter une dépendance à un `Cargo.toml` :** vérifier le sens de la flèche. Si
 `shape` a besoin de quelque chose de `render`, l'abstraction est au mauvais endroit —
 c'est presque toujours un trait qui devrait descendre dans `core`.
@@ -64,16 +67,16 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 | Tessellation | `lyon_tessellation` | ✅ (layer) |
 | GPU, utilitaires | `bytemuck`, `pollster` | ✅ (layer, render) |
 | Image | `png` | ✅ (render) |
+| Fenêtrage | `winit` | étape 6 (output) |
+| UI | `egui` | à venir |
+| Audio | `cpal`, `rustfft` | à venir |
+| Lock-free | `rtrb`, `triple_buffer` | à venir |
 
 **Avant d'écrire du code wgpu, lire les signatures dans les sources de la version
 épinglée** (`~/.cargo/registry/src/*/wgpu-30*`, `wgpu-types-30*`), pas de mémoire :
 d'une majeure à l'autre, `PipelineLayoutDescriptor` a pris des `Option` et
 `immediate_size`, `multiview` est devenu `multiview_mask`, `get_mapped_range` rend un
-`Result`, `request_adapter` aussi.
-| Fenêtrage | `winit` | étape 6 |
-| UI | `egui` | à venir |
-| Audio | `cpal`, `rustfft` | à venir |
-| Lock-free | `rtrb`, `triple_buffer` | à venir |
+`Result`, `request_adapter` aussi. Même règle pour `winit` et pour l'interop `as_hal`.
 
 **`wgpu` est épinglé à une majeure, et `rust-version` suit son minimum** (§11). wgpu
 change d'API à chaque majeure, environ tous les trois mois : une montée de version est
