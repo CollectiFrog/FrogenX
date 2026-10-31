@@ -2,9 +2,10 @@
 //!
 //! Un `Signal` se reconstruit par le `from_spec` de son type. Le compilateur
 //! impose `Signal::spec` à tout nouveau type, pas son entrée ici : le test du
-//! parcours complet du catalogue, et celui de cette table, le rappellent.
+//! parcours complet du catalogue, et celui de cette table, le rappellent. Le
+//! format de fichier et l'éditeur de nœuds s'en servent tous deux.
 
-use frogenx_composition::{BeatRate, PositionSignal};
+use crate::position::{BeatRate, PositionSignal};
 use frogenx_core::{Constant, Signal, Spec, SpecError};
 use frogenx_osc::{
     AudioFeature, Divider, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold,

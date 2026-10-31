@@ -5,8 +5,8 @@
 
 use frogenx_app::Engine;
 use frogenx_composition::{
-    Clip, ClipId, Command, Composition, LayerId, ParamSlot, PlayMode, Transport, TrigSlot,
-    TrigTarget,
+    Clip, ClipId, Command, Composition, GraphScope, LayerId, NodeKind, ParamSlot, ParamTarget,
+    PlayMode, Transport, TrigSlot, TrigTarget,
 };
 use frogenx_core::{
     AnalysisMethod, AnalysisSettings, AudioFeatures, Clock, Constant, Ctx, FeatureKind, FreqScale,
@@ -16,7 +16,7 @@ use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
 use frogenx_output::{
     CpuFrame, CpuSink, GpuFrame, GpuSink, OutputError, OutputSink, PngSequenceSink, SinkStatus,
 };
-use frogenx_shape::{FeedbackParams, Rect};
+use frogenx_shape::{EffectKind, FeedbackParams, Rect};
 use glam::UVec2;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -965,6 +965,110 @@ fn le_son_module_un_echo() {
     }
     moteur.finish();
     assert!(recu.dernier_pixel(SIZE.x / 2, SIZE.y / 2)[3] > 200);
+}
+
+#[test]
+fn un_flash_de_trig_cable_dans_l_editeur_allume_une_piste() {
+    let Some(gpu) = gpu() else { return };
+    let (mut composition, piste, rouge, _) = une_piste();
+    composition.trigger(piste, rouge);
+    let trig = composition.add_default_trig().unwrap();
+    let flash = composition.trig(trig).unwrap().flash();
+    let (mut moteur, recu) = moteur(gpu, composition);
+
+    let target = ParamTarget::LayerOpacity(piste);
+    moteur.push(Command::SetTargetBase { target, value: 0.0 });
+    moteur.push(Command::Connect {
+        target,
+        source: flash,
+    });
+    moteur.set_audio(son(0.0));
+    moteur.frame(0.0);
+    moteur.frame(0.0);
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    moteur.frame(0.0);
+    moteur.finish();
+    assert!(moteur.is_dirty(), "un câble est une modification");
+
+    let frames = recu.0.lock().unwrap();
+    let centre = |i: usize| pixel(&frames[i], SIZE.x / 2, SIZE.y / 2);
+    assert_eq!(centre(1)[3], 0, "silence : la piste est éteinte");
+    assert!(centre(3)[3] > 100, "le coup l'allume : {:?}", centre(3));
+}
+
+#[test]
+fn un_noeud_ajoute_et_cable_module_l_image() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    let scope = GraphScope::Clip(rouge);
+    moteur.push(Command::AddNode {
+        scope,
+        kind: NodeKind::Constant,
+    });
+    moteur.frame(0.0);
+
+    let graphe = moteur.composition().graph_of(scope).unwrap();
+    let constante = graphe
+        .nodes()
+        .iter()
+        .find(|n| n.spec.kind == "Constant")
+        .unwrap()
+        .id;
+    let target = ParamTarget::ClipParam {
+        clip: rouge,
+        slot: ParamSlot::Generator(0),
+    };
+    moteur.push(Command::Connect {
+        target,
+        source: constante,
+    });
+    moteur.push(Command::SetTargetBase { target, value: 0.0 });
+    moteur.push(Command::SetTargetDepth { target, value: 0.0 });
+    moteur.frame(0.0);
+    moteur.push(Command::SetTargetDepth { target, value: 1.0 });
+    moteur.frame(0.0);
+    moteur.finish();
+
+    let frames = recu.0.lock().unwrap();
+    let centre = |i: usize| pixel(&frames[i], SIZE.x / 2, SIZE.y / 2);
+    assert_eq!(centre(1)[3], 0, "amplitude nulle : largeur nulle");
+    assert_eq!(centre(2)[0], 255, "la constante rend sa largeur au carré");
+}
+
+#[test]
+fn un_effet_ajoute_change_l_image_a_la_frame_suivante() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    moteur.frame(0.0);
+    moteur.push(Command::AddEffect {
+        clip: rouge,
+        kind: EffectKind::Transform,
+    });
+    moteur.push(Command::SetParam {
+        clip: rouge,
+        slot: ParamSlot::Effect {
+            effect: 0,
+            param: 0,
+        },
+        value: 0.1,
+    });
+    moteur.frame(0.0);
+    moteur.finish();
+    let frames = recu.0.lock().unwrap();
+    let bord = |i: usize| pixel(&frames[i], SIZE.x * 3 / 8, SIZE.y / 2);
+    assert_eq!(bord(0)[0], 255, "dans le carré");
+    assert_eq!(bord(1)[3], 0, "réduit au dixième, il n'y arrive plus");
 }
 
 #[test]

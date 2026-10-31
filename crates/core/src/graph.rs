@@ -221,6 +221,36 @@ impl Graph {
         Ok(())
     }
 
+    /// Comme [`Self::replace`], mais ses dépendances suivent les sources de ses
+    /// `Param` : c'est le câblage de l'éditeur (§23.10). Une source périmée ne
+    /// compte pas, et un cycle est refusé sans rien changer.
+    pub fn rewire(&mut self, node: NodeId, signal: Box<dyn Signal>) -> Result<(), GraphError> {
+        if !self.is_live(node) {
+            return Err(GraphError::StaleNode);
+        }
+        let mut deps: Vec<NodeId> = signal
+            .spec()
+            .params_flat()
+            .iter()
+            .filter_map(|p| p.source())
+            .filter(|s| self.is_live(*s))
+            .collect();
+        deps.dedup();
+        if deps.iter().any(|d| *d == node || self.reaches(*d, node)) {
+            return Err(GraphError::WouldCycle);
+        }
+        self.replace(node, signal)?;
+        self.slots[node.index() as usize].deps = deps;
+        self.order_dirty = true;
+        Ok(())
+    }
+
+    /// `node` pourrait-il lire `source` ? L'éditeur le demande avant de proposer
+    /// un branchement.
+    pub fn can_connect(&self, node: NodeId, source: NodeId) -> bool {
+        self.is_live(node) && self.is_live(source) && node != source && !self.reaches(source, node)
+    }
+
     /// La mémoire d'un nœud, vide pour un nœud périmé. Pour l'affichage : un
     /// `Signal` documente ses slots, c'est son seul contrat de lecture.
     pub fn node_state(&self, node: NodeId) -> &[f32] {

@@ -13,8 +13,8 @@ frogenx-composition.workspace = true
 frogenx-core.workspace = true
 frogenx-library.workspace = true
 frogenx-osc.workspace = true
+frogenx-shape.workspace = true
 egui.workspace = true
 
 [dev-dependencies]
-frogenx-shape.workspace = true
 egui_kittest.workspace = true

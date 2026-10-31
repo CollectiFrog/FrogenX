@@ -107,16 +107,17 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   passe de conversion 8 bits sRGB, `PresentSurface`, `Preview`, `MonitorSink`,
   `PngSequenceSink`. `fanout` (files bornées, politique
   de perte) ne connaît pas wgpu. `output` ne connaît pas `winit`.
-- `crates/ui` : l'interface, fonction de l'état. Lit la grille, rend des `Command` et des
+- `crates/ui` : l'interface, fonction de l'état, et l'éditeur de nœuds (`nodes.rs`). Lit la grille, rend des `Command` et des
   `Placement` pour les clips glissés depuis la bibliothèque. Ne
   connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
-  `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés. `file_flow.rs`
+  `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés, `node_window.rs`
+  celle de l'éditeur de nœuds. `file_flow.rs`
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
-**Prochaine étape : l'éditeur de nœuds, à trancher.** Le backlog complet est au §12.1, à tenir
-à jour.
+**Prochaine étape : à choisir au §12.1**, le backlog à tenir à jour. L'éditeur de nœuds est fait
+(§23.10) : tout câblage passe par `Composition::connect` et ses commandes.
 Le BPM et les features n'ont pas encore été essayés sur de la vraie musique (§7.1).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 

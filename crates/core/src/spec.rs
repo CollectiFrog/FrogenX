@@ -109,6 +109,59 @@ impl Spec {
         self.fields.iter().find(|(n, _)| n == name).map(|(_, v)| v)
     }
 
+    /// Ses `Param`, listes dépliées : ce que l'éditeur appelle ses entrées.
+    pub fn params_flat(&self) -> Vec<Param> {
+        let mut params = Vec::new();
+        for (_, value) in &self.fields {
+            match value {
+                SpecValue::Param(p) => params.push(*p),
+                SpecValue::Params(list) => params.extend_from_slice(list),
+                _ => {}
+            }
+        }
+        params
+    }
+
+    /// Le nom de chaque entrée, dans l'ordre de [`Self::params_flat`].
+    pub fn inputs(&self) -> Vec<String> {
+        let mut noms = Vec::new();
+        for (name, value) in &self.fields {
+            match value {
+                SpecValue::Param(_) => noms.push(name.clone()),
+                SpecValue::Params(list) => {
+                    noms.extend((0..list.len()).map(|i| format!("{name} {}", i + 1)));
+                }
+                _ => {}
+            }
+        }
+        noms
+    }
+
+    /// Écrit la `index`-ième entrée. Rend `false` si elle n'existe pas.
+    pub fn set_flat(&mut self, index: usize, param: Param) -> bool {
+        let mut reste = index;
+        for (_, value) in &mut self.fields {
+            match value {
+                SpecValue::Param(p) => {
+                    if reste == 0 {
+                        *p = param;
+                        return true;
+                    }
+                    reste -= 1;
+                }
+                SpecValue::Params(list) => {
+                    if let Some(p) = list.get_mut(reste) {
+                        *p = param;
+                        return true;
+                    }
+                    reste -= list.len();
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// L'erreur d'un champ absent ou mal typé.
     pub fn field_error(&self, name: &str) -> SpecError {
         SpecError::Field {
@@ -212,6 +265,20 @@ mod tests {
         let spec = Spec::new("Test").with("i", 2u32).with("n", 2.5);
         assert_eq!(spec.number("i"), Ok(2.0));
         assert!(spec.int("n").is_err());
+    }
+
+    #[test]
+    fn les_entrees_deplient_les_listes_dans_l_ordre() {
+        let (a, b, c) = (Param::fixed(1.0), Param::fixed(2.0), Param::fixed(3.0));
+        let mut spec = Spec::new("Test")
+            .with("mot", "sine")
+            .with("a", a)
+            .with("liste", vec![b, c]);
+        assert_eq!(spec.params_flat(), vec![a, b, c]);
+        assert_eq!(spec.inputs(), ["a", "liste 1", "liste 2"]);
+        assert!(spec.set_flat(2, a));
+        assert_eq!(spec.params_flat(), vec![a, b, a]);
+        assert!(!spec.set_flat(3, a));
     }
 
     #[test]

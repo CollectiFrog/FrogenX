@@ -10,6 +10,42 @@ use crate::parametric::{Lissajous, Rose, Superformula};
 use crate::primitives::{Arc, Ellipse, Polygon, Rect, Star};
 use frogenx_core::{Spec, SpecError};
 
+/// Ce qu'on peut ajouter à un clip (§23.10). Copiable, pour voyager dans une
+/// commande.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectKind {
+    Deform,
+    Noise,
+    RadialRepeat,
+    Transform,
+    Smooth,
+}
+
+impl EffectKind {
+    pub const ALL: [EffectKind; 5] = [
+        EffectKind::Deform,
+        EffectKind::Noise,
+        EffectKind::RadialRepeat,
+        EffectKind::Transform,
+        EffectKind::Smooth,
+    ];
+
+    /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
+    pub fn build(self) -> Box<dyn ShapeOp> {
+        match self {
+            EffectKind::Deform => Box::new(Deform::new(0.0, 5.0)),
+            EffectKind::Noise => Box::new(NoiseDisplace::new(0.0, 3.0, 1)),
+            EffectKind::RadialRepeat => Box::new(RadialRepeat::new(1.0)),
+            EffectKind::Transform => Box::new(Transform::default()),
+            EffectKind::Smooth => Box::new(Smooth::new(0.0, 0.5)),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        self.build().kind()
+    }
+}
+
 /// Le générateur que décrit `spec`.
 pub fn generator_from_spec(spec: &Spec) -> Result<Box<dyn ShapeGenerator>, SpecError> {
     let mut forme: Box<dyn ShapeGenerator> = match spec.kind.as_str() {
@@ -131,6 +167,15 @@ mod tests {
             noms.sort_unstable();
             noms.dedup();
             assert_eq!(noms.len(), params.len());
+        }
+    }
+
+    #[test]
+    fn chaque_effet_s_ajoute_et_se_decrit() {
+        for kind in EffectKind::ALL {
+            let effet = kind.build();
+            assert!(op_from_spec(&effet.spec()).is_ok(), "{}", kind.label());
+            assert!(!kind.label().is_empty());
         }
     }
 

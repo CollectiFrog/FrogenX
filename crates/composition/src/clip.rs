@@ -302,6 +302,18 @@ impl Clip {
         true
     }
 
+    /// Remplace un paramètre entier, source comprise (§23.10). Rend `false` si
+    /// `slot` ne désigne rien.
+    pub fn replace_param(&mut self, slot: ParamSlot, param: Param) -> bool {
+        match self.param_mut(slot) {
+            Some(p) => {
+                *p = param;
+                true
+            }
+            None => false,
+        }
+    }
+
     fn param_mut(&mut self, slot: ParamSlot) -> Option<&mut Param> {
         let (generator, style) = match &mut self.source {
             ClipSource::Shape {

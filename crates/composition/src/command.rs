@@ -7,8 +7,10 @@ use crate::clip::ParamSlot;
 use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, DeckId, LayerId, TrigId};
 use crate::trig::{TrigSlot, TrigTarget};
-use frogenx_core::{AmpScale, AnalysisMethod, FeatureKind, FreqScale, Param};
+use crate::wiring::{GraphScope, NodeKind, NodeValue, ParamTarget};
+use frogenx_core::{AmpScale, AnalysisMethod, FeatureKind, FreqScale, NodeId, Param};
 use frogenx_osc::SpectrumZone;
+use frogenx_shape::EffectKind;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
@@ -91,6 +93,44 @@ pub enum Command {
     SetAnalysisWindow(f32),
     /// Le tempo suit, ou non, le BPM détecté (§7.1).
     SetTempoFollow(bool),
+    /// L'éditeur de nœuds (§23.10).
+    AddNode {
+        scope: GraphScope,
+        kind: NodeKind,
+    },
+    RemoveNode {
+        scope: GraphScope,
+        node: NodeId,
+    },
+    Connect {
+        target: ParamTarget,
+        source: NodeId,
+    },
+    Disconnect {
+        target: ParamTarget,
+    },
+    SetTargetBase {
+        target: ParamTarget,
+        value: f32,
+    },
+    SetTargetDepth {
+        target: ParamTarget,
+        value: f32,
+    },
+    SetNodeValue {
+        scope: GraphScope,
+        node: NodeId,
+        field: u8,
+        value: NodeValue,
+    },
+    AddEffect {
+        clip: ClipId,
+        kind: EffectKind,
+    },
+    RemoveEffect {
+        clip: ClipId,
+        index: usize,
+    },
     /// Branche une feature audio sur un paramètre du clip, ou l'en débranche.
     SetAudioModulation {
         clip: ClipId,
@@ -126,6 +166,15 @@ impl Command {
             | Self::SetTrigParam { .. }
             | Self::SetTrigTarget { .. }
             | Self::SetTempoFollow(_)
+            | Self::AddNode { .. }
+            | Self::RemoveNode { .. }
+            | Self::Connect { .. }
+            | Self::Disconnect { .. }
+            | Self::SetTargetBase { .. }
+            | Self::SetTargetDepth { .. }
+            | Self::SetNodeValue { .. }
+            | Self::AddEffect { .. }
+            | Self::RemoveEffect { .. }
             | Self::SetAudioModulation { .. }
             | Self::SetAnalysisMethod(_)
             | Self::SetFreqScale(_)
@@ -191,6 +240,20 @@ impl Composition {
                 self.tempo_follow = false;
                 true
             }
+            Command::AddNode { scope, kind } => self.add_node(scope, kind).is_some(),
+            Command::RemoveNode { scope, node } => self.remove_node(scope, node),
+            Command::Connect { target, source } => self.connect(target, source),
+            Command::Disconnect { target } => self.disconnect(target),
+            Command::SetTargetBase { target, value } => self.set_target_base(target, value),
+            Command::SetTargetDepth { target, value } => self.set_target_depth(target, value),
+            Command::SetNodeValue {
+                scope,
+                node,
+                field,
+                value,
+            } => self.set_node_value(scope, node, field, value),
+            Command::AddEffect { clip, kind } => self.add_effect(clip, kind),
+            Command::RemoveEffect { clip, index } => self.remove_effect(clip, index),
             Command::SetTempoFollow(suivre) => {
                 self.tempo_follow = suivre;
                 true
@@ -626,6 +689,48 @@ mod tests {
         c.apply(Command::SetTempoFollow(true), 0.0);
         assert!(!c.apply(Command::SetBpm(f32::NAN), 0.0));
         assert!(c.tempo_follow);
+    }
+
+    #[test]
+    fn le_cablage_passe_par_les_commandes_et_compte_comme_une_modification() {
+        let (mut c, ..) = grille();
+        let scope = GraphScope::Composition;
+        assert!(c.apply(
+            Command::AddNode {
+                scope,
+                kind: NodeKind::Lfo
+            },
+            0.0
+        ));
+        let source = c.graph().nodes()[0].id;
+        let target = ParamTarget::Tempo;
+        let connect = Command::Connect { target, source };
+        assert!(connect.is_edit());
+        assert!(c.apply(connect, 0.0));
+        assert!(c.apply(
+            Command::SetTargetDepth {
+                target,
+                value: 30.0
+            },
+            0.0
+        ));
+        assert!(c.apply(
+            Command::SetTargetBase {
+                target,
+                value: 100.0
+            },
+            0.0
+        ));
+        assert_eq!(c.tempo.tempo.depth(), Some(30.0));
+        assert_eq!(c.tempo.tempo.base(), 100.0);
+        assert!(c.apply(Command::Disconnect { target }, 0.0));
+        let retire = Command::RemoveNode {
+            scope,
+            node: source,
+        };
+        assert!(retire.is_edit());
+        assert!(c.apply(retire, 0.0));
+        assert!(!c.apply(retire, 0.0), "déjà retiré");
     }
 
     #[test]

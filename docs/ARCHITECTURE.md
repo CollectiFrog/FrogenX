@@ -514,8 +514,7 @@ L'identifiant, les dépendances et l'état sont conservés : déplacer une zone 
 compte. Refusé si la mémoire du module change (`GraphError::StateSizeMismatch`).
 `Graph::node_state` expose l'état d'un nœud en lecture, pour afficher le compte.
 
-**Non couvert.** L'interface ne sait pas
-brancher `flash` sur un `Param` : ce câble s'écrit en code, jusqu'à l'éditeur de nœuds. Le
+**Non couvert.** `flash` se branche sur un `Param` depuis l'éditeur de nœuds (§23.10). Le
 trig d'un `Column` déclenche sur le deck actif, comme tout `TriggerColumn`.
 
 ---
@@ -885,9 +884,9 @@ et peuvent demander un réglage. Le menu de clic droit à la vraie souris non pl
 au-delà de 150 BPM n'est pas garanti : 174 peut se lire 87.
 
 **Non couvert.** La phase : le tempo se cale, pas le battement. Une source audio sur
-l'opacité d'une piste ou la vitesse d'un clip, qui vivent dans le graphe de composition. Le
-réglage du lissage d'une source depuis l'interface : ses `Param` existent, sans
-potentiomètre, jusqu'à l'éditeur de nœuds. La chroma se lit mais ne se choisit pas au menu.
+l'opacité d'une piste ou la vitesse d'un clip au clic droit : elles vivent dans le graphe de
+composition, et se branchent depuis l'éditeur de nœuds (§23.10), comme le lissage d'une
+source et la chroma.
 
 ---
 
@@ -1344,7 +1343,7 @@ frogenx/
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, FeedbackRenderer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
-├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ✅ (library, composition, osc, core, egui)
+├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages, éditeur de nœuds ; rend des Command ✅ (library, composition, shape, osc, core, egui)
 └── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit, egui-wgpu, egui-winit ✅
 ```
 
@@ -1544,35 +1543,35 @@ qui les livre (skill `doc-sync`).
 | Modulation par le son | source audio au clic droit de chaque potentiomètre (§7.1) |
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
+| Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
 | Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
 
 **À faire, dans l'ordre conseillé**
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Éditeur de nœuds, sans numéro | rend accessibles les câblages encore réservés au code : un `flash` de trig sur une opacité, un effet ajouté à un clip, le lissage d'une source | grande |
-| 2 | Sources audio sur l'opacité et la vitesse | elles vivent dans le graphe de composition : pas encore de menu | petite |
-| 3 | Annuler et rétablir | l'architecture par `Command` le permet ; rien n'est branché | moyenne |
-| 4 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
-| 5 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
-| 6 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
-| 7 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 8 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 9 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
-| 10 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
-| 11 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 12 | Scène 3D, étape 13 | | très grande |
-| 13 | Art-Net / DMX, étape 14 | | moyenne |
-| 14 | Scripting Lua, étape 15 | | moyenne |
-| 15 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 16 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Annuler et rétablir | l'architecture par `Command` le permet ; rien n'est branché | moyenne |
+| 2 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
+| 3 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
+| 4 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
+| 5 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 6 | Recalage de la phase du tempo |
+| 7 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 8 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
+| 9 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
+| 10 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 11 | Scène 3D, étape 13 | | très grande |
+| 12 | Art-Net / DMX, étape 14 | | moyenne |
+| 13 | Scripting Lua, étape 15 | | moyenne |
+| 14 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 15 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
 | Point | État |
 |---|---|
 | BPM, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
-| Menus `Sortie` et `Fichier`, clic droit des potentiomètres, à la vraie souris | validés par clics simulés seulement |
+| Menus `Sortie` et `Fichier`, clic droit des potentiomètres, fils de l'éditeur, à la vraie souris | validés par clics simulés seulement |
 | Projecteur, câble débranché, écran à une autre fréquence | jamais essayés (§8.4) |
 | Linux et macOS | jamais essayés |
 
@@ -2971,8 +2970,8 @@ signale la sortie du pointeur quand le vrai curseur est ailleurs, sans que cela 
 redimensionnement, la réduction et la récupération d'une surface perdue n'ont pas été
 essayés.
 
-**Non couvert.** Les onglets et l'ajout d'effets à un clip viennent avec l'éditeur de
-nœuds. Les couleurs du style sont réglables par curseurs, canal par canal ; un sélecteur
+**Non couvert.** Les onglets et l'ajout d'effets à un clip sont dans l'éditeur de
+nœuds (§23.10). Les couleurs du style sont réglables par curseurs, canal par canal ; un sélecteur
 de couleur viendra après.
 
 ### 23.6 La bibliothèque de clips (étape 7c)
@@ -3252,6 +3251,30 @@ la durée d'analyse, l'opacité des pistes et la vitesse des clips actifs.
 
 **La place des nœuds n'est pas dans le fichier.** Elle se calcule par profondeur dans le graphe
 et se garde pour la session : un patch décrit ce qui joue, pas sa mise en page.
+
+**Brancher ne touche pas à la base.** Une source s'ajoute à la base du `Param` : une opacité à
+`1` modulée par un `flash` reste à `1`. Pour qu'un coup allume une piste, on met sa base à `0`
+puis on la branche. Débrancher rend cette base : mettre `0` en silence à sa place effacerait
+la piste au débranchement.
+
+**Valeurs affichées.** Seul le clip actif est évalué (§3bis.2) : le graphe d'un clip qui ne
+joue pas montre ses dernières valeurs.
+
+**Ce qui est vérifié, et comment.** Le câblage se teste sans fenêtre : cycles refusés sans
+rien changer, source d'un autre graphe refusée, nœud retiré qui rend leur base à ce qui le lit,
+nœuds tenus par le système, phase gardée pendant un réglage. L'éditeur se teste par clics
+simulés : tirer un fil, lâcher dans le vide, menus, boucle non proposée. De bout en bout, un coup
+dans le son traverse un trig et un câble posé par commandes et allume une piste à l'image, et un
+câblage complet se relit d'un fichier, qui reste stable. Sur la vraie fenêtre : le moteur reste à
+60 fps et 16,1 à 17,3 ms, l'éditeur présente chacune des 300 frames, et sa croix le ferme sans
+toucher à l'application. L'affichage de l'onglet `Régie` a été regardé sur une capture.
+
+**Pas encore essayés :** tirer un fil à la vraie souris, le menu du fond, et l'onglet `Clip` sur
+une capture. Le fil s'y dessine par clics simulés seulement.
+
+**Non couvert.** La place des nœuds se perd à la fermeture de l'application. Le déplacement d'un
+effet dans la chaîne, le zoom du canevas et l'annulation ne sont pas faits. Une opacité ou une
+vitesse ne reçoit qu'une source de la régie, jamais d'un clip : c'est le §3.
 
 ---
 

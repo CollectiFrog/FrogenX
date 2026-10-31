@@ -17,6 +17,7 @@
 
 mod files;
 mod gui;
+mod node_window;
 mod stage;
 
 use files::{Files, Reaction};
@@ -29,6 +30,7 @@ use frogenx_output::{MonitorSink, OutputSink};
 use frogenx_ui::OutputRequest;
 use glam::UVec2;
 use gui::Gui;
+use node_window::NodeWindow;
 use stage::Stage;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -48,7 +50,7 @@ const MONITOR_SIZE: UVec2 = UVec2::new(960, 540);
 /// 60 fps cible.
 const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
 
-const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN] [--patch FICHIER]";
+const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN] [--patch FICHIER] [--nodes]";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
@@ -59,6 +61,8 @@ struct Options {
     output: Option<usize>,
     /// Ouvre ce fichier, plutôt que le dernier (§23.8).
     patch: Option<PathBuf>,
+    /// Ouvre l'éditeur de nœuds dès le lancement : le vérifie sans souris (§23.10).
+    nodes: bool,
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -76,6 +80,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 options.output = Some(ecran.ok_or(USAGE)?);
             }
             "--patch" => options.patch = Some(args.next().ok_or(USAGE)?.into()),
+            "--nodes" => options.nodes = true,
             _ => return Err(format!("argument inconnu : {arg}\n{USAGE}")),
         }
     }
@@ -123,6 +128,8 @@ struct Running {
     audio: Option<AudioInput>,
     audio_status: String,
     stage: Stage,
+    /// Fermé tant qu'on ne l'a pas demandé : il ne coûte rien (§23.10).
+    nodes: Option<NodeWindow>,
     files: Files,
     rate: FrameRate,
     started: Instant,
@@ -175,6 +182,12 @@ impl Running {
         };
         println!("Audio : {audio_status}");
 
+        let nodes = if options.nodes {
+            Some(NodeWindow::open(event_loop, engine.gpu())?)
+        } else {
+            None
+        };
+
         let maintenant = Instant::now();
         let mut stage = Stage::new(maintenant);
         stage.refresh(event_loop, &window, &mut engine, maintenant);
@@ -193,6 +206,7 @@ impl Running {
             audio,
             audio_status,
             stage,
+            nodes,
             files,
             rate: FrameRate::new(FRAME_PERIOD),
             started: maintenant,
@@ -241,6 +255,13 @@ impl Running {
         self.stage
             .refresh(event_loop, &self.window, &mut self.engine, now);
         self.stage.recover(&self.engine);
+
+        if self.gui.take_nodes_request() {
+            self.open_nodes(event_loop);
+        }
+        if let Some(fenetre) = &mut self.nodes {
+            fenetre.draw(&mut self.engine, self.gui.selected_clip());
+        }
         self.last = now;
         self.frames += 1;
         self.deadline = next_deadline(self.deadline, now, FRAME_PERIOD);
@@ -258,10 +279,28 @@ impl Running {
         }
     }
 
+    /// Ouvre l'éditeur, ou le ramène devant s'il l'est déjà. Un échec se lit dans
+    /// le bilan : il n'arrête rien (§18.1).
+    fn open_nodes(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(fenetre) = &self.nodes {
+            fenetre.focus();
+            return;
+        }
+        match NodeWindow::open(event_loop, self.engine.gpu()) {
+            Ok(fenetre) => self.nodes = Some(fenetre),
+            Err(e) => eprintln!("Éditeur de nœuds impossible : {e}"),
+        }
+    }
+
     fn react(&mut self, reaction: Reaction, event_loop: &ActiveEventLoop) {
         match reaction {
             Reaction::Nothing => {}
-            Reaction::GridReplaced => self.gui.forget_grid(),
+            Reaction::GridReplaced => {
+                self.gui.forget_grid();
+                if let Some(fenetre) = &mut self.nodes {
+                    fenetre.forget_grid();
+                }
+            }
             Reaction::Quit => event_loop.exit(),
         }
     }
@@ -300,6 +339,9 @@ impl Running {
             self.gui.spent.as_secs_f64() * 1000.0 / self.frames.max(1) as f64,
             self.engine.output_statuses()
         );
+        if let Some(fenetre) = &self.nodes {
+            println!("Éditeur de nœuds : {} frames présentées", fenetre.presented);
+        }
         if let Some(presentees) = self.stage.presented() {
             println!("{}, {presentees} frames présentées", self.stage.status());
         }
@@ -335,6 +377,10 @@ impl ApplicationHandler for App {
         if id != running.window.id() {
             if running.stage.owns(id) {
                 running.on_output_event(event);
+            } else if let Some(fenetre) = &mut running.nodes {
+                if fenetre.owns(id) && fenetre.on_event(&event) {
+                    running.nodes = None;
+                }
             }
             return;
         }
@@ -424,6 +470,12 @@ mod tests {
                 ..Options::default()
             })
         );
+    }
+
+    #[test]
+    fn nodes_ouvre_l_editeur_au_lancement() {
+        assert!(parse(&["--nodes"]).unwrap().nodes);
+        assert!(!parse(&[]).unwrap().nodes);
     }
 
     #[test]

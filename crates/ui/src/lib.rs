@@ -12,6 +12,7 @@
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
 
 pub mod clip_panel;
+pub mod nodes;
 pub mod spectrum;
 pub mod theme;
 pub mod widgets;
@@ -123,6 +124,8 @@ pub struct UiState {
     pub show_settings: bool,
     pub show_library: bool,
     pub show_audio: bool,
+    /// L'utilisateur a demandé l'éditeur de nœuds : `app` ouvre sa fenêtre.
+    pub open_nodes: bool,
     /// Le trig réglé dans le panneau flottant ; aucun : le spectre reste dégagé.
     pub selected_trig: Option<TrigId>,
     /// Le geste en cours sur le spectre.
@@ -155,6 +158,7 @@ impl Default for UiState {
             show_settings: true,
             show_library: true,
             show_audio: true,
+            open_nodes: false,
             selected_trig: None,
             zone_gesture: None,
             known_trigs: None,
@@ -314,6 +318,11 @@ fn header(
             ui.checkbox(&mut state.show_settings, "Réglages");
             ui.checkbox(&mut state.show_audio, "Audio");
             ui.checkbox(&mut state.show_library, "Bibliothèque");
+            ui.separator();
+            if ui.button("Éditeur de nœuds").clicked() {
+                state.open_nodes = true;
+                ui.close();
+            }
         });
         ui.menu_button("Sortie", |ui| output_menu(ui, &view.output, output));
         ui.add_space(14.0);
@@ -1115,6 +1124,18 @@ mod tests {
         assert_eq!(etat.selected, None);
         assert_eq!(etat.zone_gesture, None);
         assert_eq!(etat.known_trigs, None);
+    }
+
+    #[test]
+    fn le_menu_demande_l_editeur_de_noeuds() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Affichage").click();
+        h.run();
+        h.get_by_label("Éditeur de nœuds").click();
+        h.run();
+        assert!(h.state().ui.open_nodes);
+        assert!(h.state().commands.is_empty());
     }
 
     #[test]

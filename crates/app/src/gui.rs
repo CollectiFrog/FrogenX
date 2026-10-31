@@ -4,6 +4,7 @@
 //! fait le lien : les événements `winit` vers egui, le dessin vers la surface.
 
 use frogenx_app::{describe_outputs, Engine};
+use frogenx_composition::ClipId;
 use frogenx_layer::Gpu;
 use frogenx_output::{FormatPreference, PresentSurface};
 use frogenx_ui::{
@@ -19,6 +20,69 @@ use winit::window::Window;
 pub struct Requests {
     pub output: Option<OutputRequest>,
     pub file: Option<FileRequest>,
+}
+
+/// Dessine une passe d'egui sur sa surface. Rend `true` si elle a été présentée :
+/// une fenêtre masquée saute sa frame.
+pub fn paint(
+    ctx: &egui::Context,
+    renderer: &mut egui_wgpu::Renderer,
+    surface: &mut PresentSurface,
+    gpu: &Gpu,
+    output: egui::FullOutput,
+) -> bool {
+    // Vidés, pas seulement lus : egui vérifie qu'ils ont été traités, y
+    // compris sur une frame sautée.
+    let mut textures = output.textures_delta;
+    for (id, deltas) in textures.set.drain() {
+        for delta in &deltas {
+            renderer.update_texture(&gpu.device, &gpu.queue, id, delta);
+        }
+    }
+    let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+    let mut presente = false;
+    if let Some(sortie) = surface.acquire(gpu) {
+        let (width, height) = surface.size();
+        let ecran = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [width, height],
+            pixels_per_point: output.pixels_per_point,
+        };
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("interface"),
+            });
+        let tampons =
+            renderer.update_buffers(&gpu.device, &gpu.queue, &mut encoder, &primitives, &ecran);
+        let vue = sortie.texture.create_view(&Default::default());
+        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("interface"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &vue,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let mut pass = pass.forget_lifetime();
+        renderer.render(&mut pass, &primitives, &ecran);
+        drop(pass);
+        gpu.queue
+            .submit(tampons.into_iter().chain([encoder.finish()]));
+        gpu.queue.present(sortie);
+        presente = true;
+    }
+    for id in textures.free.drain() {
+        renderer.free_texture(&id);
+    }
+    presente
 }
 
 pub struct Gui {
@@ -119,7 +183,7 @@ impl Gui {
         let mut placements = Vec::new();
         let mut demandes = Requests::default();
         let state = &mut self.state;
-        let output = self.ctx.run_ui(input, |ui| {
+        let mut output = self.ctx.run_ui(input, |ui| {
             // egui peut rejouer une passe : seule la dernière compte, sinon
             // un clic se déclencherait deux fois.
             commands.clear();
@@ -136,7 +200,7 @@ impl Gui {
             );
         });
         self.winit
-            .handle_platform_output(window, output.platform_output);
+            .handle_platform_output(window, std::mem::take(&mut output.platform_output));
         for command in commands {
             engine.push(command);
         }
@@ -147,65 +211,26 @@ impl Gui {
             }
         }
 
-        let gpu = engine.gpu();
-        // Vidés, pas seulement lus : egui vérifie qu'ils ont été traités, y
-        // compris sur une frame sautée.
-        let mut textures = output.textures_delta;
-        for (id, deltas) in textures.set.drain() {
-            for delta in &deltas {
-                self.renderer
-                    .update_texture(&gpu.device, &gpu.queue, id, delta);
-            }
-        }
-        let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
-        if let Some(sortie) = self.surface.acquire(gpu) {
-            let (width, height) = self.surface.size();
-            let ecran = egui_wgpu::ScreenDescriptor {
-                size_in_pixels: [width, height],
-                pixels_per_point: output.pixels_per_point,
-            };
-            let mut encoder = gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("interface"),
-                });
-            let tampons = self.renderer.update_buffers(
-                &gpu.device,
-                &gpu.queue,
-                &mut encoder,
-                &primitives,
-                &ecran,
-            );
-            let vue = sortie.texture.create_view(&Default::default());
-            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("interface"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &vue,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let mut pass = pass.forget_lifetime();
-            self.renderer.render(&mut pass, &primitives, &ecran);
-            drop(pass);
-            gpu.queue
-                .submit(tampons.into_iter().chain([encoder.finish()]));
-            gpu.queue.present(sortie);
-            self.presented += 1;
-        }
-        for id in textures.free.drain() {
-            self.renderer.free_texture(&id);
-        }
+        let presente = paint(
+            &self.ctx,
+            &mut self.renderer,
+            &mut self.surface,
+            engine.gpu(),
+            output,
+        );
+        self.presented += u64::from(presente);
         self.spent += debut.elapsed();
         demandes
+    }
+
+    /// `true` une fois par demande d'ouvrir l'éditeur de nœuds.
+    pub fn take_nodes_request(&mut self) -> bool {
+        std::mem::take(&mut self.state.open_nodes)
+    }
+
+    /// Le clip choisi : celui dont l'éditeur de nœuds montre le graphe.
+    pub fn selected_clip(&self) -> Option<ClipId> {
+        self.state.selected.map(|(_, clip)| clip)
     }
 
     /// La grille a été remplacée.

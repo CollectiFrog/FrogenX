@@ -4,15 +4,16 @@
 //! produisent la même forme, frame après frame.
 
 use frogenx_composition::{
-    AudioAnalysis, Clip, ClipSource, ClipTransition, Composition, FadeCurve, LayerId, ParamSlot,
-    PlayMode, PositionSignal, Transport, TrigTarget, WipeDirection,
+    AudioAnalysis, Clip, ClipSource, ClipTransition, Composition, FadeCurve, GraphScope, LayerId,
+    NodeKind, ParamSlot, ParamTarget, PlayMode, PositionSignal, Transport, TrigTarget,
+    WipeDirection,
 };
 use frogenx_core::{
     AmpScale, AnalysisMethod, AudioFeatures, Constant, Ctx, FeatureKind, FreqScale, Graph, Param,
 };
 use frogenx_library::{catalog, starter};
 use frogenx_patch::{from_json, to_json, PatchError, MAX_COLUMNS};
-use frogenx_shape::{BlendMode, ColorParam, Ellipse, FeedbackParams, Path, ShapeStyle};
+use frogenx_shape::{BlendMode, ColorParam, EffectKind, Ellipse, FeedbackParams, Path, ShapeStyle};
 
 const DT: f64 = 1.0 / 60.0;
 
@@ -284,6 +285,57 @@ fn un_clip_a_la_fois_forme_et_echo_est_refuse() {
     let clip = &mut v["decks"][0]["groups"][0]["layers"][0]["cells"][0];
     clip["feedback"] = serde_json::json!({"kind": "Écho", "fields": {}});
     assert!(matches!(refuse(v), PatchError::Invalid(_)));
+}
+
+#[test]
+fn un_cablage_fait_dans_l_editeur_revient() {
+    let (mut c, piste) = une_case(cercle());
+    let id = c.layer(piste).unwrap().cell(0).unwrap();
+    let scope = GraphScope::Clip(id);
+    let lent = c.add_node(scope, NodeKind::Lfo).unwrap();
+    let vif = c.add_node(scope, NodeKind::Noise).unwrap();
+    let entree = ParamTarget::NodeParam {
+        scope,
+        node: vif,
+        input: 0,
+    };
+    assert!(c.connect(entree, lent));
+    let rayon = ParamTarget::ClipParam {
+        clip: id,
+        slot: ParamSlot::Generator(0),
+    };
+    assert!(c.connect(rayon, vif));
+    assert!(c.add_effect(id, EffectKind::Deform));
+    let trig = c.add_default_trig().unwrap();
+    let flash = c.trig(trig).unwrap().flash();
+    assert!(c.connect(ParamTarget::LayerOpacity(piste), flash));
+
+    let texte = to_json(&c).unwrap();
+    let copie = from_json(&texte).unwrap();
+    assert_eq!(
+        texte,
+        to_json(&copie).unwrap(),
+        "stable, nœuds ajoutés compris"
+    );
+
+    let piste = copie.layers_de_test()[0];
+    let id = copie.layer(piste).unwrap().cell(0).unwrap();
+    let scope = GraphScope::Clip(id);
+    assert_eq!(copie.clip(id).unwrap().effects.len(), 1);
+    let source = copie
+        .target_param(ParamTarget::ClipParam {
+            clip: id,
+            slot: ParamSlot::Generator(0),
+        })
+        .and_then(|p| p.source())
+        .unwrap();
+    let graphe = copie.graph_of(scope).unwrap();
+    assert_eq!(graphe.node_spec(source).unwrap().kind, "Noise");
+    let vue = graphe.nodes().into_iter().find(|n| n.id == source).unwrap();
+    assert_eq!(vue.deps.len(), 1, "la dépendance suit");
+    let opacite = copie.layer(piste).unwrap().blend.opacity;
+    let flash = copie.trig(copie.trigs()[0]).unwrap().flash();
+    assert_eq!(opacite.source(), Some(flash));
 }
 
 #[test]

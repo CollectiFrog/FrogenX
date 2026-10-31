@@ -13,9 +13,6 @@
 mod decode;
 mod encode;
 mod file;
-mod signals;
-
-pub use signals::signal_from_spec;
 
 use frogenx_composition::Composition;
 use frogenx_core::{GraphError, SpecError};

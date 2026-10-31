@@ -5,11 +5,10 @@
 
 use crate::encode;
 use crate::file::*;
-use crate::signals::signal_from_spec;
 use crate::{PatchError, MAX_COLUMNS};
 use frogenx_composition::{
-    AudioAnalysis, Clip, ClipTransition, ColumnId, Composition, FadeCurve, LayerId, PlayMode,
-    PositionSignal, RestoredTrig, Transport, TrigTarget, WipeDirection,
+    signal_from_spec, AudioAnalysis, Clip, ClipTransition, ColumnId, Composition, FadeCurve,
+    LayerId, PlayMode, PositionSignal, RestoredTrig, Transport, TrigTarget, WipeDirection,
 };
 use frogenx_core::{AmpScale, AnalysisMethod, FreqScale, Graph, NodeId, Param, Spec, SpecValue};
 use frogenx_osc::{Divider, SpectrumZone};
