@@ -9,11 +9,12 @@
 //! en pixels : une zone se déplace ainsi de la même façon sur toutes les échelles,
 //! et ce calcul se teste sans egui.
 
-use crate::{theme, FrameView, UiState};
+use crate::widgets::{floating_panel, floating_rect, gradient, knob, Knob};
+use crate::{remove_menu, theme, FrameView, UiState};
 use egui::epaint::{Mesh, PathShape, PathStroke};
 use egui::{
     Align, Align2, Color32, CursorIcon, DragValue, FontId, Label, Layout, Pos2, Rect, Response,
-    RichText, Role, Sense, Shape, Stroke, Ui, UiBuilder, WidgetInfo,
+    RichText, Role, Sense, Shape, Stroke, Ui, WidgetInfo,
 };
 use frogenx_composition::{Command, Composition, TrigId, TrigSlot, TrigTarget};
 use frogenx_core::{
@@ -56,14 +57,8 @@ const HOLD_FALL: f32 = 0.2;
 const SUBDIVISION: usize = 3;
 /// La taille du panneau flottant.
 const FLOATING: egui::Vec2 = egui::vec2(690.0, 112.0);
-/// Le diamètre d'un potentiomètre, et la place d'une colonne.
-const KNOB: f32 = 38.0;
-const KNOB_WIDTH: f32 = 62.0;
-/// La course d'un potentiomètre, de part et d'autre du haut, en radians.
-const KNOB_SWEEP: f32 = 2.36;
-/// Les pixels à parcourir pour une course complète.
-const KNOB_TRAVEL: f32 = 160.0;
-
+/// L'écart avec le bas du tracé : les repères de fréquence restent lisibles.
+const FLOATING_GAP: f32 = 22.0;
 /// Une zone en coordonnées du tracé : `x` sur l'axe des fréquences, `y` le niveau.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ZoneBox {
@@ -251,26 +246,6 @@ pub fn hold_peaks(hold: &mut [f32; SPECTRUM_BANDS], levels: &[f32; SPECTRUM_BAND
     }
 }
 
-/// La place d'un réglage sur la course d'un potentiomètre, dans `[0, 1]`.
-pub fn knob_position(value: f32, min: f32, max: f32, log: bool) -> f32 {
-    let t = if log {
-        (value.max(min) / min).ln() / (max / min).ln()
-    } else {
-        (value - min) / (max - min)
-    };
-    t.clamp(0.0, 1.0)
-}
-
-/// Le réglage à la place `t` : l'inverse de [`knob_position`].
-pub fn knob_value(t: f32, min: f32, max: f32, log: bool) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    if log {
-        min * (max / min).powf(t)
-    } else {
-        min + (max - min) * t
-    }
-}
-
 /// Le trig choisi, s'il existe encore. Aucun : le spectre reste dégagé.
 fn selected(state: &UiState, c: &Composition) -> Option<TrigId> {
     state.selected_trig.filter(|id| c.trig(*id).is_some())
@@ -278,18 +253,6 @@ fn selected(state: &UiState, c: &Composition) -> Option<TrigId> {
 
 fn set(commands: &mut Vec<Command>, trig: TrigId, slot: TrigSlot, value: f32) {
     commands.push(Command::SetTrigParam { trig, slot, value });
-}
-
-/// Un dégradé vertical.
-fn gradient(rect: Rect, top: Color32, bottom: Color32) -> Mesh {
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(rect.left_top(), top);
-    mesh.colored_vertex(rect.right_top(), top);
-    mesh.colored_vertex(rect.right_bottom(), bottom);
-    mesh.colored_vertex(rect.left_bottom(), bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    mesh
 }
 
 /// La grille, ses repères et l'échelle d'amplitude à droite.
@@ -666,83 +629,6 @@ fn targets(c: &Composition) -> Vec<TrigTarget> {
     cibles
 }
 
-/// Un potentiomètre avec son nom et sa valeur exacte, qu'on peut aussi saisir.
-/// Rend la nouvelle valeur si elle a changé.
-#[allow(clippy::too_many_arguments)]
-fn knob(
-    ui: &mut Ui,
-    nom: &str,
-    value: f32,
-    min: f32,
-    max: f32,
-    log: bool,
-    suffix: &str,
-    color: Color32,
-) -> Option<f32> {
-    let mut nouveau = None;
-    // Une largeur fixe : `vertical_centered` prendrait toute la place, et le
-    // panneau s'étirerait sur le son qu'il doit laisser voir.
-    let colonne = Layout::top_down(Align::Center);
-    ui.allocate_ui_with_layout(egui::vec2(KNOB_WIDTH, FLOATING.y), colonne, |ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
-        let (rect, cadran) =
-            ui.allocate_exact_size(egui::vec2(KNOB, KNOB), Sense::click_and_drag());
-        let t = knob_position(value, min, max, log);
-        // Tenu sans bouger, un cadran n'émet rien : ce n'est pas une modification.
-        let geste = cadran.drag_delta().y;
-        let t = if geste != 0.0 {
-            let t = t - geste / KNOB_TRAVEL;
-            nouveau = Some(knob_value(t, min, max, log));
-            t
-        } else {
-            t
-        };
-
-        let painter = ui.painter_at(rect.expand(2.0));
-        let (centre, rayon) = (rect.center(), KNOB * 0.5 - 2.0);
-        let point = |angle: f32, r: f32| centre + egui::vec2(angle.sin(), -angle.cos()) * r;
-        let arc = |debut: f32, fin: f32| -> Vec<Pos2> {
-            let pas = ((fin - debut).abs() * 12.0).ceil().max(2.0) as usize;
-            (0..=pas)
-                .map(|i| point(debut + (fin - debut) * i as f32 / pas as f32, rayon))
-                .collect()
-        };
-        let angle = -KNOB_SWEEP + 2.0 * KNOB_SWEEP * t.clamp(0.0, 1.0);
-        painter.circle_filled(centre, rayon - 3.0, theme::IDLE);
-        painter.add(PathShape::line(
-            arc(-KNOB_SWEEP, KNOB_SWEEP),
-            PathStroke::new(2.0, theme::GRID_STRONG),
-        ));
-        painter.add(PathShape::line(
-            arc(-KNOB_SWEEP, angle),
-            PathStroke::new(2.0, color),
-        ));
-        painter.line_segment(
-            [point(angle, rayon - 11.0), point(angle, rayon - 4.0)],
-            Stroke::new(2.0, theme::TEXT),
-        );
-
-        let etiquette = ui.add(
-            Label::new(RichText::new(nom).size(10.0).color(theme::TEXT_DIM)).selectable(false),
-        );
-        let mut v = value;
-        let vitesse = if log {
-            value * 0.01
-        } else {
-            (max - min) * 0.005
-        };
-        let saisie = DragValue::new(&mut v)
-            .range(min..=max)
-            .speed(vitesse)
-            .suffix(suffix)
-            .max_decimals(if log { 0 } else { 2 });
-        if ui.add(saisie).labelled_by(etiquette.id).changed() {
-            nouveau = Some(v);
-        }
-    });
-    nouveau
-}
-
 /// Le compteur en boutons : les valeurs se voient toutes, et une seule se clique.
 fn counter(ui: &mut Ui, id: TrigId, every: u32, commands: &mut Vec<Command>) {
     ui.horizontal(|ui| {
@@ -771,124 +657,75 @@ fn floating(
     let rang = c.trigs().iter().position(|t| *t == id).unwrap_or(0);
     let couleur = theme::trig_color(rang);
 
-    let taille = egui::vec2(FLOATING.x.min(plot.width() - 16.0), FLOATING.y);
-    let cadre = Rect::from_center_size(
-        Pos2::new(plot.center().x, plot.bottom() - taille.y * 0.5 - 22.0),
-        taille,
-    );
-    // Le fond retient la souris : un clic manqué ne doit pas tracer une zone.
-    let _ = ui.interact(
-        cadre,
-        ui.scope_id().with("fond_flottant"),
-        Sense::click_and_drag(),
-    );
-    let mut fenetre = ui.new_child(
-        UiBuilder::new()
-            .max_rect(cadre)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    egui::Frame::new()
-        .fill(theme::GLASS)
-        .stroke(Stroke::new(1.0, theme::GRID_STRONG))
-        .corner_radius(14)
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(&mut fenetre, |ui| {
-            ui.set_min_size(taille - egui::vec2(24.0, 16.0));
-            ui.horizontal_top(|ui| {
-                let z = t.zone();
-                let (hz_min, hz_max) = (SPECTRUM_MIN_HZ, SPECTRUM_MAX_HZ);
-                for (nom, slot, value, min, max, log, suffix) in [
-                    (
-                        "BASSE",
-                        TrigSlot::FreqMin,
-                        z.freq_min.base(),
-                        hz_min,
-                        hz_max,
-                        true,
-                        " Hz",
-                    ),
-                    (
-                        "HAUTE",
-                        TrigSlot::FreqMax,
-                        z.freq_max.base(),
-                        hz_min,
-                        hz_max,
-                        true,
-                        " Hz",
-                    ),
-                    (
-                        "SEUIL",
-                        TrigSlot::LevelMin,
-                        z.level_min.base(),
-                        0.0,
-                        1.0,
-                        false,
-                        "",
-                    ),
-                    (
-                        "PLAFOND",
-                        TrigSlot::LevelMax,
-                        z.level_max.base(),
-                        0.0,
-                        1.0,
-                        false,
-                        "",
-                    ),
-                    (
-                        "MARGE",
-                        TrigSlot::Hysteresis,
-                        z.hysteresis.base(),
-                        0.0,
-                        1.0,
-                        false,
-                        "",
-                    ),
-                ] {
-                    if let Some(v) = knob(ui, nom, value, min, max, log, suffix, couleur) {
-                        set(commands, id, slot, v);
-                    }
+    let cadre = floating_rect(plot, FLOATING, FLOATING_GAP);
+    floating_panel(ui, cadre, "fond_trig", |ui| {
+        ui.horizontal_top(|ui| {
+            let z = t.zone();
+            let (hz_min, hz_max) = (SPECTRUM_MIN_HZ, SPECTRUM_MAX_HZ);
+            for (reglage, slot) in [
+                (
+                    Knob::new("BASSE", z.freq_min.base(), hz_min, hz_max, couleur).log(" Hz"),
+                    TrigSlot::FreqMin,
+                ),
+                (
+                    Knob::new("HAUTE", z.freq_max.base(), hz_min, hz_max, couleur).log(" Hz"),
+                    TrigSlot::FreqMax,
+                ),
+                (
+                    Knob::new("SEUIL", z.level_min.base(), 0.0, 1.0, couleur),
+                    TrigSlot::LevelMin,
+                ),
+                (
+                    Knob::new("PLAFOND", z.level_max.base(), 0.0, 1.0, couleur),
+                    TrigSlot::LevelMax,
+                ),
+                (
+                    Knob::new("MARGE", z.hysteresis.base(), 0.0, 1.0, couleur),
+                    TrigSlot::Hysteresis,
+                ),
+            ] {
+                if let Some(v) = knob(ui, &reglage).value {
+                    set(commands, id, slot, v);
                 }
+            }
 
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 5.0;
-                    let every = t.every().base().round().max(1.0) as u32;
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&t.name).color(couleur).strong());
-                        // Le coup qu'on attend : 1 est celui qui passe.
-                        let suivant = t.count(c.graph()) + 1;
-                        let compte = format!("coup {suivant} / {every}");
-                        ui.label(RichText::new(compte).color(theme::TEXT_DIM).size(11.0));
-                    });
-                    counter(ui, id, every, commands);
-                    ui.horizontal(|ui| {
-                        let nom = ui.label(RichText::new("Cible").color(theme::TEXT_DIM));
-                        egui::ComboBox::from_id_salt("cible")
-                            .width(116.0)
-                            .selected_text(target_name(c, t.target))
-                            .show_ui(ui, |ui| {
-                                for cible in targets(c) {
-                                    let nom = target_name(c, cible);
-                                    if ui.selectable_label(cible == t.target, nom).clicked() {
-                                        commands.push(Command::SetTrigTarget {
-                                            trig: id,
-                                            target: cible,
-                                        });
-                                    }
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 5.0;
+                let every = t.every().base().round().max(1.0) as u32;
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&t.name).color(couleur).strong());
+                    // Le coup qu'on attend : 1 est celui qui passe.
+                    let suivant = t.count(c.graph()) + 1;
+                    let compte = format!("coup {suivant} / {every}");
+                    ui.label(RichText::new(compte).color(theme::TEXT_DIM).size(11.0));
+                });
+                counter(ui, id, every, commands);
+                ui.horizontal(|ui| {
+                    let nom = ui.label(RichText::new("Cible").color(theme::TEXT_DIM));
+                    egui::ComboBox::from_id_salt("cible")
+                        .width(116.0)
+                        .selected_text(target_name(c, t.target))
+                        .show_ui(ui, |ui| {
+                            for cible in targets(c) {
+                                let nom = target_name(c, cible);
+                                if ui.selectable_label(cible == t.target, nom).clicked() {
+                                    commands.push(Command::SetTrigTarget {
+                                        trig: id,
+                                        target: cible,
+                                    });
                                 }
-                            })
-                            .response
-                            .labelled_by(nom.id);
-                        if ui.button("Recaler").clicked() {
-                            commands.push(Command::ResetTrigCount(id));
-                        }
-                        if ui.button("Retirer").clicked() {
-                            commands.push(Command::RemoveTrig(id));
-                        }
-                    });
+                            }
+                        })
+                        .response
+                        .labelled_by(nom.id);
+                    if ui.button("Recaler").clicked() {
+                        commands.push(Command::ResetTrigCount(id));
+                    }
                 });
             });
         });
+    });
 }
 
 /// Une liste de choix : une ligne par valeur, et une commande si elle change.
@@ -936,9 +773,11 @@ fn analysis_bar(
             } else {
                 texte.color(theme::trig_color(i))
             };
-            if ui.selectable_label(actif, texte).clicked() {
+            let puce = ui.selectable_label(actif, texte);
+            if puce.clicked() {
                 state.selected_trig = Some(*id);
             }
+            remove_menu(&puce, "Retirer le trig", Command::RemoveTrig(*id), commands);
         }
         if ui.button("Ajouter un trig").clicked() {
             commands.push(Command::AddTrig);
@@ -1172,27 +1011,5 @@ mod tests {
         assert!((crete[3] - (0.8 - HOLD_FALL)).abs() < 1e-6);
         hold_peaks(&mut crete, &son, 100.0);
         assert_eq!(crete[3], 0.0, "jamais sous le son");
-    }
-
-    #[test]
-    fn un_potentiometre_retrouve_sa_valeur() {
-        for (v, min, max, log) in [(0.3, 0.0, 1.0, false), (440.0, 20.0, 20_000.0, true)] {
-            let t = knob_position(v, min, max, log);
-            assert!((knob_value(t, min, max, log) - v).abs() / v < 1e-3);
-        }
-    }
-
-    #[test]
-    fn la_course_d_un_potentiometre_est_bornee() {
-        assert_eq!(knob_position(-1.0, 0.0, 1.0, false), 0.0);
-        assert_eq!(knob_position(9.0, 0.0, 1.0, false), 1.0);
-        assert_eq!(knob_position(5.0, 20.0, 20_000.0, true), 0.0);
-        assert_eq!(knob_value(3.0, 0.0, 1.0, false), 1.0);
-    }
-
-    #[test]
-    fn le_milieu_d_un_potentiometre_log_est_la_moyenne_geometrique() {
-        let milieu = knob_value(0.5, 20.0, 20_000.0, true);
-        assert!((milieu - 632.5).abs() < 1.0, "got {milieu}");
     }
 }

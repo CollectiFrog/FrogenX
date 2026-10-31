@@ -11,12 +11,17 @@
 //! **Ne connaît ni wgpu ni `winit` :** `egui-wgpu` et `egui-winit` restent dans
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
 
+pub mod clip_panel;
 pub mod spectrum;
 pub mod theme;
+pub mod widgets;
 
-use egui::{Button, Color32, Label, Response, RichText, Sense, Slider, SliderClamping, Stroke, Ui};
+use egui::{
+    Align, Button, CornerRadius, Label, Layout, Margin, Pos2, Rect, Response, RichText, Sense,
+    Stroke, Ui, UiBuilder,
+};
 use frogenx_composition::{
-    ClipId, ClipParam, ColumnId, Command, Composition, LayerId, TrigId, MAX_CLIP_SPEED,
+    Clip, ClipId, ColumnId, Command, Composition, LayerId, Transport, TrigId,
 };
 use frogenx_core::{Spectrum, SPECTRUM_BANDS};
 use frogenx_library::{presets, Family, PresetId};
@@ -26,6 +31,14 @@ use spectrum::ZoneGesture;
 const EMPTY_CELL: &str = "·";
 /// La taille d'une case de la grille.
 const CELL_SIZE: egui::Vec2 = egui::vec2(110.0, 34.0);
+/// La hauteur de la barre d'avancement d'un clip actif.
+const PROGRESS_HEIGHT: f32 = 3.0;
+/// La largeur laissée au nom du fichier, au milieu de l'en-tête.
+const TITLE_WIDTH: f32 = 420.0;
+/// Les proportions de la scène quand aucune image ne les donne.
+const STAGE_ASPECT: f32 = 16.0 / 9.0;
+/// La taille du texte d'état, à côté du nom du fichier.
+const STATUS_SIZE: f32 = 11.0;
 
 /// Un clip du catalogue à poser dans une case. `Command` ne peut pas porter de
 /// `Clip` : `app` le construit entre deux frames (§23.6).
@@ -171,6 +184,8 @@ pub struct FrameView<'a> {
     pub audio_status: &'a str,
     pub output: OutputView<'a>,
     pub file: FileView<'a>,
+    /// L'instant de la dernière frame, en secondes.
+    pub time: f64,
 }
 
 /// Dessine toute l'interface et remplit `commands`, `placements`, `output` et
@@ -189,16 +204,20 @@ pub fn draw(
     } else if ui.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT)) {
         *file = Some(FileRequest::Save);
     }
-    egui::Panel::top("menu").show(ui, |ui| menu(ui, state, &view.output, output, file));
+    let entete = egui::Frame::new()
+        .fill(theme::HEADER)
+        .inner_margin(Margin::symmetric(10, 5));
+    egui::Panel::top("menu")
+        .frame(entete)
+        .show(ui, |ui| header(ui, state, view, commands, output, file));
     if state.show_grid {
         egui::Panel::top("grille")
             .resizable(true)
-            .default_size(240.0)
+            .default_size(226.0)
             .show(ui, |ui| {
                 grid(ui, state, view.composition, commands, placements)
             });
     }
-    egui::Panel::top("barre").show(ui, |ui| toolbar(ui, view, commands));
     if state.show_audio {
         egui::Panel::bottom("audio")
             .resizable(true)
@@ -211,25 +230,63 @@ pub fn draw(
             .default_size(170.0)
             .show(ui, library);
     }
-    if state.show_monitor {
-        egui::Panel::left("monitor")
-            .resizable(true)
-            .default_size(640.0)
-            .show(ui, |ui| monitor(ui, view.monitor));
-    }
-    if state.show_settings {
-        egui::CentralPanel::default().show(ui, |ui| settings(ui, state, view, commands));
-    }
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new())
+        .show(ui, |ui| stage(ui, state, view, commands));
 }
 
-fn menu(
+/// La pulsation du tempo : 1 sur le temps, puis elle retombe. Elle dit le tempo,
+/// pas la place dans la mesure : rien ne recale encore la phase (§3bis.3).
+pub fn beat_pulse(time: f64, bpm: f32) -> f32 {
+    let battements = time * bpm.max(0.0) as f64 / 60.0;
+    let phase = battements - battements.floor();
+    (1.0 - phase as f32).powi(3)
+}
+
+/// Le nom, comme le haut de Pro-Q : d'un seul trait, l'accent à la fin.
+fn wordmark(ui: &mut Ui) {
+    ui.spacing_mut().item_spacing.x = 0.0;
+    ui.add(Label::new(RichText::new("Frogen").size(15.0).color(theme::TEXT)).selectable(false));
+    ui.add(
+        Label::new(RichText::new("X").size(15.0).color(theme::ACCENT).strong()).selectable(false),
+    );
+    ui.spacing_mut().item_spacing.x = 8.0;
+}
+
+/// Le tempo, au plus près des menus : c'est ce qu'on touche le plus sur scène.
+fn tempo(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
+    let mut bpm = view.bpm;
+    let reglage = egui::DragValue::new(&mut bpm)
+        .range(20.0..=400.0)
+        .speed(0.5)
+        .suffix(" BPM");
+    if ui.add(reglage).changed() {
+        commands.push(Command::SetBpm(bpm));
+    }
+    if ui.button("Tap").clicked() {
+        commands.push(Command::TapTempo);
+    }
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+    let pulsation = beat_pulse(view.time, view.bpm);
+    ui.painter().circle_filled(rect.center(), 4.0, theme::IDLE);
+    ui.painter()
+        .circle_filled(rect.center(), 4.0, theme::ACCENT.gamma_multiply(pulsation));
+}
+
+/// Une ligne, comme l'en-tête de Pro-Q : le nom et les menus à gauche, le fichier
+/// au milieu, l'état de la machine à droite.
+fn header(
     ui: &mut Ui,
     state: &mut UiState,
-    view: &OutputView<'_>,
+    view: &FrameView<'_>,
+    commands: &mut Vec<Command>,
     output: &mut Option<OutputRequest>,
     file: &mut Option<FileRequest>,
 ) {
+    let entete = ui.max_rect();
     egui::MenuBar::new().ui(ui, |ui| {
+        wordmark(ui);
+        ui.add_space(14.0);
         ui.menu_button("Fichier", |ui| file_menu(ui, file));
         ui.menu_button("Affichage", |ui| {
             ui.checkbox(&mut state.show_grid, "Grille");
@@ -238,7 +295,44 @@ fn menu(
             ui.checkbox(&mut state.show_audio, "Audio");
             ui.checkbox(&mut state.show_library, "Bibliothèque");
         });
-        ui.menu_button("Sortie", |ui| output_menu(ui, view, output));
+        ui.menu_button("Sortie", |ui| output_menu(ui, &view.output, output));
+        ui.add_space(14.0);
+        tempo(ui, view, commands);
+
+        // Centré sur toute la fenêtre, pas sur la place laissée par les menus.
+        let police = egui::TextStyle::Body.resolve(ui.style());
+        let largeur = |texte: &str, police: egui::FontId| {
+            ui.painter()
+                .layout_no_wrap(texte.to_string(), police, theme::TEXT)
+                .size()
+                .x
+        };
+        let mut total = largeur(view.file.title, police);
+        if !view.file.status.is_empty() {
+            let petit = egui::FontId::proportional(STATUS_SIZE);
+            total += ui.spacing().item_spacing.x + largeur(view.file.status, petit);
+        }
+        let centre = Rect::from_center_size(
+            Pos2::new(entete.center().x, ui.max_rect().center().y),
+            egui::vec2(total.clamp(1.0, TITLE_WIDTH), ui.max_rect().height()),
+        );
+        let ligne = Layout::left_to_right(Align::Center);
+        ui.scope_builder(UiBuilder::new().max_rect(centre).layout(ligne), |ui| {
+            ui.label(RichText::new(view.file.title).color(theme::TEXT));
+            if !view.file.status.is_empty() {
+                let etat = RichText::new(view.file.status)
+                    .color(theme::TEXT_DIM)
+                    .size(STATUS_SIZE);
+                ui.label(etat);
+            }
+        });
+
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let discret = |texte: &str| RichText::new(texte).color(theme::TEXT_DIM).size(11.5);
+            ui.label(discret(&format!("{:.0} fps", view.fps)));
+            ui.label(discret(view.outputs));
+            ui.label(discret(view.output.status));
+        });
     });
 }
 
@@ -309,23 +403,71 @@ fn output_menu(ui: &mut Ui, view: &OutputView<'_>, output: &mut Option<OutputReq
     }
 }
 
-/// Une cellule : l'accent n'y désigne que le clip actif (§23.1).
-fn cell(ui: &mut Ui, name: &str, active: bool) -> Response {
-    let (fond, texte) = if active {
-        (theme::ACCENT, theme::ON_ACCENT)
-    } else {
-        (theme::IDLE, theme::TEXT)
+/// L'avancement de la boucle d'un clip, dans `[0, 1)`. Un clip en temps absolu
+/// n'a pas de boucle : `None`.
+pub fn loop_progress(clip: &Clip) -> Option<f32> {
+    let Transport::BpmSync {
+        position,
+        duration_beats,
+        ..
+    } = clip.transport
+    else {
+        return None;
     };
-    let bouton = Button::new(RichText::new(name).color(texte))
-        .fill(fond)
-        .min_size(CELL_SIZE);
-    ui.add(bouton)
+    let graphe = clip.graph();
+    let duree = duration_beats.get(graphe);
+    (duree > 0.0).then(|| (graphe.value(position) / duree).rem_euclid(1.0))
 }
 
-/// Une case vide : elle ne déclenche rien, elle reçoit.
+/// Une cellule : l'accent n'y désigne que le clip actif (§23.1), et son bas
+/// montre où en est sa boucle, comme le spectre montre le son.
+fn cell(ui: &mut Ui, name: &str, active: bool, progress: Option<f32>) -> Response {
+    let couleur = if active {
+        theme::ON_ACCENT
+    } else {
+        theme::TEXT
+    };
+    let fond = ui.painter().add(egui::Shape::Noop);
+    let bouton = Button::new(RichText::new(name).color(couleur))
+        .fill(egui::Color32::TRANSPARENT)
+        .min_size(CELL_SIZE);
+    let reponse = ui.add(bouton);
+    let rect = reponse.rect;
+    let rayon = CornerRadius::same(6);
+    let survol = reponse.hovered();
+    let surface = match (active, survol) {
+        (true, _) => theme::ACCENT,
+        (false, true) => theme::HOVER,
+        (false, false) => theme::IDLE,
+    };
+    ui.painter()
+        .set(fond, egui::Shape::rect_filled(rect, rayon, surface));
+    if active {
+        // La lumière d'un pad allumé, sans bouger ses voisins.
+        ui.painter().rect_stroke(
+            rect.expand(1.5),
+            7.0,
+            Stroke::new(2.0, theme::ACCENT.gamma_multiply(0.3)),
+            egui::StrokeKind::Outside,
+        );
+        if let Some(t) = progress {
+            let mut barre = rect.shrink2(egui::vec2(6.0, 4.0));
+            barre.set_top(barre.bottom() - PROGRESS_HEIGHT);
+            ui.painter()
+                .rect_filled(barre, 1.5, theme::ON_ACCENT.gamma_multiply(0.25));
+            barre.set_right(barre.left() + t.clamp(0.0, 1.0) * barre.width());
+            ui.painter().rect_filled(barre, 1.5, theme::ON_ACCENT);
+        }
+    }
+    reponse
+}
+
+/// Une case vide : elle ne déclenche rien, elle reçoit. Un simple contour : la
+/// grille se lit par ce qu'elle contient.
 fn empty_cell(ui: &mut Ui) -> Response {
     let bouton = Button::new(RichText::new(EMPTY_CELL).color(theme::TEXT_DIM))
-        .fill(theme::HEADER)
+        .fill(egui::Color32::TRANSPARENT)
+        .stroke(Stroke::new(1.0, theme::GRID))
         .min_size(CELL_SIZE);
     ui.add(bouton)
 }
@@ -369,7 +511,13 @@ fn grid(
         egui::Grid::new("grille_clips").show(ui, |ui| {
             ui.label("");
             for (i, column) in c.columns().iter().enumerate() {
-                let entete = ui.button(format!("Colonne {}", i + 1));
+                let titre = RichText::new(format!("Colonne {}", i + 1))
+                    .size(11.5)
+                    .color(theme::TEXT_DIM);
+                let bouton = Button::new(titre)
+                    .fill(theme::HEADER)
+                    .min_size(egui::vec2(CELL_SIZE.x, 0.0));
+                let entete = ui.add(bouton);
                 if entete.clicked() {
                     commands.push(Command::TriggerColumn { column: *column });
                 }
@@ -395,7 +543,9 @@ fn grid(
                     let clip = piste.cell(i).and_then(|id| Some((id, c.clip(id)?)));
                     let reponse = match clip {
                         Some((id, clip)) => {
-                            let reponse = cell(ui, &clip.name, piste.active_clip() == Some(id));
+                            let actif = piste.active_clip() == Some(id);
+                            let boucle = loop_progress(clip).filter(|_| actif);
+                            let reponse = cell(ui, &clip.name, actif, boucle);
                             if reponse.clicked() {
                                 commands.push(Command::TriggerClip {
                                     layer: *layer,
@@ -433,42 +583,30 @@ fn grid(
 /// Le catalogue, par famille. Une entrée se glisse sur une case.
 fn library(ui: &mut Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.label(RichText::new("Glisse un clip sur une case.").color(theme::TEXT_DIM));
+        ui.spacing_mut().item_spacing.y = 2.0;
+        let aide = RichText::new("Glisse un clip sur une case.")
+            .size(11.0)
+            .color(theme::TEXT_DIM);
+        ui.label(aide);
         for family in Family::ALL {
-            ui.add_space(6.0);
-            ui.label(RichText::new(family.label()).color(section_color()));
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(family.label())
+                    .size(11.0)
+                    .color(theme::ACCENT),
+            );
             for (id, preset) in presets().filter(|(_, p)| p.family == family) {
                 ui.dnd_drag_source(ui.scope_id().with(preset.name), id, |ui| {
-                    ui.add(Label::new(preset.name).selectable(false));
+                    let ligne = egui::Frame::new()
+                        .fill(theme::HEADER)
+                        .corner_radius(4)
+                        .inner_margin(Margin::symmetric(8, 1));
+                    ligne.show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.add(Label::new(preset.name).selectable(false));
+                    });
                 });
             }
-        }
-    });
-}
-
-fn toolbar(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
-    ui.horizontal(|ui| {
-        let mut bpm = view.bpm;
-        let reglage = egui::DragValue::new(&mut bpm)
-            .range(20.0..=400.0)
-            .speed(0.5)
-            .suffix(" BPM");
-        if ui.add(reglage).changed() {
-            commands.push(Command::SetBpm(bpm));
-        }
-        if ui.button("Tap").clicked() {
-            commands.push(Command::TapTempo);
-        }
-        ui.separator();
-        ui.label(RichText::new(format!("{:.0} fps", view.fps)).color(theme::TEXT_DIM));
-        ui.separator();
-        ui.label(RichText::new(view.outputs).color(theme::TEXT_DIM));
-        ui.separator();
-        ui.label(RichText::new(view.output.status).color(theme::TEXT_DIM));
-        ui.separator();
-        ui.label(RichText::new(view.file.title).color(theme::TEXT_DIM));
-        if !view.file.status.is_empty() {
-            ui.label(RichText::new(view.file.status).color(theme::TEXT_DIM));
         }
     });
 }
@@ -482,106 +620,80 @@ fn fit(available: egui::Vec2, aspect: f32) -> egui::Vec2 {
     egui::vec2(largeur, largeur / aspect)
 }
 
-fn monitor(ui: &mut Ui, monitor: Option<Monitor>) {
-    match monitor {
-        Some(m) => {
-            let taille = fit(ui.available_size(), m.aspect);
-            ui.image((m.texture, taille));
-        }
-        None => {
-            ui.label("Monitor indisponible");
-        }
-    }
-}
-
-/// Un curseur : émet une commande, n'écrit rien lui-même (§23).
-fn param_slider(ui: &mut Ui, clip: ClipId, param: &ClipParam, commands: &mut Vec<Command>) {
-    let desc = param.desc;
-    let mut value = desc.value.base();
-    let mut nom = RichText::new(desc.name);
-    if desc.value.source().is_some() {
-        // Modulé : le curseur règle la base, la modulation continue.
-        nom = nom.color(theme::ACCENT);
-    }
-    if ui
-        .add(slider(&mut value, desc.min, desc.max).text(nom))
-        .changed()
-    {
-        commands.push(Command::SetParam {
-            clip,
-            slot: param.slot,
-            value,
-        });
-    }
-
-    // Le mouvement d'un clip se règle ici, tant que son graphe n'est pas exposé.
-    if let Some(mut value) = desc.value.depth() {
-        let etendue = desc.max - desc.min;
-        let nom = format!("{} : modulation", desc.name);
-        if ui
-            .add(slider(&mut value, -etendue, etendue).text(nom))
-            .changed()
-        {
-            commands.push(Command::SetDepth {
-                clip,
-                slot: param.slot,
-                value,
-            });
-        }
-    }
-}
-
-/// Un curseur qui ne réécrit jamais une valeur hors de sa plage : la plage borne
-/// le geste, pas le paramètre (§16.3 ter). Sans cela, afficher un réglage
-/// émettrait une commande à chaque frame.
-fn slider(value: &mut f32, min: f32, max: f32) -> Slider<'_> {
-    Slider::new(value, min..=max).clamping(SliderClamping::Never)
-}
-
-fn settings(ui: &mut Ui, state: &UiState, view: &FrameView<'_>, commands: &mut Vec<Command>) {
-    let selection = state.selected.and_then(|(layer, id)| {
-        let piste = view.composition.layer(layer)?;
-        Some((layer, piste, id, view.composition.clip(id)?))
-    });
-    let Some((layer, piste, id, clip)) = selection else {
-        ui.label(RichText::new("Clique un clip pour le régler.").color(theme::TEXT_DIM));
-        return;
+/// Le partage de la scène : l'image, puis ce qui reste pour le panneau du clip.
+/// L'image est calée à gauche et ne dépend pas de la sélection : choisir un clip ne
+/// doit pas la faire sauter en plein set. Trop étroite, la scène lui laisse tout,
+/// et le panneau se pose dessus.
+pub fn stage_layout(cadre: Rect, aspect: f32) -> (Rect, Rect) {
+    let marge = cadre.shrink(10.0);
+    let cote_a_cote = cadre.width() >= clip_panel::MIN_SIDE_BY_SIDE;
+    let reserve = if cote_a_cote {
+        clip_panel::RESERVED_WIDTH + 10.0
+    } else {
+        0.0
     };
+    let place = egui::vec2((marge.width() - reserve).max(0.0), marge.height());
+    let taille = fit(place, aspect);
+    let image = Rect::from_min_size(
+        Pos2::new(marge.left(), marge.center().y - taille.y * 0.5),
+        taille,
+    );
+    let mut panneau = marge;
+    if cote_a_cote {
+        panneau.set_left(image.right() + 10.0);
+    }
+    (image, panneau)
+}
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.heading(&clip.name);
-        let mut vitesse = clip.speed.base();
-        let curseur = slider(&mut vitesse, 0.0, MAX_CLIP_SPEED).text("vitesse");
-        if ui.add(curseur).changed() {
-            commands.push(Command::SetClipSpeed {
-                clip: id,
-                value: vitesse,
-            });
-        }
+/// La scène : l'image de sortie, entière, et les réglages du clip choisi à côté.
+/// Un clic ailleurs les referme, comme un clic dans le vide du spectre.
+fn stage(ui: &mut Ui, state: &mut UiState, view: &FrameView<'_>, commands: &mut Vec<Command>) {
+    let (cadre, fond) = ui.allocate_exact_size(ui.available_size(), Sense::click());
+    ui.painter().add(egui::Shape::mesh(widgets::gradient(
+        cadre,
+        theme::PLOT_TOP,
+        theme::PLOT_BOTTOM,
+    )));
+    if fond.clicked() {
+        state.selected = None;
+    }
 
-        for groupe in clip.params() {
-            ui.add_space(6.0);
-            ui.label(RichText::new(&groupe.label).color(section_color()));
-            for param in &groupe.params {
-                param_slider(ui, id, param, commands);
+    let aspect = view.monitor.map_or(STAGE_ASPECT, |m| m.aspect);
+    let (image, panneau) = stage_layout(cadre, aspect);
+    if state.show_monitor {
+        match view.monitor {
+            Some(m) => {
+                egui::Image::new((m.texture, image.size()))
+                    .corner_radius(6)
+                    .paint_at(ui, image);
+                ui.painter().rect_stroke(
+                    image,
+                    6.0,
+                    Stroke::new(1.0, theme::GRID_STRONG),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            None => {
+                ui.put(image, Label::new("Monitor indisponible").selectable(false));
             }
         }
+    }
 
-        ui.add_space(10.0);
-        ui.separator();
-        ui.label(RichText::new(&piste.name).color(section_color()));
-        let mut opacity = piste.blend.opacity;
-        let mut valeur = opacity.base();
-        let curseur = slider(&mut valeur, 0.0, 1.0).text("opacité de la piste");
-        if ui.add(curseur).changed() {
-            opacity.set_base(valeur);
-            commands.push(Command::SetLayerOpacity { layer, opacity });
-        }
+    if !state.show_settings {
+        return;
+    }
+    let selection = state.selected.filter(|(layer, id)| {
+        view.composition.layer(*layer).is_some() && view.composition.clip(*id).is_some()
     });
-}
-
-fn section_color() -> Color32 {
-    theme::TEXT_DIM
+    match selection {
+        Some(choix) => clip_panel::floating(ui, panneau, state, view, commands, choix),
+        None => {
+            let aide = RichText::new("Clique un clip pour le régler.")
+                .size(11.5)
+                .color(theme::TEXT_DIM);
+            ui.put(panneau, Label::new(aide).selectable(false));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -679,6 +791,7 @@ mod tests {
                         fps: 60.0,
                         outputs: "Monitor : actif",
                         monitor: None,
+                        time: 0.0,
                         spectrum: &spectre,
                         audio_status: "Micro — 48000 Hz",
                         output: OutputView {
@@ -765,7 +878,7 @@ mod tests {
         h.run();
         h.state_mut().commands.clear();
 
-        champ(&h, "rayon").set_value_accesskit(0.8);
+        champ(&h, "RAYON").set_value_accesskit(0.8);
         h.run();
         assert_eq!(
             h.state().commands,
@@ -785,7 +898,7 @@ mod tests {
         h.run();
         h.state_mut().commands.clear();
 
-        champ(&h, "opacité de la piste").set_value_accesskit(0.5);
+        champ(&h, "OPACITÉ").set_value_accesskit(0.5);
         h.run();
         assert_eq!(
             h.state().commands,
@@ -1179,7 +1292,7 @@ mod tests {
         h.run();
         h.state_mut().commands.clear();
 
-        champ(&h, "vitesse").set_value_accesskit(2.0);
+        champ(&h, "VITESSE").set_value_accesskit(2.0);
         h.run();
         assert_eq!(
             h.state().commands,
@@ -1208,7 +1321,7 @@ mod tests {
         h.run();
         h.state_mut().commands.clear();
 
-        champ(&h, "rayon : modulation").set_value_accesskit(0.1);
+        champ(&h, "RAYON : modulation").set_value_accesskit(0.1);
         h.run();
         assert_eq!(
             h.state().commands,
@@ -1422,8 +1535,8 @@ mod tests {
         let mut h = harness(&g.composition);
         h.state_mut().ui.selected_trig = Some(trig);
         h.run();
-        // Juste à droite du dernier bouton : dans la marge du panneau.
-        let fond = h.get_by_label("Retirer").rect().right_center() + egui::vec2(5.0, 0.0);
+        // Juste à droite du dernier bouton : sur le fond du panneau.
+        let fond = h.get_by_label("Recaler").rect().right_center() + egui::vec2(5.0, 0.0);
         geste(&mut h, fond, fond + egui::vec2(40.0, -60.0));
         assert!(h.state().commands.is_empty());
     }
@@ -1502,7 +1615,7 @@ mod tests {
 
     #[test]
     fn afficher_un_potentiometre_n_emet_rien() {
-        // Le piège de `SliderClamping` : rien ne doit changer sans geste.
+        // Le piège de `clamp_existing_to_range` : rien ne change sans geste.
         let (g, trig) = grille_avec_zone();
         let h = harness_choisi(&g, trig);
         assert!(h.state().commands.is_empty());
@@ -1521,17 +1634,28 @@ mod tests {
     }
 
     #[test]
-    fn recaler_et_retirer_emettent_leurs_commandes() {
+    fn recaler_emet_sa_commande() {
         let (g, trig) = grille_avec_zone();
         let mut h = harness_choisi(&g, trig);
         h.get_by_label("Recaler").click();
         h.run();
-        h.get_by_label("Retirer").click();
+        assert_eq!(h.state().commands, vec![Command::ResetTrigCount(trig)]);
+    }
+
+    #[test]
+    fn un_trig_se_retire_par_un_menu_jamais_par_un_bouton_direct() {
+        // Sur scène, un clic raté ne supprime rien (§23.6).
+        let (g, trig) = grille_avec_zone();
+        let mut h = harness_choisi(&g, trig);
+        assert!(h.query_by_label("Retirer").is_none());
+        assert!(h.query_by_label("Retirer le trig").is_none());
+        // La puce de la barre vient avant le titre du panneau, du même nom.
+        let puce = h.query_all_by_label("Trig 1").next().unwrap();
+        puce.click_secondary();
         h.run();
-        assert_eq!(
-            h.state().commands,
-            vec![Command::ResetTrigCount(trig), Command::RemoveTrig(trig)]
-        );
+        h.get_by_label("Retirer le trig").click();
+        h.run();
+        assert_eq!(h.state().commands, vec![Command::RemoveTrig(trig)]);
     }
 
     /// Ouvre une liste de la barre d'analyse et y choisit une valeur.
@@ -1603,6 +1727,226 @@ mod tests {
             h.query_by_label("Recaler").is_none(),
             "{a:?} n'est pas choisi"
         );
+    }
+
+    #[test]
+    fn un_clic_sur_la_scene_referme_les_reglages_sans_toucher_au_clip() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        assert!(h.query_by_label("VITESSE").is_some());
+        h.state_mut().commands.clear();
+
+        // Au-dessus du spectre, à gauche : là où est l'image.
+        let image = h.get_by_label("Spectre").rect().left_top() + egui::vec2(60.0, -60.0);
+        clique(&mut h, image);
+        assert_eq!(h.state().ui.selected, None);
+        assert!(h.query_by_label("VITESSE").is_none());
+        assert!(h.state().commands.is_empty(), "rien ne s'arrête");
+    }
+
+    #[test]
+    fn le_bouton_fermer_referme_les_reglages() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.get_by_label("Fermer").click();
+        h.run();
+        assert_eq!(h.state().ui.selected, None);
+    }
+
+    #[test]
+    fn le_fond_du_panneau_de_clip_ne_le_referme_pas() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        // Dans la marge du panneau, à gauche du bouton.
+        let vide = h.get_by_label("Fermer").rect().left_center() - egui::vec2(30.0, 0.0);
+        clique(&mut h, vide);
+        assert_eq!(h.state().ui.selected, Some((g.piste, g.clips[0])));
+    }
+
+    #[test]
+    fn tous_les_reglages_d_un_clip_sont_atteignables() {
+        // Le défaut d'un pliage confié à egui : les derniers sortaient du panneau.
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        let panneau = h.get_by_label("Fermer").rect();
+        for nom in ["VITESSE", "OPACITÉ", "RAYON"] {
+            let r = champ(&h, nom).rect();
+            assert!(r.right() <= panneau.right() + 1.0, "{nom} coupé : {r:?}");
+        }
+    }
+
+    #[test]
+    fn afficher_les_reglages_d_un_clip_n_emet_rien() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.run();
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn une_valeur_hors_plage_s_affiche_sans_etre_reecrite() {
+        // La plage borne le geste, pas le paramètre : le rayon est saturé par sa
+        // forme, pas par l'interface qui l'affiche (§16.3 ter).
+        let mut g = grille();
+        let slot = ParamSlot::Generator(0);
+        assert!(g
+            .composition
+            .clip_mut(g.clips[0])
+            .unwrap()
+            .set_param(slot, 50.0));
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.run();
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn tourner_un_potentiometre_de_clip_regle_son_parametre() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        let cadran = champ(&h, "RAYON").rect().center_top() - egui::vec2(0.0, 40.0);
+        geste(&mut h, cadran, cadran + egui::vec2(0.0, -32.0));
+        assert!(matches!(
+            h.state().commands.last(),
+            Some(Command::SetParam { .. })
+        ));
+    }
+
+    #[test]
+    fn le_tempo_est_dans_l_en_tete_avec_le_nom_du_fichier() {
+        let g = grille();
+        let h = harness(&g.composition);
+        let tap = h.get_by_label("Tap").rect();
+        let fichier = h.get_by_label("Fichier").rect();
+        assert!((tap.center().y - fichier.center().y).abs() < 4.0);
+        assert!(h.query_by_label("60 fps").is_some());
+    }
+
+    #[test]
+    fn la_pulsation_tombe_sur_le_temps_et_retombe() {
+        // À 120 BPM, un temps toutes les 0.5 s.
+        assert_eq!(beat_pulse(0.0, 120.0), 1.0);
+        assert_eq!(beat_pulse(1.0, 120.0), 1.0);
+        assert!(beat_pulse(0.25, 120.0) < 0.2);
+        assert!(beat_pulse(0.05, 120.0) > beat_pulse(0.1, 120.0));
+    }
+
+    #[test]
+    fn la_pulsation_ne_panique_pas_sans_tempo() {
+        assert!(beat_pulse(3.0, 0.0).is_finite());
+        assert!(beat_pulse(3.0, -5.0).is_finite());
+    }
+
+    #[test]
+    fn une_boucle_avance_avec_le_clip_et_revient_a_zero() {
+        let g = grille();
+        let mut c = g.composition;
+        let clip = c.clip_mut(g.clips[0]).unwrap();
+        assert_eq!(loop_progress(clip), Some(0.0));
+        // À 120 BPM, 2 battements par seconde : un quart des 4 battements.
+        clip.graph_mut().set_bpm(120.0);
+        for _ in 0..10 {
+            clip.graph_mut().eval_frame(0.0, 0.05);
+        }
+        let t = loop_progress(clip).unwrap();
+        assert!((t - 0.25).abs() < 1e-3, "got {t}");
+        // 2 s de plus : un tour complet, et elle retrouve sa place.
+        for _ in 0..40 {
+            clip.graph_mut().eval_frame(0.0, 0.05);
+        }
+        let t = loop_progress(clip).unwrap();
+        assert!((t - 0.25).abs() < 1e-3, "got {t}");
+    }
+
+    #[test]
+    fn un_clip_en_temps_absolu_n_a_pas_de_boucle() {
+        let mut g = Graph::new();
+        let position = g.add(Box::new(Constant(1.0)));
+        let transport = Transport::Timeline {
+            position,
+            speed: Param::fixed(1.0),
+        };
+        let clip = Clip::shape(g, Box::new(Ellipse::circle(0.5)), transport);
+        assert_eq!(loop_progress(&clip), None);
+    }
+
+    #[test]
+    fn une_boucle_de_duree_nulle_ne_divise_pas_par_zero() {
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(0.0), PlayMode::Loop);
+        let clip = Clip::shape(g, Box::new(Ellipse::circle(0.5)), transport);
+        assert_eq!(loop_progress(&clip), None);
+    }
+
+    fn scene(largeur: f32, hauteur: f32) -> Rect {
+        Rect::from_min_size(Pos2::new(10.0, 20.0), egui::vec2(largeur, hauteur))
+    }
+
+    #[test]
+    fn l_image_garde_ses_proportions_et_laisse_la_place_au_panneau() {
+        let (image, panneau) = stage_layout(scene(1270.0, 390.0), 16.0 / 9.0);
+        assert!((image.width() / image.height() - 16.0 / 9.0).abs() < 1e-3);
+        assert!(!image.intersects(panneau), "elle reste entière");
+        assert!(panneau.width() >= clip_panel::RESERVED_WIDTH);
+    }
+
+    #[test]
+    fn une_scene_large_garde_sa_reserve_meme_haute() {
+        // Une image limitée par sa largeur ne doit pas manger le panneau.
+        let (image, panneau) = stage_layout(scene(1000.0, 900.0), 16.0 / 9.0);
+        assert!(!image.intersects(panneau));
+        assert!(panneau.width() >= clip_panel::RESERVED_WIDTH);
+    }
+
+    #[test]
+    fn une_scene_etroite_laisse_le_panneau_se_poser_sur_l_image() {
+        let (image, panneau) = stage_layout(scene(600.0, 400.0), 16.0 / 9.0);
+        assert!(image.width() > 500.0, "l'image prend tout");
+        assert!(image.intersects(panneau));
+    }
+
+    #[test]
+    fn une_scene_nulle_ne_divise_pas_par_zero() {
+        let (image, _) = stage_layout(scene(0.0, 0.0), 16.0 / 9.0);
+        assert_eq!(image.size(), egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn l_image_est_calee_a_gauche_de_la_scene() {
+        // `stage_layout` ne reçoit pas la sélection : choisir un clip ne peut
+        // pas la déplacer.
+        let (image, _) = stage_layout(scene(1270.0, 390.0), 2.0);
+        assert_eq!(image.left(), scene(1270.0, 390.0).left() + 10.0);
+    }
+
+    #[test]
+    fn le_nom_du_fichier_est_au_milieu_de_la_fenetre() {
+        let g = grille();
+        let h = harness(&g.composition);
+        // Le nom et l'état du fichier, ensemble.
+        let debut = h.get_by_label("concert.frogenx *").rect().left();
+        let fin = h
+            .get_by_label("Enregistré : concert.frogenx")
+            .rect()
+            .right();
+        let milieu = (debut + fin) * 0.5;
+        assert!((milieu - 700.0).abs() < 6.0, "got {milieu}");
     }
 
     #[test]

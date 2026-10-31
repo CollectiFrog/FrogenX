@@ -108,6 +108,7 @@ impl Gui {
             fps,
             outputs: &sorties,
             monitor: Some(self.monitor),
+            time: engine.clock().t(),
             spectrum: &engine.audio().spectrum,
             audio_status,
             output: sortie,

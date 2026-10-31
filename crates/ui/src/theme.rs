@@ -30,7 +30,7 @@ pub const GRID: Color32 = Color32::from_rgb(0x28, 0x27, 0x2f);
 pub const GRID_STRONG: Color32 = Color32::from_rgb(0x3a, 0x38, 0x43);
 /// La courbe du son.
 pub const CURVE: Color32 = Color32::from_rgb(0xa8, 0xa6, 0xb2);
-/// Un panneau posé sur le spectre : il le laisse deviner.
+/// Un panneau posé sur un signal : il le laisse deviner.
 pub const GLASS: Color32 = Color32::from_rgba_premultiplied(0x1a, 0x19, 0x1f, 0xe6);
 /// Le vumètre, du bas vers le haut.
 pub const METER_LOW: Color32 = Color32::from_rgb(0x3f, 0x8f, 0x3a);

@@ -514,7 +514,7 @@ L'identifiant, les dépendances et l'état sont conservés : déplacer une zone 
 compte. Refusé si la mémoire du module change (`GraphError::StateSizeMismatch`).
 `Graph::node_state` expose l'état d'un nœud en lecture, pour afficher le compte.
 
-**Non couvert.** Un trig n'est pas encore sauvegardé (étape 7e). L'interface ne sait pas
+**Non couvert.** L'interface ne sait pas
 brancher `flash` sur un `Param` : ce câble s'écrit en code, jusqu'à l'éditeur de nœuds. Le
 trig d'un `Column` déclenche sur le deck actif, comme tout `TriggerColumn`.
 
@@ -1084,7 +1084,7 @@ hors CI puisqu'il faut un écran. La fluidité reste une vérification à l'œil
 **Le geste.** Le menu `Sortie` liste les écrans branchés. Un clic ouvre la sortie sur
 l'écran choisi, un clic sur un autre l'y déplace, `Fermer la sortie` la ferme. Rien ne
 s'ouvre au lancement : une image qui part seule sur un mauvais écran serait pire que pas
-d'image. Le statut se lit dans la barre.
+d'image. Le statut se lit dans l'en-tête.
 
 **Une fenêtre sans bordure, pas de plein écran exclusif.** Le mode vidéo de l'écran ne
 change pas : pas de noir à l'ouverture, et l'interface garde la main sur l'autre écran.
@@ -1132,7 +1132,7 @@ ferme la sortie, jamais l'application.
 **Un écran qui disparaît.** Windows déplace alors la fenêtre sur un écran restant, donc
 potentiellement par-dessus l'interface. winit 0.30 n'a pas d'événement pour cela : `app`
 relit la liste des écrans chaque seconde, et aussitôt si la sortie est déplacée ou
-redimensionnée. Si l'écran manque, la sortie se ferme, le moteur continue, et la barre dit
+redimensionnée. Si l'écran manque, la sortie se ferme, le moteur continue, et l'en-tête dit
 `Sortie fermée : écran débranché`. Elle ne se rouvre pas seule au retour de l'écran. Un
 écran s'identifie par son nom (`\\.\DISPLAY2` sous Windows), plus stable qu'un `HMONITOR`.
 
@@ -1422,6 +1422,11 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **La durée d'analyse est un `Param`, l'analyseur garde 1 s d'historique** (§7) | la règle du §2.2 n'a pas d'exception : changer de fenêtre ne perd aucun échantillon, donc la moduler reste possible ; les méthodes et échelles sont des choix, pas des valeurs |
 | **Trois méthodes sur un même découpage**, pas un analyseur par usage (§7) | les bandes viennent de la `FreqScale` et la mesure de l'`AnalysisMethod` : toute méthode vaut sur toute échelle, et le `Spectrum` en sortie reste le même contrat pour le trig et l'interface |
 | **Une zone garde ses niveaux quand l'échelle d'amplitude change** (§7) | c'est le réglage du trig qu'on change ; une conversion silencieuse cacherait qu'une zone à 0.7 ne veut plus dire la même chose |
+| **L'image de sortie n'est jamais couverte par les réglages** (§23.9) | un spectre se lit sous un panneau, une image de sortie doit se voir entière ; c'est la seule entorse au modèle du spectre |
+| **L'image ne dépend pas de la sélection** (§23.9) | choisir un clip ne doit pas la faire sauter en plein set |
+| **Un seul potentiomètre pour tous les réglages** (`widgets::knob`), avec couronne de modulation (§23.9) | un seul geste à apprendre ; la modulation d'un `Param` se voit là où il se règle |
+| **Le pliage des réglages est calculé** (§23.9) | egui ne replie que ce dont il connaît la taille d'avance : les derniers réglages sortaient du panneau sans le dire |
+| **Un en-tête unique** au lieu d'un menu et d'une barre (§23.9) | une ligne gagnée pour l'image, et le tempo au plus près des menus |
 | **Apparence de Pro-Q, disposition de Resolume** (§23.1) | la disposition répond à la conduite d'un set, l'apparence à la lecture d'un son ; le spectre est devenu le cœur de l'audio-réactivité |
 | **Une couleur par trig, enfermée dans le spectre** (§23.1) | des zones qui se superposent se distinguent par leur couleur ; hors du panneau, l'or reste le seul ton saturé, et rien ne concurrence le monitor |
 | **Les gestes sur le spectre se calculent en coordonnées du tracé** (§23.7) | ni Hz ni pixels : un même geste vaut sur toutes les échelles, et se teste sans egui |
@@ -2612,7 +2617,8 @@ poste de VJ tourne sur des configurations d'écran très variées (un moniteur, 
 une sortie dédiée à la régie).
 
 **Reporté :** la première interface a des panneaux redimensionnables et masquables, mais
-pas déplaçables (§23.5).
+pas déplaçables (§23.5). Ses quatre zones sont aujourd'hui trois : la scène réunit le
+monitor et le panneau du clip (§23.9).
 
 **Correspondance avec le modèle FrogenX :** la grille haute est `Deck`/`LayerGroup`/
 `Layer`/`Column`/`Clip` (§3bis.1) ; le dashboard contextuel affiche les `Param` de
@@ -2713,14 +2719,14 @@ appartient (`UiState`).
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Menu : Fichier (§23.8), Affichage, Sortie (§8.4)         │
+│ En-tête : menus, tempo │ fichier │ fps, sorties (§23.9)   │
 ├──────────────────────────────────────────────────────────┤
 │ Grille : pistes × colonnes                               │
-├──────────────────────────────────────────────────────────┤
-│ Barre : BPM, tap, fps, statut des sorties                │
-├─────────────┬─────────────────────────────┬──────────────┤
-│ Monitor     │ Réglages : clip, puis piste │ Bibliothèque │
-└─────────────┴─────────────────────────────┴──────────────┘
+├─────────────────────────────────────────┬────────────────┤
+│ Scène : image, réglages du clip choisi  │ Bibliothèque   │
+├─────────────────────────────────────────┴────────────────┤
+│ Audio : spectre, zones, analyse (§23.7)                  │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **Grille.** Une ligne par piste, la plus haute en haut, comme dans la pile de
@@ -2729,9 +2735,10 @@ un clic sur un en-tête déclenche la colonne. Le clip actif porte l'accent or (
 il n'y a **pas de vignette**, qui évaluerait tous les clips. Chaque ligne montre une case
 par colonne, vide ou non (§3bis.1).
 
-**Réglages.** La vitesse du clip, les groupes de `Clip::params` (§3bis.2), puis l'opacité
-de la piste. Chaque curseur émet `Command::SetParam`, qui passe par `Param::set_base`
-(§16.3 ter). Un paramètre modulé a un second curseur pour son amplitude.
+**Réglages.** La vitesse du clip, l'opacité de la piste, puis les groupes de
+`Clip::params` (§3bis.2), dans le panneau flottant du clip (§23.9). Chaque potentiomètre
+émet `Command::SetParam`, qui passe par `Param::set_base` (§16.3 ter). Un paramètre modulé
+a une couronne, et une saisie pour sa profondeur.
 
 **Le thread.** egui tourne sur le thread principal, dans la boucle du moteur (§20.2) :
 la frame d'abord, l'interface ensuite, puis une présentation, à chaque échéance. Une
@@ -2844,8 +2851,9 @@ sans egui (`moved`, `grab_at`). Seules les bornes touchées émettent une comman
 **Le panneau flottant** n'existe que pour le trig choisi, et son fond retient la souris :
 un clic manqué ne trace pas de zone dessous. Cinq potentiomètres (`BASSE`, `HAUTE`, `SEUIL`,
 `PLAFOND`, `MARGE`), chacun avec sa valeur exacte en saisie ; le compteur en boutons, parce
-que six valeurs se lisent mieux qu'une liste ; le coup attendu, la cible, `Recaler` et
-`Retirer`. La barre du bas règle l'analyse (§7), et la fenêtre annonce sa résolution au
+que six valeurs se lisent mieux qu'une liste ; le coup attendu, la cible et `Recaler`.
+Retirer un trig passe par un clic droit sur sa puce : sur scène, un clic raté ne
+supprime rien (§23.6). La barre du bas règle l'analyse (§7), et la fenêtre annonce sa résolution au
 survol. Sans entrée audio, elle dit pourquoi et l'application tourne quand même (§18.1).
 
 **Pièges.** `drag_started` ne tombe qu'après quelques pixels : un geste part de
@@ -2897,7 +2905,7 @@ tempo en sont. Le clip actif n'est donc enregistré qu'avec une vraie sauvegarde
 **Au lancement.** Priorité à `--patch fichier`, puis au dernier fichier ouvert ou
 enregistré, puis à la grille de départ. Le chemin du dernier fichier se garde dans le
 dossier de configuration du système, sans nouvelle dépendance. S'il a disparu ou se refuse,
-l'application démarre sur la grille de départ et le dit dans la barre : un lancement ne doit
+l'application démarre sur la grille de départ et le dit dans l'en-tête : un lancement ne doit
 jamais échouer à cause d'un fichier.
 
 **L'ordre d'un graphe est stable.** Le tri topologique prend le plus petit index d'abord :
@@ -2927,6 +2935,59 @@ fichier disparu, abîmé ou d'une version future : l'application démarre et le 
 n'atteint pas egui, §23.5), une ouverture réelle par la boîte `Ouvrir…`, Ctrl+S dans la vraie
 fenêtre (couvert par un clic simulé), et Linux et macOS, où `rfd` a ses propres contraintes
 de thread.
+
+### 23.9 Toute l'interface sur le modèle du spectre
+
+Le panneau audio (§23.7) a fixé un modèle ; le reste de l'application le reprend, parce
+qu'une interface se lit mieux quand tout s'y manipule de la même façon.
+
+| Principe | Panneau audio | Reste de l'interface |
+|---|---|---|
+| Le signal d'abord | le spectre remplit le panneau | l'image de sortie occupe la scène, les cellules actives montrent leur boucle |
+| Un réglage flotte, et disparaît | le panneau du trig choisi | le panneau du clip choisi, à côté de l'image |
+| Un seul geste de réglage | potentiomètres | potentiomètres pour tous les réglages de clip (`widgets::knob`) |
+| Fermer se fait dans le vide | clic dans le vide du spectre | clic sur la scène, ou `Fermer` |
+| Retirer passe par un menu | clic droit sur la puce d'un trig | clic droit sur une case, une colonne, une piste (§23.6) |
+
+**L'en-tête** remplace la barre de menu et la barre d'outils : une seule ligne, comme le
+haut de Pro-Q. À gauche le nom, les menus et le tempo, au plus près parce que c'est ce
+qu'on touche le plus sur scène ; au milieu le fichier, centré sur la fenêtre et non sur la
+place laissée par les menus ; à droite l'état de la machine. Le nom du fichier, ses refus,
+et l'état de la sortie y restent toujours lisibles (§8.4, §23.8). La pastille du tempo
+pulse à chaque temps : elle dit le tempo, **pas la place dans la mesure**, puisque rien ne
+recale encore la phase (§3bis.3).
+
+**La scène.** L'image est calée à gauche, entière. **Le panneau du clip ne la couvre pas :
+c'est la seule entorse au modèle du spectre, et elle est voulue.** Un spectre se lit encore
+sous un panneau ; une image de sortie doit se voir entière. Il flotte donc à côté, dans
+440 pixels réservés, et ne se pose dessus que sous 800 pixels de large (`stage_layout`).
+L'image ne dépend pas de la sélection : choisir un clip ne la fait pas sauter en plein set.
+
+**La grille.** Une cellule active porte l'or, un halo qui ne déplace pas ses voisines, et
+une barre d'avancement de sa boucle (`loop_progress`). Seul le clip actif est lu : c'est
+le même coût qu'avant, puisqu'il est déjà évalué (§3bis.2). Une case vide n'est qu'un
+contour : la grille se lit par ce qu'elle contient.
+
+**Le panneau du clip.** Un potentiomètre par `Param`, regroupés en cartes : le clip et sa
+piste, le générateur, chaque effet, le style. Un `Param` modulé porte **une couronne**,
+reprise de l'anneau de gain de Pro-Q : l'arc montre ce que la modulation parcourt, le point
+où elle en est à cette frame, et une ligne `±` règle sa profondeur.
+
+**Pièges.** `horizontal_wrapped` ne replie que ce dont il connaît la taille d'avance : une
+carte y restait sur sa ligne, coupée au bord, alors qu'il restait de la place dessous. Le
+pliage est donc calculé (`wrap_cards`), et une carte trop large replie ses propres
+potentiomètres. `DragValue` réécrit par défaut une valeur hors plage, ce qui émettrait une
+commande à chaque frame : `clamp_existing_to_range(false)`, pour la même raison que les
+curseurs d'avant (§16.3 ter). Sans cela, un rayon hors plage marquait le fichier comme
+modifié sans que personne n'y touche.
+
+**Ce qui est vérifié, et comment.** Les clics, glissés et saisies par `egui_kittest` ;
+le pliage, le partage de la scène, l'avancement et la pulsation par des tests purs. Trois
+captures de la vraie fenêtre ont été regardées, avec une grille de départ, un clip ouvert,
+deux trigs et un spectre simulé. Mesuré en release, en 1440 × 900 : 1,2 ms d'interface par
+frame, 16,0 à 17,2 ms entre deux frames. **Pas encore essayés :** les gestes à la vraie
+souris, une scène sous 800 pixels à l'écran (elle n'est testée que par `stage_layout`), et
+une fenêtre sur un écran 4K.
 
 ---
 
