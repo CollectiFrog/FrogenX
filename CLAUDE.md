@@ -113,9 +113,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés. `file_flow.rs`
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
-**Prochaine étape : à choisir.** L'éditeur de nœuds, qui n'a pas de numéro au §12, rendrait
-accessibles les modulations encore réservées au code ; la 9 est la `FeedbackLayer`. Le BPM et
-les features n'ont pas encore été essayés sur de la vraie musique (§7.1).
+**Prochaine étape : 9, le feedback (§6.1).** Le backlog complet est au §12.1, à tenir à jour.
+Le BPM et les features n'ont pas encore été essayés sur de la vraie musique (§7.1).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

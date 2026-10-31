@@ -660,6 +660,44 @@ ambigu. Les implémentations gardent leur nom (`ShapeLayer`, `FeedbackLayer`,
 **déplacement UV** sur la vidéo. C'est là que vectoriel et matriciel deviennent
 réellement intéressants ensemble, plutôt que simplement superposés.
 
+### 6.1 Le feedback (étape 9)
+
+> Le principe est fixé au §22 ; ce qui suit le place dans la grille.
+
+**Un feedback est un clip.** `ClipSource::Feedback`, à côté de `Shape` : il se glisse depuis
+la bibliothèque, se déclenche, se règle au potentiomètre, se module par le son et se
+sauvegarde comme les autres. Une couche d'effet attachée à une piste aurait demandé un
+second chemin pour tout cela.
+
+**Il réinjecte l'image finale de la frame d'avant**, transformée et affaiblie, pas seulement
+sa propre piste : c'est ce qui donne des échos de toute la composition. `Engine` copie la
+texture finale dans une `FrameHistory` à la fin de chaque frame. Le feedback lit cette copie
+et écrit sa propre cible : lire et écrire la même texture est interdit (§22). Le délai est
+d'une frame exactement, et le graphe reste un DAG (§13).
+
+**Tout s'exprime par seconde, jamais par frame.** Une rotation réglée par frame tournerait
+deux fois plus vite à 120 fps. `FeedbackParams` porte quatre `Param` :
+
+| Paramètre | Unité | Par frame |
+|---|---|---|
+| `zoom` | facteur par seconde | `zoom^dt` |
+| `rotation` | radians par seconde | `rotation × dt` |
+| `dérive x`, `dérive y` | unités d'espace par seconde | `dérive × dt` |
+| `mémoire` | secondes pour perdre la moitié | `0,5^(dt / mémoire)` |
+
+La vitesse du clip multiplie ce `dt`, comme pour son graphe (§3bis.2) : à zéro, l'écho se fige.
+
+**Où le poser.** Sur une piste **sous** les formes, en `Normal`, il laisse des traînées
+derrière elles. Au-dessus, en `Add`, il ajoute des échos lumineux. La mémoire reste bornée :
+au-delà de 30 s, le paramètre est saturé chez le consommateur (§18.4), pour qu'une image ne
+s'accumule pas sans fin.
+
+**Le coût.** Une copie de texture par frame, que le feedback joue ou non : elle évite qu'un
+clip déclenché réinjecte une image vieille de plusieurs minutes. Une cible de plus, allouée à
+la première utilisation d'un feedback sur la piste.
+
+**Fichier.** Un clip porte `generator` et `style`, ou `feedback`. C'est la version 3 du format.
+
 ---
 
 ## 7. Audio
@@ -1472,6 +1510,61 @@ multiples arrivent. La 3D (étape 13) et l'éclairage (étape 14) viennent aprè
 pipeline vidéo/audio-réactif est prouvé, pour la même raison qu'avant la réorientation
 la vidéo venait en dernier (§9.3) : travail conséquent, largement indépendant du reste.
 
+### 12.1 Le backlog des features
+
+La feuille de route dit l'ordre ; ce tableau dit où en est chaque feature, y compris celles
+ajoutées en cours de route et celles qui n'ont pas de numéro. À tenir à jour dans le commit
+qui les livre (skill `doc-sync`).
+
+**Livré**
+
+| Feature | Détail |
+|---|---|
+| Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
+| Formes | 8 générateurs, 5 effets, style de remplissage et de trait |
+| Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
+| Bibliothèque | 24 clips calés sur le tempo, grille de départ (§23.6) |
+| Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |
+| Sortie plein écran | menu `Sortie`, fenêtre sans bordure, écran perdu géré (§8.4) |
+| Sauvegarde | format JSON versionné, migrations, dernier fichier rouvert, confirmation (§19, §23.8) |
+| Spectre | 3 méthodes, 4 échelles de fréquence, 2 d'amplitude, durée réglable (§7) |
+| Trig | zone tracée sur le spectre, compteur « 1 sur N », cible clip ou colonne (§3bis.6) |
+| Features audio | volume, registres, brillance, transitoires, chroma, comme `Signal` (§7.1) |
+| Modulation par le son | source audio au clic droit de chaque potentiomètre (§7.1) |
+| BPM | détection et suivi du tempo (§7.1) |
+| Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
+
+**À faire, dans l'ordre conseillé**
+
+| Priorité | Feature | Pourquoi | Taille |
+|---|---|---|---|
+| 1 | `FeedbackLayer`, étape 9 | traînées et échos, rendu très rentable | moyenne |
+| 2 | Éditeur de nœuds, sans numéro | rend accessibles les câblages encore réservés au code : un `flash` de trig sur une opacité, un effet ajouté à un clip, le lissage d'une source | grande |
+| 3 | Sources audio sur l'opacité et la vitesse | elles vivent dans le graphe de composition : pas encore de menu | petite |
+| 4 | Annuler et rétablir | l'architecture par `Command` le permet ; rien n'est branché | moyenne |
+| 5 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
+| 6 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
+| 7 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
+| 8 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 9 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 10 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
+| 11 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
+| 12 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 13 | Scène 3D, étape 13 | | très grande |
+| 14 | Art-Net / DMX, étape 14 | | moyenne |
+| 15 | Scripting Lua, étape 15 | | moyenne |
+| 16 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 17 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+
+**À vérifier de main d'homme**
+
+| Point | État |
+|---|---|
+| BPM, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
+| Menus `Sortie` et `Fichier`, clic droit des potentiomètres, à la vraie souris | validés par clics simulés seulement |
+| Projecteur, câble débranché, écran à une autre fréquence | jamais essayés (§8.4) |
+| Linux et macOS | jamais essayés |
+
 ---
 
 ## 13. Décisions et leur raison
@@ -1578,6 +1671,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
 | **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **Un feedback est un clip, pas un effet de piste** (§6.1) | il hérite de la bibliothèque, des potentiomètres, des sources audio et de la sauvegarde ; un effet de piste aurait demandé un second chemin pour chacun |
+| **Le feedback relit l'image finale, copiée en fin de frame** (§6.1) | il donne des échos de toute la composition, avec un délai d'une frame exactement, sans lire et écrire la même texture |
+| **Réglages du feedback par seconde** (§6.1) | un réglage par frame changerait d'image avec la cadence, et casserait le rendu offline à une autre cadence |
 | **Les features ont leur propre analyse, fixe** (§7.1) | régler le spectre pour poser une zone ne doit déplacer ni le tempo ni une modulation |
 | **`onset` est une impulsion qui retombe, pas un booléen** (§7.1) | l'analyse tourne plus vite que les frames : un drapeau serait perdu entre deux lectures du triple buffer |
 | **BPM par autocorrélation et peigne, avec une préférence autour de 120** (§7.1) | sans dépendance, et testé sur des boucles de synthèse ; un seul retard ne donne que 3 BPM de précision ; un tempo double ou moitié reste ambigu sans préférence |
@@ -2182,7 +2278,9 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
 ```
 
 Le format réel commence à la version 1. La version 2 ajoute `tempo_follow` (§7.1) : un
-fichier v1 se migre en le mettant à `false`, ce qu'il faisait déjà sans le dire.
+fichier v1 se migre en le mettant à `false`, ce qu'il faisait déjà sans le dire. La version
+3 ajoute les clips de feedback (§6.1) : `generator` et `style` deviennent facultatifs, et un
+fichier v2 n'a rien à changer.
 
 Migrations **en chaîne**, une fonction par saut de version. Un patch v1 traverse
 `1→2→3` — on n'écrit jamais de migration directe `1→3`, qui doublerait le travail à

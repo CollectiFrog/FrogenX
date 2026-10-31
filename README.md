@@ -1,7 +1,7 @@
 # FrogenX
 
-Générateur de visuels procéduraux, organiques et géométriques — temps réel, piloté
-comme un synthétiseur modulaire.
+Mixeur de visuels procéduraux en temps réel, organisé en grille de clips, où chaque clip
+se pilote comme un synthétiseur modulaire et où le son module l'image.
 
 Des **signaux** (oscillateurs, LFO, features audio) modulent des **paramètres** de
 **formes**, rendues en **couches** composées ensemble, puis envoyées vers plusieurs
@@ -9,7 +9,7 @@ Des **signaux** (oscillateurs, LFO, features audio) modulent des **paramètres**
 
 - Rendu temps réel GPU (wgpu) — Linux, macOS, Windows
 - Modulation audio-réactive
-- Sorties simultanées : écran, NDI / Spout / Syphon, enregistrement vidéo
+- Sortie plein écran sur un second écran ; à venir : NDI / Spout / Syphon, enregistrement
 
 ## Documentation
 
@@ -26,4 +26,5 @@ Deux règles non négociables, détaillées dans
 
 ## État
 
-En cours de démarrage — voir la [feuille de route](docs/ARCHITECTURE.md#12-feuille-de-route).
+La première version fonctionne : `cargo run` ouvre l'application. Ce qui est livré et ce qui
+reste à faire sont dans le [backlog](docs/ARCHITECTURE.md#121-le-backlog-des-features).
