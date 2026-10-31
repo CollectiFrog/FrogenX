@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 /// La version écrite par ce programme. Tout changement du format l'incrémente,
 /// avec sa migration et sa fixture (§19.2).
-pub const CURRENT_VERSION: u64 = 2;
+pub const CURRENT_VERSION: u64 = 3;
 /// Plus de colonnes que ça n'est pas une grille : un fichier abîmé.
 pub const MAX_COLUMNS: usize = 4096;
 /// Refusé avant d'allouer quoi que ce soit.
@@ -117,6 +117,7 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
     while version < CURRENT_VERSION {
         data = match version {
             1 => migrate_1_to_2(data),
+            2 => migrate_2_to_3(data),
             _ => return Err(PatchError::UnknownVersion(version)),
         };
         version += 1;
@@ -128,6 +129,13 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
 fn migrate_1_to_2(mut data: Value) -> Value {
     data["tempo_follow"] = Value::Bool(false);
     data["version"] = Value::from(2);
+    data
+}
+
+/// La version 3 ajoute les clips de feedback (§6.1) : un fichier v2 n'en a pas, et
+/// `generator` et `style` y sont tous présents.
+fn migrate_2_to_3(mut data: Value) -> Value {
+    data["version"] = Value::from(3);
     data
 }
 
@@ -184,8 +192,8 @@ mod tests {
     fn une_version_plus_recente_est_refusee_sans_deviner() {
         let json = format!("{{\"version\": {}}}", CURRENT_VERSION + 1);
         let erreur = from_json(&json).err().expect("refusé");
-        assert!(matches!(erreur, PatchError::UnknownVersion(3)));
-        assert!(erreur.to_string().contains("version 3"));
+        assert!(matches!(erreur, PatchError::UnknownVersion(4)));
+        assert!(erreur.to_string().contains("version 4"));
     }
 
     #[test]

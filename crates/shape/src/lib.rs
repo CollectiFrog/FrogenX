@@ -52,6 +52,7 @@
 //! assert!(forme.contours[0].closed);
 //! ```
 
+pub mod feedback;
 pub mod generator;
 pub mod ops;
 pub mod parametric;
@@ -60,6 +61,7 @@ pub mod primitives;
 pub mod spec;
 pub mod style;
 
+pub use feedback::{FeedbackParams, FeedbackStep};
 pub use generator::{ParamDesc, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 pub use ops::{Chain, Deform, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform};
 pub use parametric::{Lissajous, Rose, Superformula};

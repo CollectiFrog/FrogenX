@@ -55,7 +55,7 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 8 faites : la première version est là.** `cargo run` ouvre l'application : une interface egui sur la
+**Étapes 1 à 9 faites : la première version est là, et le feedback avec.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
 les colonnes et Espace pour taper. Le menu `Sortie` envoie l'image en plein écran sur un
@@ -91,11 +91,13 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   features fixes et BPM (`features.rs`, `tempo.rs`, §7.1). Seul
   `capture.rs` touche à la carte son ; le reste se teste sur des signaux de synthèse. Dépend
   de `core` seule : `app` pose les features dans `Engine` (`set_audio`).
-- `crates/library` : les 24 clips prédéfinis et la grille de départ (§23.6), en code
+- `crates/library` : les 27 clips prédéfinis et la grille de départ (§23.6), en code
   jusqu'au format de l'étape 7e. Sans GPU ni carte son.
 - `crates/patch` : le format de fichier (§19), `Composition` ↔ JSON, version et fixture,
   écriture par fichier temporaire. Seule crate à connaître le JSON ; `core` décrit un nœud
   par une `Spec` neutre. Un nouveau `Signal` doit entrer dans `patch/src/signals.rs`.
+- Un clip est une forme ou un écho (`ClipSource::Feedback`, §6.1) : l'écho relit l'image
+  finale de la frame d'avant, et ses réglages s'expriment par seconde, jamais par frame.
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
   `ShapeRenderer` (un par piste, le clip lui prête son `ShapeContent`), `ShapeLayer`,
   tessellation lyon (module sans wgpu).
@@ -113,7 +115,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés. `file_flow.rs`
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
-**Prochaine étape : 9, le feedback (§6.1).** Le backlog complet est au §12.1, à tenir à jour.
+**Prochaine étape : l'éditeur de nœuds, à trancher.** Le backlog complet est au §12.1, à tenir
+à jour.
 Le BPM et les features n'ont pas encore été essayés sur de la vraie musique (§7.1).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 

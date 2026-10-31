@@ -3,7 +3,9 @@
 
 use frogenx_core::{FeatureKind, Graph, Param};
 use frogenx_osc::AudioFeature;
-use frogenx_shape::{ColorParam, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle, COLOR_CHANNELS};
+use frogenx_shape::{
+    ColorParam, FeedbackParams, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle, COLOR_CHANNELS,
+};
 
 use crate::crossfader::FadeCurve;
 use crate::position::PositionSignal;
@@ -20,6 +22,11 @@ pub enum ClipSource {
         graph: Graph,
         generator: Box<dyn ShapeGenerator>,
         style: ShapeStyle,
+    },
+    /// L'image finale de la frame d'avant, déplacée et affaiblie (§6.1).
+    Feedback {
+        graph: Graph,
+        params: FeedbackParams,
     },
     // `Scene3d(Graph)` et `Video(VideoTrack)` arrivent aux étapes 13 et 12
     // de la feuille de route (§12) — non représentés avant que `scene3d` et
@@ -157,6 +164,18 @@ impl Clip {
         }
     }
 
+    /// Un clip de feedback (§6.1). Il porte le nom de son type.
+    pub fn feedback(graph: Graph, params: FeedbackParams, transport: Transport) -> Self {
+        Self {
+            name: params.kind().to_string(),
+            source: ClipSource::Feedback { graph, params },
+            effects: Vec::new(),
+            transport,
+            transition: ClipTransition::Cut,
+            speed: Param::fixed(1.0),
+        }
+    }
+
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
@@ -165,12 +184,7 @@ impl Clip {
     /// Tout ce qui se règle dans ce clip, sans connaître aucun type de forme
     /// (§16.3 ter). Les `Param` de son graphe interne n'y figurent pas.
     pub fn params(&self) -> Vec<ParamGroup> {
-        let ClipSource::Shape {
-            generator,
-            style,
-            graph,
-        } = &self.source;
-
+        let graph = self.graph();
         let enumere = |descs: Vec<ParamDesc>, slot: &dyn Fn(usize) -> ParamSlot| {
             descs
                 .into_iter()
@@ -183,6 +197,17 @@ impl Clip {
                 .collect()
         };
 
+        let (generator, style) = match &self.source {
+            ClipSource::Shape {
+                generator, style, ..
+            } => (generator, style),
+            ClipSource::Feedback { params, .. } => {
+                return vec![ParamGroup {
+                    label: params.kind().to_string(),
+                    params: enumere(params.params(), &ParamSlot::Generator),
+                }];
+            }
+        };
         let mut groupes = vec![ParamGroup {
             label: generator.kind().to_string(),
             params: enumere(generator.params(), &ParamSlot::Generator),
@@ -278,9 +303,17 @@ impl Clip {
     }
 
     fn param_mut(&mut self, slot: ParamSlot) -> Option<&mut Param> {
-        let ClipSource::Shape {
-            generator, style, ..
-        } = &mut self.source;
+        let (generator, style) = match &mut self.source {
+            ClipSource::Shape {
+                generator, style, ..
+            } => (generator, style),
+            ClipSource::Feedback { params, .. } => {
+                return match slot {
+                    ParamSlot::Generator(i) => params.param_mut(i),
+                    _ => None,
+                };
+            }
+        };
         match slot {
             ParamSlot::Generator(i) => generator.param_mut(i),
             ParamSlot::Effect { effect, param } => self
@@ -297,20 +330,23 @@ impl Clip {
     }
 
     pub fn with_style(mut self, new_style: ShapeStyle) -> Self {
-        let ClipSource::Shape { style, .. } = &mut self.source;
-        *style = new_style;
+        if let ClipSource::Shape { style, .. } = &mut self.source {
+            *style = new_style;
+        }
         self
     }
 
     /// Le graphe qui pilote ce clip.
     pub fn graph(&self) -> &Graph {
-        let ClipSource::Shape { graph, .. } = &self.source;
-        graph
+        match &self.source {
+            ClipSource::Shape { graph, .. } | ClipSource::Feedback { graph, .. } => graph,
+        }
     }
 
     pub fn graph_mut(&mut self) -> &mut Graph {
-        let ClipSource::Shape { graph, .. } = &mut self.source;
-        graph
+        match &mut self.source {
+            ClipSource::Shape { graph, .. } | ClipSource::Feedback { graph, .. } => graph,
+        }
     }
 
     pub fn with_effect(mut self, op: Box<dyn ShapeOp>) -> Self {
@@ -414,6 +450,49 @@ mod tests {
         assert!(!c.set_audio_modulation(slot, Some(FeatureKind::Rms)));
     }
 
+    fn un_echo() -> Clip {
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+        Clip::feedback(g, FeedbackParams::default(), transport)
+    }
+
+    #[test]
+    fn un_feedback_expose_ses_reglages_et_rien_d_autre() {
+        let c = un_echo();
+        let groupes = c.params();
+        assert_eq!(groupes.len(), 1);
+        assert_eq!(groupes[0].label, "Écho");
+        assert_eq!(groupes[0].params.len(), 5);
+        assert_eq!(c.name, "Écho");
+    }
+
+    #[test]
+    fn un_feedback_se_regle_et_se_module_comme_une_forme() {
+        let mut c = un_echo();
+        let slot = ParamSlot::Generator(0);
+        assert!(c.set_param(slot, 2.0));
+        assert!(c.set_audio_modulation(slot, Some(FeatureKind::Onset)));
+        let ClipSource::Feedback { params, .. } = &c.source else {
+            panic!("un feedback");
+        };
+        assert_eq!(params.zoom.base(), 2.0);
+        assert!(params.zoom.source().is_some());
+        assert_eq!(c.params()[0].params[0].audio, Some(FeatureKind::Onset));
+    }
+
+    #[test]
+    fn un_feedback_refuse_ce_qu_il_n_a_pas() {
+        let mut c = un_echo();
+        assert!(!c.set_param(ParamSlot::Fill(0), 0.5));
+        assert!(!c.set_param(ParamSlot::Generator(99), 0.5));
+    }
+
+    #[test]
+    fn un_style_n_a_pas_de_sens_sur_un_feedback() {
+        let c = un_echo().with_style(ShapeStyle::default());
+        assert!(matches!(c.source, ClipSource::Feedback { .. }));
+    }
+
     fn dummy_position() -> NodeId {
         // Un Clip de test n'a pas besoin que `position` résolve réellement
         // dans ce graphe — seule la forme de Transport est exercée ici.
@@ -451,7 +530,10 @@ mod tests {
 
         let ClipSource::Shape {
             graph, generator, ..
-        } = &clip.source;
+        } = &clip.source
+        else {
+            panic!("un clip de forme");
+        };
         let audio = AudioFeatures::default();
         let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
         let mut path = Path::new();
@@ -533,11 +615,15 @@ mod tests {
     fn un_reglage_garde_la_modulation() {
         let mut clip = clip_complet();
         let source = dummy_position();
-        let ClipSource::Shape { style, .. } = &mut clip.source;
+        let ClipSource::Shape { style, .. } = &mut clip.source else {
+            panic!("un clip de forme");
+        };
         style.fill.as_mut().unwrap().r = Param::modulated(0.1, 0.5, source);
 
         assert!(clip.set_param(ParamSlot::Fill(0), 0.8));
-        let ClipSource::Shape { style, .. } = &clip.source;
+        let ClipSource::Shape { style, .. } = &clip.source else {
+            panic!("un clip de forme");
+        };
         assert_eq!(
             style.fill.unwrap().r,
             Param::modulated(0.8, 0.5, source),
@@ -549,11 +635,15 @@ mod tests {
     fn l_amplitude_se_regle_sur_un_parametre_module_seulement() {
         let mut clip = clip_complet();
         let source = dummy_position();
-        let ClipSource::Shape { style, .. } = &mut clip.source;
+        let ClipSource::Shape { style, .. } = &mut clip.source else {
+            panic!("un clip de forme");
+        };
         style.fill.as_mut().unwrap().r = Param::modulated(0.1, 0.5, source);
 
         assert!(clip.set_depth(ParamSlot::Fill(0), 0.2));
-        let ClipSource::Shape { style, .. } = &clip.source;
+        let ClipSource::Shape { style, .. } = &clip.source else {
+            panic!("un clip de forme");
+        };
         assert_eq!(style.fill.unwrap().r, Param::modulated(0.1, 0.2, source));
 
         assert!(!clip.set_depth(ParamSlot::Fill(1), 0.2), "pas de câble");
@@ -593,13 +683,17 @@ mod tests {
             speed: Param::fixed(1.0),
         };
         let nu = Clip::shape(Graph::new(), Box::new(Ellipse::circle(0.5)), transport);
-        let ClipSource::Shape { style, .. } = &nu.source;
+        let ClipSource::Shape { style, .. } = &nu.source else {
+            panic!("un clip de forme");
+        };
         assert_eq!(*style, ShapeStyle::default());
 
         let rouge = frogenx_shape::ColorParam::srgb(1.0, 0.0, 0.0, 1.0);
         let style_voulu = ShapeStyle::filled(rouge);
         let colore = nu.with_style(style_voulu);
-        let ClipSource::Shape { style, .. } = &colore.source;
+        let ClipSource::Shape { style, .. } = &colore.source else {
+            panic!("un clip de forme");
+        };
         assert_eq!(*style, style_voulu);
     }
 

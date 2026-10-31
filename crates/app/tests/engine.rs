@@ -16,7 +16,7 @@ use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
 use frogenx_output::{
     CpuFrame, CpuSink, GpuFrame, GpuSink, OutputError, OutputSink, PngSequenceSink, SinkStatus,
 };
-use frogenx_shape::Rect;
+use frogenx_shape::{FeedbackParams, Rect};
 use glam::UVec2;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -766,6 +766,205 @@ fn le_son_change_l_image_par_une_source_audio() {
         255,
         "les graves le font revenir"
     );
+}
+
+/// Un écho sur la piste du bas, une forme rouge au-dessus, à `dt` = 1/60 s.
+fn avec_echo(params: FeedbackParams) -> (Composition, LayerId, ClipId, ClipId) {
+    let mut c = Composition::new();
+    let deck = c.add_deck("test");
+    let groupe = c.add_layer_group(deck).unwrap();
+    let bas = c.add_layer(groupe).unwrap();
+    let haut = c.add_layer(groupe).unwrap();
+    let mut g = Graph::new();
+    let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+    let echo = c
+        .add_clip(bas, Clip::feedback(g, params, transport))
+        .unwrap();
+    c.trigger(bas, echo);
+    let forme = c.add_clip(haut, carre(Graph::new(), 1.0, 0.0)).unwrap();
+    (c, haut, forme, echo)
+}
+
+/// Joue la forme une frame, la retire, puis laisse l'écho seul `frames` frames.
+fn frames_de_l_echo(gpu: Gpu, params: FeedbackParams, frames: usize) -> Vec<CpuFrame> {
+    let (composition, haut, forme, _) = avec_echo(params);
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.push(Command::TriggerClip {
+        layer: haut,
+        clip: forme,
+    });
+    moteur.frame(0.0);
+    moteur.push(Command::ClearLayer { layer: haut });
+    for _ in 0..frames {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+    let frames = recu.0.lock().unwrap();
+    frames.clone()
+}
+
+#[test]
+fn l_echo_garde_l_image_et_la_perd_selon_sa_memoire() {
+    let Some(gpu) = gpu() else { return };
+    let params = FeedbackParams {
+        memory: Param::fixed(0.25),
+        ..Default::default()
+    };
+    let frames = frames_de_l_echo(gpu, params, 30);
+    let centre = |i: usize| pixel(&frames[i], SIZE.x / 2, SIZE.y / 2);
+
+    assert_eq!(centre(0)[3], 255, "la forme");
+    // 15 frames font 0.25 s : une demi-vie. 30 en font deux.
+    let (a, b) = (centre(15)[3] as f32, centre(30)[3] as f32);
+    assert!((a - 127.5).abs() < 6.0, "après une demi-vie : {a}");
+    assert!((b - 63.75).abs() < 6.0, "après deux demi-vies : {b}");
+    assert_eq!(
+        centre(15)[0],
+        255,
+        "toujours rouge : l'alpha porte la perte"
+    );
+}
+
+#[test]
+fn l_echo_lit_la_frame_d_avant_jamais_la_courante() {
+    let Some(gpu) = gpu() else { return };
+    // Le carré ne touche pas le coin : au zoom, l'écho n'y arrive qu'après lui.
+    let frames = frames_de_l_echo(gpu, FeedbackParams::default(), 1);
+    assert_eq!(pixel(&frames[0], 0, 0)[3], 0);
+}
+
+#[test]
+fn la_premiere_frame_d_un_echo_ne_lit_rien() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, ..) = avec_echo(FeedbackParams::default());
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.frame(0.0);
+    moteur.finish();
+    assert_eq!(recu.dernier_pixel(SIZE.x / 2, SIZE.y / 2)[3], 0);
+}
+
+#[test]
+fn le_zoom_fait_grandir_l_image() {
+    let Some(gpu) = gpu() else { return };
+    // Juste hors du carré, qui couvre la moitié centrale de l'image.
+    let (x, y) = (SIZE.x * 7 / 8, SIZE.y / 2);
+    let fige = FeedbackParams {
+        memory: Param::fixed(30.0),
+        ..Default::default()
+    };
+    let immobile = frames_de_l_echo(gpu, fige, 30);
+    assert_eq!(pixel(immobile.last().unwrap(), x, y)[3], 0, "sans zoom");
+
+    let Some(gpu) = self::gpu() else { return };
+    let zoom = FeedbackParams {
+        zoom: Param::fixed(4.0),
+        ..fige
+    };
+    let agrandi = frames_de_l_echo(gpu, zoom, 60);
+    assert!(pixel(agrandi.last().unwrap(), x, y)[3] > 200, "avec zoom");
+}
+
+#[test]
+fn la_derive_deplace_l_image() {
+    let Some(gpu) = gpu() else { return };
+    let params = FeedbackParams {
+        drift_x: Param::fixed(0.5),
+        memory: Param::fixed(30.0),
+        ..Default::default()
+    };
+    let frames = frames_de_l_echo(gpu, params, 60);
+    let derniere = frames.last().unwrap();
+    // Le milieu du carré déplacé : ses bords s'adoucissent à chaque relecture.
+    assert!(
+        pixel(derniere, SIZE.x * 3 / 4, SIZE.y / 2)[3] > 200,
+        "à droite"
+    );
+    assert_eq!(
+        pixel(derniere, SIZE.x / 8, SIZE.y / 2)[3],
+        0,
+        "pas à gauche"
+    );
+}
+
+#[test]
+fn un_echo_a_l_arret_fige_l_image() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, haut, forme, echo) = avec_echo(FeedbackParams {
+        memory: Param::fixed(0.05),
+        ..Default::default()
+    });
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.push(Command::TriggerClip {
+        layer: haut,
+        clip: forme,
+    });
+    moteur.frame(0.0);
+    moteur.push(Command::ClearLayer { layer: haut });
+    moteur.push(Command::SetClipSpeed {
+        clip: echo,
+        value: 0.0,
+    });
+    for _ in 0..30 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+    assert_eq!(recu.dernier_pixel(SIZE.x / 2, SIZE.y / 2)[3], 255);
+}
+
+#[test]
+fn un_echo_rejoue_a_l_identique() {
+    let Some(gpu) = gpu() else { return };
+    let Some(gpu2) = self::gpu() else { return };
+    let params = FeedbackParams {
+        zoom: Param::fixed(1.5),
+        rotation: Param::fixed(0.7),
+        memory: Param::fixed(1.0),
+        ..Default::default()
+    };
+    let (a, b) = (
+        frames_de_l_echo(gpu, params, 20),
+        frames_de_l_echo(gpu2, params, 20),
+    );
+    assert_eq!(a.last().unwrap().pixels, b.last().unwrap().pixels);
+}
+
+#[test]
+fn le_son_module_un_echo() {
+    let Some(gpu) = gpu() else { return };
+    // Mémoire à zéro : seuls les graves la font tenir.
+    let (composition, haut, forme, echo) = avec_echo(FeedbackParams {
+        memory: Param::fixed(0.0),
+        ..Default::default()
+    });
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.push(Command::SetAudioModulation {
+        clip: echo,
+        slot: ParamSlot::Generator(4),
+        feature: Some(FeatureKind::Bass),
+    });
+    moteur.push(Command::SetDepth {
+        clip: echo,
+        slot: ParamSlot::Generator(4),
+        value: 30.0,
+    });
+    moteur.set_audio(AudioFeatures {
+        bands: [1.0, 0.0, 0.0],
+        ..Default::default()
+    });
+    moteur.frame(0.0);
+    for _ in 0..5 {
+        moteur.push(Command::TriggerClip {
+            layer: haut,
+            clip: forme,
+        });
+        moteur.frame(0.0);
+    }
+    moteur.push(Command::ClearLayer { layer: haut });
+    for _ in 0..3 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+    assert!(recu.dernier_pixel(SIZE.x / 2, SIZE.y / 2)[3] > 200);
 }
 
 #[test]

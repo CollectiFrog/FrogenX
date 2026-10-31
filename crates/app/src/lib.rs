@@ -21,7 +21,10 @@ use frogenx_composition::{
     sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, LayerId,
 };
 use frogenx_core::{AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
-use frogenx_layer::{BlendParams, Gpu, RenderLayer, ShapeContent, ShapeRenderer};
+use frogenx_layer::{
+    BlendParams, FeedbackRenderer, FeedbackStep, FrameHistory, Gpu, RenderLayer, ShapeContent,
+    ShapeRenderer,
+};
 use frogenx_output::{
     DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs, SinkStatus,
 };
@@ -125,34 +128,59 @@ pub fn next_deadline(deadline: Instant, now: Instant, period: Duration) -> Insta
 struct Track {
     layer: LayerId,
     renderer: ShapeRenderer,
+    /// Créé au premier feedback de la piste : la plupart n'en auront jamais.
+    feedback: Option<FeedbackRenderer>,
 }
 
 /// Le clip actif d'une piste, vu par le compositeur le temps d'une frame.
-struct ClipLayer<'a> {
-    renderer: &'a mut ShapeRenderer,
-    content: ShapeContent<'a>,
-    blend: BlendParams,
+enum ClipLayer<'a> {
+    Shape {
+        renderer: &'a mut ShapeRenderer,
+        content: ShapeContent<'a>,
+        blend: BlendParams,
+    },
+    Feedback {
+        renderer: &'a mut FeedbackRenderer,
+        step: FeedbackStep,
+        blend: BlendParams,
+    },
 }
 
 impl RenderLayer for ClipLayer<'_> {
     fn prepare(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu) {
-        self.renderer.prepare(&self.content, t, ctx, g, gpu);
+        match self {
+            Self::Shape {
+                renderer, content, ..
+            } => renderer.prepare(content, t, ctx, g, gpu),
+            Self::Feedback { renderer, step, .. } => renderer.prepare(step, gpu),
+        }
     }
 
     fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.renderer.encode(encoder);
+        match self {
+            Self::Shape { renderer, .. } => renderer.encode(encoder),
+            Self::Feedback { renderer, .. } => renderer.encode(encoder),
+        }
     }
 
     fn output(&self) -> &wgpu::TextureView {
-        self.renderer.output()
+        match self {
+            Self::Shape { renderer, .. } => renderer.output(),
+            Self::Feedback { renderer, .. } => renderer.output(),
+        }
     }
 
     fn blend(&self) -> BlendParams {
-        self.blend
+        match self {
+            Self::Shape { blend, .. } | Self::Feedback { blend, .. } => *blend,
+        }
     }
 
+    /// La taille d'un feedback ne change pas : `Engine` n'en a qu'une (§8).
     fn resize(&mut self, size: UVec2, gpu: &Gpu) {
-        self.renderer.resize(size, gpu);
+        if let Self::Shape { renderer, .. } = self {
+            renderer.resize(size, gpu);
+        }
     }
 }
 
@@ -161,6 +189,8 @@ pub struct Engine {
     gpu: Gpu,
     clock: Clock,
     compositor: Compositor,
+    /// L'image finale de la frame d'avant, pour les feedbacks (§6.1).
+    history: FrameHistory,
     outputs: Outputs,
     composition: Composition,
     size: UVec2,
@@ -182,12 +212,14 @@ pub struct Engine {
 impl Engine {
     pub fn new(gpu: Gpu, clock: Clock, size: UVec2, composition: Composition) -> Self {
         let compositor = Compositor::new(&gpu, size);
+        let history = FrameHistory::new(&gpu, size);
         let outputs = Outputs::new(&gpu, drop_policy(clock.mode()));
         let bpm = composition.bpm();
         Self {
             gpu,
             clock,
             compositor,
+            history,
             outputs,
             composition,
             size,
@@ -335,22 +367,32 @@ impl Engine {
             let Some(clip) = piste.active_clip().and_then(|id| composition.clip(id)) else {
                 continue;
             };
-            let ClipSource::Shape {
-                graph,
-                generator,
-                style,
-            } = &clip.source;
-            let content = ShapeContent {
-                generator: generator.as_ref(),
-                effects: &clip.effects,
-                style: *style,
+            let couche = match &clip.source {
+                ClipSource::Shape {
+                    generator, style, ..
+                } => ClipLayer::Shape {
+                    renderer: &mut track.renderer,
+                    content: ShapeContent {
+                        generator: generator.as_ref(),
+                        effects: &clip.effects,
+                        style: *style,
+                    },
+                    blend: piste.blend,
+                },
+                ClipSource::Feedback { graph, params } => {
+                    // Comme le graphe du clip : sa vitesse multiplie son temps.
+                    let vitesse = sanitize_speed(clip.speed.get(composition.graph()));
+                    let (gpu, taille, history) = (&self.gpu, self.size, &self.history);
+                    ClipLayer::Feedback {
+                        renderer: track
+                            .feedback
+                            .get_or_insert_with(|| FeedbackRenderer::new(gpu, taille, history)),
+                        step: params.step(graph, dt * vitesse as f64),
+                        blend: piste.blend,
+                    }
+                }
             };
-            let couche = ClipLayer {
-                renderer: &mut track.renderer,
-                content,
-                blend: piste.blend,
-            };
-            couches.push((couche, graph));
+            couches.push((couche, clip.graph()));
         }
         let mut inputs: Vec<LayerInput> = couches
             .iter_mut()
@@ -363,6 +405,16 @@ impl Engine {
         self.compositor.render(&self.gpu, t, &ctx, &mut inputs);
         drop(inputs);
         drop(couches);
+
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("feedback.history"),
+            });
+        self.history
+            .record(&mut encoder, self.compositor.output_texture());
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         self.outputs
             .submit(&self.gpu, self.compositor.output_texture(), t);
@@ -382,6 +434,7 @@ impl Engine {
                     Track {
                         layer: *layer,
                         renderer: ShapeRenderer::new(&self.gpu, self.size),
+                        feedback: None,
                     },
                 ),
             }

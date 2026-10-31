@@ -130,9 +130,14 @@ pub struct FileClip {
     /// Se résout dans le graphe de composition (§3bis.2).
     pub speed: FileParam,
     pub graph: Vec<FileNode>,
-    pub generator: FileSpec,
+    /// Un clip porte `generator` et `style`, ou `feedback` (§6.1).
+    #[serde(default)]
+    pub generator: Option<FileSpec>,
     pub effects: Vec<FileSpec>,
-    pub style: FileStyle,
+    #[serde(default)]
+    pub style: Option<FileStyle>,
+    #[serde(default)]
+    pub feedback: Option<FileSpec>,
     pub transport: FileTransport,
     pub transition: FileTransition,
 }

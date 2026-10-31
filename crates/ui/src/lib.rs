@@ -1421,7 +1421,9 @@ mod tests {
         let mut g = grille();
         let clip = g.composition.clip_mut(g.clips[0]).unwrap();
         let source = clip.graph_mut().add(Box::new(Constant(0.5)));
-        let frogenx_composition::ClipSource::Shape { generator, .. } = &mut clip.source;
+        let frogenx_composition::ClipSource::Shape { generator, .. } = &mut clip.source else {
+            panic!("un clip de forme");
+        };
         *generator.param_mut(0).unwrap() = Param::modulated(0.5, 0.25, source);
         g
     }

@@ -698,6 +698,17 @@ la première utilisation d'un feedback sur la piste.
 
 **Fichier.** Un clip porte `generator` et `style`, ou `feedback`. C'est la version 3 du format.
 
+**Un flou léger s'accumule, et il fait partie de l'effet.** Chaque frame relit l'image entre
+deux pixels : sur une dérive, les bords s'adoucissent peu à peu. Rien ne le compense.
+
+**Ce qui est vérifié, et comment.** Les réglages se testent sans GPU, y compris l'indépendance
+à la cadence, de 30 à 144 fps. Le calcul du shader a sa référence Rust, comparée aux
+uniformes. Sur le GPU : la moitié de l'image perdue à une demi-vie près, une première frame
+qui ne lit rien, le zoom, la dérive, le gel à vitesse nulle, un rejeu identique au pixel près,
+et un écho tenu par les graves à travers une source audio. Les trois échos du catalogue ont
+été rendus et regardés. **Pas encore essayés :** à la vraie souris dans l'application, et sur
+un écran ou une cadence autres que 60 fps pour le rendu réel.
+
 ---
 
 ## 7. Audio
@@ -1330,7 +1341,7 @@ frogenx/
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Trig, Command ✅ (core, osc, shape)
 ├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
 ├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre ✅ (core, osc, shape, composition, serde_json)
-├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
+├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, FeedbackRenderer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
 ├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ✅ (library, composition, osc, core, egui)
@@ -1478,7 +1489,7 @@ couches complètes empilées.
 | 7d | ✅ Sortie plein écran sur un second écran (`Preview`, §8.4) | **usage sur scène** — *fait* : `cargo run`, menu `Sortie` |
 | 7e | ✅ Sauvegarde des patchs (§19, §23.8) | **retrouver son travail** — *fait* : `cargo run`, menu `Fichier` |
 | 8 | ✅ Audio → features → `Signal`, BPM calculé, déclenchements (§7, §7.1) | **visuel audio-réactif** — *fait* : `cargo run`, clic droit sur un potentiomètre, `Suivre` |
-| 9 | `FeedbackLayer` | traînées, échos, complexité organique |
+| 9 | ✅ Feedback : un clip qui relit l'image finale (§6.1) | **traînées, échos, complexité organique** — *fait* : `cargo run`, famille `Échos` de la bibliothèque |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
 | 11 | NDI, puis Spout / Syphon | intégration VJ |
 | 12 | `VideoLayer` | clips vidéo comme couches |
@@ -1523,7 +1534,7 @@ qui les livre (skill `doc-sync`).
 | Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
 | Formes | 8 générateurs, 5 effets, style de remplissage et de trait |
 | Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
-| Bibliothèque | 24 clips calés sur le tempo, grille de départ (§23.6) |
+| Bibliothèque | 27 clips calés sur le tempo, grille de départ (§23.6) |
 | Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |
 | Sortie plein écran | menu `Sortie`, fenêtre sans bordure, écran perdu géré (§8.4) |
 | Sauvegarde | format JSON versionné, migrations, dernier fichier rouvert, confirmation (§19, §23.8) |
@@ -1532,29 +1543,29 @@ qui les livre (skill `doc-sync`).
 | Features audio | volume, registres, brillance, transitoires, chroma, comme `Signal` (§7.1) |
 | Modulation par le son | source audio au clic droit de chaque potentiomètre (§7.1) |
 | BPM | détection et suivi du tempo (§7.1) |
+| Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
 
 **À faire, dans l'ordre conseillé**
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | `FeedbackLayer`, étape 9 | traînées et échos, rendu très rentable | moyenne |
-| 2 | Éditeur de nœuds, sans numéro | rend accessibles les câblages encore réservés au code : un `flash` de trig sur une opacité, un effet ajouté à un clip, le lissage d'une source | grande |
-| 3 | Sources audio sur l'opacité et la vitesse | elles vivent dans le graphe de composition : pas encore de menu | petite |
-| 4 | Annuler et rétablir | l'architecture par `Command` le permet ; rien n'est branché | moyenne |
-| 5 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
-| 6 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
-| 7 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
-| 8 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 9 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 10 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
-| 11 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
-| 12 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 13 | Scène 3D, étape 13 | | très grande |
-| 14 | Art-Net / DMX, étape 14 | | moyenne |
-| 15 | Scripting Lua, étape 15 | | moyenne |
-| 16 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 17 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Éditeur de nœuds, sans numéro | rend accessibles les câblages encore réservés au code : un `flash` de trig sur une opacité, un effet ajouté à un clip, le lissage d'une source | grande |
+| 2 | Sources audio sur l'opacité et la vitesse | elles vivent dans le graphe de composition : pas encore de menu | petite |
+| 3 | Annuler et rétablir | l'architecture par `Command` le permet ; rien n'est branché | moyenne |
+| 4 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
+| 5 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
+| 6 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
+| 7 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 8 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 9 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
+| 10 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
+| 11 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 12 | Scène 3D, étape 13 | | très grande |
+| 13 | Art-Net / DMX, étape 14 | | moyenne |
+| 14 | Scripting Lua, étape 15 | | moyenne |
+| 15 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 16 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -2967,8 +2978,8 @@ de couleur viendra après.
 ### 23.6 La bibliothèque de clips (étape 7c)
 
 **`library` tient un catalogue statique.** Chaque entrée porte un nom, une famille et une
-fonction qui construit le clip : 24 clips, en quatre familles (fonds, formes, traits,
-motifs). Tous sont écrits en code, parce que le format de fichier n'arrive qu'à l'étape
+fonction qui construit le clip : 27 clips, en cinq familles (fonds, formes, traits,
+motifs, échos). Tous sont écrits en code, parce que le format de fichier n'arrive qu'à l'étape
 7e. Une sauvegarde décrira ensuite le clip lui-même, jamais son entrée de catalogue : un
 clip réglé n'est plus celui du catalogue.
 

@@ -26,14 +26,16 @@ pub enum Family {
     Shapes,
     Lines,
     Patterns,
+    Echoes,
 }
 
 impl Family {
-    pub const ALL: [Family; 4] = [
+    pub const ALL: [Family; 5] = [
         Family::Backgrounds,
         Family::Shapes,
         Family::Lines,
         Family::Patterns,
+        Family::Echoes,
     ];
 
     pub fn label(self) -> &'static str {
@@ -42,6 +44,7 @@ impl Family {
             Family::Shapes => "Formes",
             Family::Lines => "Traits",
             Family::Patterns => "Motifs",
+            Family::Echoes => "Échos",
         }
     }
 }
@@ -103,13 +106,14 @@ mod tests {
     const FRAMES: u64 = 240;
 
     #[test]
-    fn le_catalogue_compte_24_clips_en_quatre_familles() {
-        assert_eq!(catalog().len(), 24);
+    fn le_catalogue_compte_27_clips_en_cinq_familles() {
+        assert_eq!(catalog().len(), 27);
         let compte = |f| catalog().iter().filter(|p| p.family == f).count();
         assert_eq!(compte(Family::Backgrounds), 4);
         assert_eq!(compte(Family::Shapes), 8);
         assert_eq!(compte(Family::Lines), 6);
         assert_eq!(compte(Family::Patterns), 6);
+        assert_eq!(compte(Family::Echoes), 3);
     }
 
     #[test]
@@ -126,7 +130,10 @@ mod tests {
         for preset in catalog() {
             let clip = preset.build();
             assert_eq!(clip.name, preset.name);
-            let ClipSource::Shape { style, .. } = &clip.source;
+            let ClipSource::Shape { style, .. } = &clip.source else {
+                assert_eq!(preset.family, Family::Echoes, "{}", preset.name);
+                continue;
+            };
             assert!(
                 style.fill.is_some() || style.stroke.is_some(),
                 "{} ne dessine rien",
@@ -149,7 +156,10 @@ mod tests {
                 let ctx = Ctx::new(DT, frame, &audio).with_bpm(BPM);
                 let ClipSource::Shape {
                     graph, generator, ..
-                } = &clip.source;
+                } = &clip.source
+                else {
+                    continue; // un écho ne dessine rien lui-même
+                };
                 let mut path = Path::new();
                 generator.generate(t, &ctx, graph, &mut path);
                 for op in &clip.effects {
@@ -210,6 +220,6 @@ mod tests {
     #[test]
     fn chaque_famille_a_un_libelle() {
         let libelles: Vec<_> = Family::ALL.iter().map(|f| f.label()).collect();
-        assert_eq!(libelles, ["Fonds", "Formes", "Traits", "Motifs"]);
+        assert_eq!(libelles, ["Fonds", "Formes", "Traits", "Motifs", "Échos"]);
     }
 }

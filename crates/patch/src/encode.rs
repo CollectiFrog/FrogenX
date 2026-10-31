@@ -203,23 +203,33 @@ fn transition(t: &ClipTransition, positions: &Positions) -> Result<FileTransitio
 }
 
 fn clip(c: &Clip, composition: &Positions) -> Result<FileClip, PatchError> {
-    let ClipSource::Shape {
-        graph: g,
-        generator,
-        style: s,
-    } = &c.source;
-    let (noeuds, positions) = graph(g)?;
+    let (noeuds, positions) = graph(c.graph())?;
+    let (generator, style_, feedback) = match &c.source {
+        ClipSource::Shape {
+            generator,
+            style: s,
+            ..
+        } => (
+            Some(spec(&generator.spec(), &positions)?),
+            Some(style(s, &positions)?),
+            None,
+        ),
+        ClipSource::Feedback { params, .. } => {
+            (None, None, Some(spec(&params.spec(), &positions)?))
+        }
+    };
     Ok(FileClip {
         name: c.name.clone(),
         speed: param(c.speed, composition)?,
         graph: noeuds,
-        generator: spec(&generator.spec(), &positions)?,
+        generator,
         effects: c
             .effects
             .iter()
             .map(|e| spec(&e.spec(), &positions))
             .collect::<Result<_, _>>()?,
-        style: style(s, &positions)?,
+        style: style_,
+        feedback,
         transport: transport(&c.transport, &positions)?,
         transition: transition(&c.transition, &positions)?,
     })

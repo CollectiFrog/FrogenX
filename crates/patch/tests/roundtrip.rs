@@ -12,7 +12,7 @@ use frogenx_core::{
 };
 use frogenx_library::{catalog, starter};
 use frogenx_patch::{from_json, to_json, PatchError, MAX_COLUMNS};
-use frogenx_shape::{BlendMode, ColorParam, Ellipse, Path, ShapeStyle};
+use frogenx_shape::{BlendMode, ColorParam, Ellipse, FeedbackParams, Path, ShapeStyle};
 
 const DT: f64 = 1.0 / 60.0;
 
@@ -20,7 +20,10 @@ const DT: f64 = 1.0 / 60.0;
 fn forme(clip: &Clip, t: f64) -> Path {
     let ClipSource::Shape {
         graph, generator, ..
-    } = &clip.source;
+    } = &clip.source
+    else {
+        panic!("un clip de forme");
+    };
     let audio = AudioFeatures::default();
     let ctx = Ctx::new(DT, 0, &audio);
     let mut path = Path::new();
@@ -31,8 +34,15 @@ fn forme(clip: &Clip, t: f64) -> Path {
     path
 }
 
-/// Fait avancer deux clips ensemble : la même forme à chaque frame.
+/// Fait avancer deux clips ensemble : la même forme à chaque frame. Un écho ne
+/// dessine rien : ce sont ses réglages qui doivent rester les mêmes.
 fn memes_formes(a: &mut Clip, b: &mut Clip, nom: &str) {
+    if let (ClipSource::Feedback { params: pa, .. }, ClipSource::Feedback { params: pb, .. }) =
+        (&a.source, &b.source)
+    {
+        assert_eq!(pa, pb, "{nom}");
+        return;
+    }
     for frame in 0..240 {
         let t = frame as f64 * DT;
         a.graph_mut().eval_frame(t, DT);
@@ -91,6 +101,20 @@ impl LayersDeTest for Composition {
         let mut pistes = Vec::new();
         self.layers_in_order(&mut pistes);
         pistes
+    }
+}
+
+#[test]
+fn un_echo_du_catalogue_se_relit_avec_ses_modulations() {
+    for nom in ["Traînée", "Tunnel", "Tourbillon"] {
+        let preset = catalog().iter().find(|p| p.name == nom).unwrap();
+        let (original, _) = une_case(preset.build());
+        let texte = to_json(&original).unwrap();
+        assert_eq!(
+            texte,
+            to_json(&from_json(&texte).unwrap()).unwrap(),
+            "{nom}"
+        );
     }
 }
 
@@ -198,6 +222,68 @@ fn le_tempo_revient() {
     let mut copie = relu(&c);
     copie.graph_mut().eval_frame(0.0, DT);
     assert_eq!(copie.bpm(), 93.5);
+}
+
+fn un_echo() -> Clip {
+    let mut g = Graph::new();
+    let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+    let params = FeedbackParams {
+        zoom: Param::fixed(1.5),
+        memory: Param::fixed(0.75),
+        ..Default::default()
+    };
+    Clip::feedback(g, params, transport).with_name("Mon écho")
+}
+
+#[test]
+fn un_echo_revient_avec_ses_reglages() {
+    let (c, _) = une_case(un_echo());
+    let copie = relu(&c);
+    let id = copie
+        .layer(copie.layers_de_test()[0])
+        .unwrap()
+        .cell(0)
+        .unwrap();
+    let clip = copie.clip(id).unwrap();
+    assert_eq!(clip.name, "Mon écho");
+    let ClipSource::Feedback { params, .. } = &clip.source else {
+        panic!("un écho");
+    };
+    assert_eq!(params.zoom, Param::fixed(1.5));
+    assert_eq!(params.memory, Param::fixed(0.75));
+}
+
+#[test]
+fn un_echo_module_par_le_son_revient() {
+    let (mut c, piste) = une_case(un_echo());
+    let id = c.layer(piste).unwrap().cell(0).unwrap();
+    let clip = c.clip_mut(id).unwrap();
+    clip.set_audio_modulation(ParamSlot::Generator(1), Some(FeatureKind::Bass));
+
+    let copie = relu(&c);
+    let id = copie
+        .layer(copie.layers_de_test()[0])
+        .unwrap()
+        .cell(0)
+        .unwrap();
+    let rotation = copie.clip(id).unwrap().params()[0].params[1];
+    assert_eq!(rotation.audio, Some(FeatureKind::Bass));
+}
+
+#[test]
+fn un_clip_ni_forme_ni_echo_est_refuse() {
+    let mut v = texte();
+    let clip = &mut v["decks"][0]["groups"][0]["layers"][0]["cells"][0];
+    clip["generator"] = serde_json::Value::Null;
+    assert!(refuse(v).to_string().contains("ni une forme ni un écho"));
+}
+
+#[test]
+fn un_clip_a_la_fois_forme_et_echo_est_refuse() {
+    let mut v = texte();
+    let clip = &mut v["decks"][0]["groups"][0]["layers"][0]["cells"][0];
+    clip["feedback"] = serde_json::json!({"kind": "Écho", "fields": {}});
+    assert!(matches!(refuse(v), PatchError::Invalid(_)));
 }
 
 #[test]
@@ -342,7 +428,9 @@ fn un_clip_garde_son_style_et_sa_transition() {
         .cell(0)
         .unwrap();
     let clip = copie.clip(id).unwrap();
-    let ClipSource::Shape { style, .. } = &clip.source;
+    let ClipSource::Shape { style, .. } = &clip.source else {
+        panic!("un clip de forme");
+    };
     let trait_ = style.stroke.expect("un trait");
     assert_eq!(trait_.width, Param::fixed(0.03));
     assert_eq!(trait_.color.g, Param::fixed(0.5));

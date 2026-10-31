@@ -14,7 +14,8 @@ use frogenx_composition::{
 use frogenx_core::{AmpScale, AnalysisMethod, FreqScale, Graph, NodeId, Param, Spec, SpecValue};
 use frogenx_osc::{Divider, SpectrumZone};
 use frogenx_shape::{
-    generator_from_spec, op_from_spec, BlendMode, BlendParams, ColorParam, ShapeStyle, StrokeStyle,
+    generator_from_spec, op_from_spec, BlendMode, BlendParams, ColorParam, FeedbackParams,
+    ShapeStyle, StrokeStyle,
 };
 use std::collections::BTreeMap;
 
@@ -201,12 +202,24 @@ fn transition(t: &FileTransition, nodes: &[NodeId]) -> Result<ClipTransition, Pa
 fn clip(file: &FileClip, composition: &[NodeId]) -> Result<Clip, PatchError> {
     let mut g = Graph::new();
     let (nodes, _) = graph(&file.graph, &mut g)?;
-    let generator = spec(&file.generator.kind, &file.generator.fields, &nodes)?;
-    let generator = generator_from_spec(&generator)?;
     let transport_ = transport(&file.transport, &nodes)?;
-    let mut c = Clip::shape(g, generator, transport_)
+    let c = match (&file.feedback, &file.generator, &file.style) {
+        (Some(feedback), None, None) => {
+            let params = spec(&feedback.kind, &feedback.fields, &nodes)?;
+            Clip::feedback(g, FeedbackParams::from_spec(&params)?, transport_)
+        }
+        (None, Some(generator), Some(s)) => {
+            let generator = spec(&generator.kind, &generator.fields, &nodes)?;
+            Clip::shape(g, generator_from_spec(&generator)?, transport_)
+                .with_style(style(s, &nodes)?)
+        }
+        _ => {
+            let nom = &file.name;
+            return Err(invalid(format!("« {nom} » n'est ni une forme ni un écho")));
+        }
+    };
+    let mut c = c
         .with_name(file.name.clone())
-        .with_style(style(&file.style, &nodes)?)
         .with_transition(transition(&file.transition, &nodes)?);
     c.speed = param(file.speed, composition)?;
     for effect in &file.effects {

@@ -1,4 +1,4 @@
-//! Le catalogue : 24 clips calés sur le tempo (§23.6).
+//! Le catalogue : 27 clips calés sur le tempo (§23.6).
 //!
 //! Un clip assemble un graphe de LFO, une forme, des effets et un style. Les
 //! durées sont en battements, jamais en secondes : un clip suit le tempo de
@@ -9,12 +9,12 @@ use frogenx_composition::{BeatRate, Clip, PlayMode, Transport};
 use frogenx_core::{Graph, NodeId, Param};
 use frogenx_osc::{Lfo, Noise, Waveform};
 use frogenx_shape::{
-    Arc, ColorParam, Deform, Ellipse, Lissajous, NoiseDisplace, Polygon, RadialRepeat, Rect, Rose,
-    ShapeGenerator, ShapeStyle, Smooth, Star, Superformula, Transform,
+    Arc, ColorParam, Deform, Ellipse, FeedbackParams, Lissajous, NoiseDisplace, Polygon,
+    RadialRepeat, Rect, Rose, ShapeGenerator, ShapeStyle, Smooth, Star, Superformula, Transform,
 };
 use std::f32::consts::PI;
 
-pub(crate) static CATALOG: [Preset; 24] = [
+pub(crate) static CATALOG: [Preset; 27] = [
     Preset::new("Nuit", Family::Backgrounds, nuit),
     Preset::new("Aurore", Family::Backgrounds, aurore),
     Preset::new("Braise", Family::Backgrounds, braise),
@@ -39,7 +39,52 @@ pub(crate) static CATALOG: [Preset; 24] = [
     Preset::new("Engrenage", Family::Patterns, engrenage),
     Preset::new("Kaléidoscope", Family::Patterns, kaleidoscope),
     Preset::new("Pétales", Family::Patterns, petales),
+    Preset::new("Traînée", Family::Echoes, trainee),
+    Preset::new("Tunnel", Family::Echoes, tunnel),
+    Preset::new("Tourbillon", Family::Echoes, tourbillon),
 ];
+
+/// Un écho : à poser sur une piste sous les formes (§6.1).
+fn echo(mut g: Graph, nom: &str, params: FeedbackParams) -> Clip {
+    let transport = Transport::bpm_sync(&mut g, Param::fixed(CYCLE), PlayMode::Loop);
+    Clip::feedback(g, params, transport).with_name(nom)
+}
+
+/// Les formes laissent une trace, plus ou moins longue selon le tempo.
+fn trainee() -> Clip {
+    let mut g = Graph::new();
+    let souffle = sinus(&mut g, CYCLE);
+    let params = FeedbackParams {
+        memory: Param::modulated(0.5, 0.25, souffle),
+        ..Default::default()
+    };
+    echo(g, "Traînée", params)
+}
+
+/// L'image s'enfonce vers le spectateur, et respire sur le tempo.
+fn tunnel() -> Clip {
+    let mut g = Graph::new();
+    let souffle = sinus(&mut g, CYCLE);
+    let params = FeedbackParams {
+        zoom: Param::modulated(1.5, 0.25, souffle),
+        memory: Param::fixed(1.0),
+        ..Default::default()
+    };
+    echo(g, "Tunnel", params)
+}
+
+/// L'image tourne en s'enfonçant, et change de sens sur le tempo.
+fn tourbillon() -> Clip {
+    let mut g = Graph::new();
+    let sens = sinus(&mut g, 2.0 * CYCLE);
+    let params = FeedbackParams {
+        zoom: Param::fixed(1.3),
+        rotation: Param::modulated(0.0, 0.8, sens),
+        memory: Param::fixed(1.5),
+        ..Default::default()
+    };
+    echo(g, "Tourbillon", params)
+}
 
 /// Un LFO qui fait un cycle tous les `beats` battements.
 fn lfo(graph: &mut Graph, waveform: Waveform, beats: f32) -> NodeId {

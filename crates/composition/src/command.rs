@@ -388,7 +388,9 @@ mod tests {
         let (mut c, _, [a, _], p) = grille();
         let slot = ParamSlot::Generator(0);
         let clip = c.clip_mut(a).unwrap();
-        let ClipSource::Shape { generator, .. } = &mut clip.source;
+        let ClipSource::Shape { generator, .. } = &mut clip.source else {
+            panic!("un clip de forme");
+        };
         *generator.param_mut(0).unwrap() = Param::modulated(0.5, 0.1, p);
 
         let regle = Command::SetDepth {
@@ -397,7 +399,9 @@ mod tests {
             value: 0.3,
         };
         assert!(c.apply(regle, 0.0));
-        let ClipSource::Shape { generator, .. } = &c.clip(a).unwrap().source;
+        let ClipSource::Shape { generator, .. } = &c.clip(a).unwrap().source else {
+            panic!("un clip de forme");
+        };
         assert_eq!(generator.params()[0].value.depth(), Some(0.3));
     }
 
