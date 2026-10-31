@@ -1681,6 +1681,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
 | **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **Annuler par images de la grille, pas par commandes inverses** (§23.11) | une image coûte 1 ms et couvre d'office toute nouvelle commande ; un inverse faux corromprait la grille sans le dire |
+| **Une grille restaurée reprend ce qui joue** (§23.11) | sans cela, annuler ferait repartir les LFO et les compteurs de trig, et l'image sauterait en plein jeu |
+| **Un pas d'annulation est un geste** (§23.11) | un potentiomètre émet une commande par frame : il faudrait des dizaines de Ctrl+Z pour un seul geste |
 | **Éditeur de nœuds maison** (§23.10) | `egui-snarl` demande egui 0.36, et un patch à maintenir à chaque version coûterait plus qu'un éditeur à nos conventions, testé par clics simulés |
 | **L'éditeur a sa fenêtre et son contexte egui** (§23.10) | le câblage se fait à côté de l'image, et ne coûte rien fermé |
 | **`Graph::rewire` plutôt que des `Param` exposés par le graphe** (§23.10) | un `Signal` reste opaque ; passer par sa `Spec` réutilise la table du format de fichier, et un seul endroit recalcule dépendances et cycles |
@@ -3275,6 +3278,43 @@ une capture. Le fil s'y dessine par clics simulés seulement.
 **Non couvert.** La place des nœuds se perd à la fermeture de l'application. Le déplacement d'un
 effet dans la chaîne, le zoom du canevas et l'annulation ne sont pas faits. Une opacité ou une
 vitesse ne reçoit qu'une source de la régie, jamais d'un clip : c'est le §3.
+
+### 23.11 Annuler et rétablir
+
+> Tranché (choix A2, B1, C1, D1). Raisons au §13.
+
+**Une image complète de la grille, pas des commandes inverses.** `History` garde le texte du
+format de fichier à chaque geste. Écrire un inverse pour chacune des commandes aurait été à
+refaire pour chaque nouvelle, et un inverse faux corromprait la grille sans le dire : ici, une
+nouvelle commande est couverte d'office. Mesuré sur la grille de départ : 90 Ko, 1,1 ms pour
+l'écrire, 0,8 ms pour la relire, soit 9 Mo au plus pour 100 pas. L'historique vit en mémoire, et
+se vide quand on ouvre un fichier ou qu'on fait `Nouveau`.
+
+**L'image repart, sans sauter.** Une grille relue d'un fichier repartirait de zéro. Après une
+restauration, `Composition::adopt_from` lui transmet donc ce qui joue :
+
+| Ce qui passe de l'ancienne grille à la restaurée | Comment |
+|---|---|
+| Le clip actif de chaque piste | annuler ne déclenche ni n'éteint rien : jouer n'est pas modifier |
+| L'état des nœuds d'un clip | copié si ses nœuds n'ont pas changé, type par type ; sinon, ce seul clip repart de zéro |
+| L'état du graphe de composition | le compte des trigs tient de la même façon |
+
+Les pistes et les clips se retrouvent par leur position, puis par leur nom : retirer une colonne
+décale les cases. `adopt_from` rend aussi les correspondances d'identifiants (`IdMap`) : le clip
+choisi et le trig choisi le restent.
+
+**Un pas est un geste.** Un potentiomètre tourné émet une commande par frame. Tant qu'un bouton
+de la souris est tenu, dans l'une ou l'autre fenêtre, les modifications s'accumulent ; le pas se
+ferme au relâchement, après 200 ms sans modification, ce qui groupe aussi une saisie au clavier.
+Annuler ferme d'abord le pas en cours.
+
+**Seules les modifications comptent** (`Command::is_edit`, §23.8). Un déclenchement ne crée pas de
+pas, et un trig ne remplit donc pas l'historique. Revenir à l'état enregistré retire le `*` du
+fichier : chaque pas porte un numéro, comparé à celui de la dernière sauvegarde.
+
+**Le geste.** Ctrl+Z annule, Ctrl+Y ou Ctrl+Maj+Z rétablit, dans l'interface comme dans l'éditeur
+de nœuds, sauf pendant une saisie dans un champ, qui garde les siens. Le menu `Édition` nomme ce
+qui va être annulé, et l'en-tête dit ce qui vient de l'être : un Ctrl+Z accidentel se voit.
 
 ---
 
