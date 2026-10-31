@@ -42,7 +42,24 @@ pub struct ColorParam {
     pub a: Param,
 }
 
+/// Le nom des canaux, dans l'ordre de [`ColorParam::channel_mut`].
+pub const COLOR_CHANNELS: [&str; 4] = ["rouge", "vert", "bleu", "alpha"];
+
 impl ColorParam {
+    pub fn channels(&self) -> [Param; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+
+    pub fn channel_mut(&mut self, index: usize) -> Option<&mut Param> {
+        match index {
+            0 => Some(&mut self.r),
+            1 => Some(&mut self.g),
+            2 => Some(&mut self.b),
+            3 => Some(&mut self.a),
+            _ => None,
+        }
+    }
+
     /// Couleur fixe, composantes sRGB dans `[0, 1]`.
     pub fn srgb(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self {

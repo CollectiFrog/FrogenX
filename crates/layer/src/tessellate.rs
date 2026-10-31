@@ -61,7 +61,7 @@ impl Mesh {
 
     /// Les triangles, sommet par sommet.
     pub fn triangles(&self) -> impl Iterator<Item = [Vec2; 3]> + '_ {
-        self.indices.chunks_exact(3).map(|t| {
+        self.indices.as_chunks::<3>().0.iter().map(|t| {
             [
                 Vec2::from(self.vertices[t[0] as usize]),
                 Vec2::from(self.vertices[t[1] as usize]),

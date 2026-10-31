@@ -33,6 +33,7 @@ pub struct LayerGroup {
 
 /// Piste verticale : une suite de `Clip` déclenchables, un à la fois actif.
 pub struct Layer {
+    pub name: String,
     /// Ses `Param` se résolvent dans le graphe de composition : ils survivent
     /// aux changements de clip (§3bis.1).
     pub blend: BlendParams,
@@ -41,8 +42,9 @@ pub struct Layer {
 }
 
 impl Layer {
-    fn new() -> Self {
+    fn new(name: String) -> Self {
         Self {
+            name,
             blend: BlendParams::default(),
             clips: Vec::new(),
             active: None,
@@ -75,6 +77,8 @@ pub struct Composition {
     layers: Arena<Layer>,
     columns: Arena<Column>,
     clips: Arena<Clip>,
+    /// L'ordre des colonnes dans la grille.
+    column_order: Vec<ColumnId>,
     /// Module ce qui appartient à la régie, pas à un clip (§3).
     graph: Graph,
     pub tempo: TempoController,
@@ -96,6 +100,7 @@ impl Composition {
             layers: Arena::new(),
             columns: Arena::new(),
             clips: Arena::new(),
+            column_order: Vec::new(),
             graph: Graph::new(),
             tempo: TempoController::new(DEFAULT_BPM),
             taps: Vec::new(),
@@ -195,8 +200,13 @@ impl Composition {
 
     /// Ajoute un `Layer` vide et le rattache à `group`.
     pub fn add_layer(&mut self, group: LayerGroupId) -> Option<LayerId> {
-        self.layer_groups.get(group.index(), group.generation())?;
-        let (i, g) = self.layers.insert(Layer::new());
+        let numero = self
+            .layer_groups
+            .get(group.index(), group.generation())?
+            .layers
+            .len()
+            + 1;
+        let (i, g) = self.layers.insert(Layer::new(format!("Piste {numero}")));
         let id = LayerId::new(i, g);
         let lg = self
             .layer_groups
@@ -263,7 +273,14 @@ impl Composition {
 
     pub fn add_column(&mut self) -> ColumnId {
         let (i, g) = self.columns.insert(Column { slots: Vec::new() });
-        ColumnId::new(i, g)
+        let id = ColumnId::new(i, g);
+        self.column_order.push(id);
+        id
+    }
+
+    /// Les colonnes de la grille, dans leur ordre d'ajout.
+    pub fn columns(&self) -> &[ColumnId] {
+        &self.column_order
     }
 
     /// Assigne un `clip` à la position `layer_slot` de `column` — une

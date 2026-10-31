@@ -23,7 +23,7 @@
 //! d'un contour, et un contour ouvert n'a pas de voisin au-delà de ses
 //! extrémités (§16.3).
 
-use crate::generator::{ShapeGenerator, MAX_POINTS};
+use crate::generator::{params, ParamDesc, ShapeGenerator, MAX_POINTS};
 use crate::path::Path;
 use frogenx_core::{Ctx, Graph, Param};
 use frogenx_osc::value_noise_1d;
@@ -37,6 +37,15 @@ use std::f32::consts::TAU;
 /// opérateur qui ajoute ou retire des points met `contours` à jour.
 pub trait ShapeOp {
     fn apply(&self, t: f64, ctx: &Ctx, g: &Graph, path: &mut Path);
+
+    /// Le nom de cet opérateur, tel qu'affiché.
+    fn kind(&self) -> &'static str;
+
+    /// Ses paramètres réglables (§16.3 ter). Déclarés par `params!`.
+    fn params(&self) -> Vec<ParamDesc>;
+
+    /// Le `index`-ième paramètre de [`Self::params`], en écriture.
+    fn param_mut(&mut self, index: usize) -> Option<&mut Param>;
 }
 
 /// Un générateur suivi d'une chaîne d'opérateurs.
@@ -68,6 +77,36 @@ impl ShapeGenerator for Chain {
         for op in &self.ops {
             op.apply(t, ctx, g, out);
         }
+    }
+
+    fn kind(&self) -> &'static str {
+        "Chaîne"
+    }
+
+    /// Ceux de la source, puis ceux de chaque opérateur, dans l'ordre.
+    fn params(&self) -> Vec<ParamDesc> {
+        let mut params = self.source.params();
+        for op in &self.ops {
+            params.extend(op.params());
+        }
+        params
+    }
+
+    fn param_mut(&mut self, index: usize) -> Option<&mut Param> {
+        let mut reste = index;
+        let dans_la_source = self.source.params().len();
+        if reste < dans_la_source {
+            return self.source.param_mut(reste);
+        }
+        reste -= dans_la_source;
+        for op in &mut self.ops {
+            let n = op.params().len();
+            if reste < n {
+                return op.param_mut(reste);
+            }
+            reste -= n;
+        }
+        None
     }
 }
 
@@ -164,6 +203,13 @@ impl Deform {
 }
 
 impl ShapeOp for Deform {
+    params! {
+        "Déformation";
+        amount: "force", 0.0, 0.5;
+        frequency: "fréquence", 0.0, 32.0;
+        phase: "phase", 0.0, 1.0;
+    }
+
     fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
         let amount = self.amount.get(g);
         let amount = if amount.is_finite() { amount } else { 0.0 };
@@ -207,6 +253,13 @@ impl NoiseDisplace {
 }
 
 impl ShapeOp for NoiseDisplace {
+    params! {
+        "Bruit";
+        amount: "force", 0.0, 0.5;
+        scale: "échelle", 0.0, 20.0;
+        offset: "décalage", 0.0, 10.0;
+    }
+
     fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
         let amount = self.amount.get(g);
         let amount = if amount.is_finite() { amount } else { 0.0 };
@@ -246,6 +299,12 @@ impl RadialRepeat {
 }
 
 impl ShapeOp for RadialRepeat {
+    params! {
+        "Répétition radiale";
+        count: "copies", 1.0, 32.0;
+        offset: "décalage", 0.0, 1.0;
+    }
+
     fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
         let count = self.count.get(g);
         let count = if count.is_finite() {
@@ -308,6 +367,14 @@ impl Default for Transform {
 }
 
 impl ShapeOp for Transform {
+    params! {
+        "Transformation";
+        scale: "échelle", 0.0, 3.0;
+        rotation: "rotation", -std::f32::consts::PI, std::f32::consts::PI;
+        translate_x: "position x", -2.0, 2.0;
+        translate_y: "position y", -2.0, 2.0;
+    }
+
     fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
         let s = self.scale.get(g);
         let s = if s.is_finite() { s } else { 1.0 };
@@ -352,6 +419,12 @@ impl Smooth {
 }
 
 impl ShapeOp for Smooth {
+    params! {
+        "Lissage";
+        passes: "passes", 0.0, 8.0;
+        strength: "force", 0.0, 1.0;
+    }
+
     fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
         let passes = self.passes.get(g);
         let passes = if passes.is_finite() {

@@ -3,7 +3,7 @@
 //! Ceux qui viennent directement du monde des oscillateurs : deux signaux
 //! pilotent `(x, y)`, ou un signal pilote le rayon en fonction de l'angle.
 
-use crate::generator::{ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
+use crate::generator::{params, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 use crate::path::Path;
 use frogenx_core::{Ctx, Graph, Param};
 use glam::Vec2;
@@ -60,6 +60,15 @@ impl Lissajous {
 }
 
 impl ShapeGenerator for Lissajous {
+    params! {
+        "Lissajous";
+        freq_x: "fréquence x", 0.0, 12.0;
+        freq_y: "fréquence y", 0.0, 12.0;
+        phase: "phase", 0.0, 1.0;
+        amplitude: "amplitude", 0.0, 2.0;
+        segments: "segments", 16.0, 1024.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let fx = self.freq_x.get(g);
@@ -108,6 +117,13 @@ impl Rose {
 }
 
 impl ShapeGenerator for Rose {
+    params! {
+        "Rose";
+        k: "pétales", 0.0, 12.0;
+        radius: "rayon", 0.0, 2.0;
+        segments: "segments", 16.0, 1024.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let k = self.k.get(g);
@@ -180,6 +196,18 @@ impl Superformula {
 }
 
 impl ShapeGenerator for Superformula {
+    params! {
+        "Superformule";
+        m: "symétrie", 0.0, 24.0;
+        n1: "n1", 0.1, 20.0;
+        n2: "n2", 0.1, 20.0;
+        n3: "n3", 0.1, 20.0;
+        a: "a", 0.1, 4.0;
+        b: "b", 0.1, 4.0;
+        radius: "rayon", 0.0, 2.0;
+        segments: "segments", 16.0, 1024.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let fini = |v: f32, defaut: f32| if v.is_finite() { v } else { defaut };

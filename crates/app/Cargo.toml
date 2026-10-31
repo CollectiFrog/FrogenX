@@ -1,6 +1,6 @@
 [package]
 name = "frogenx-app"
-description = "Engine : la boucle de frame du §20.1, sans fenêtre"
+description = "Engine, la boucle de frame du §20.1, et l'application : fenêtre et interface"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 default-run = "frogenx"
 
 # Sommet de la chaîne (§8.3). `src/lib.rs` (`Engine`) ne connaît pas `winit` :
-# seul le binaire possède la fenêtre. C'est le seul binaire du workspace, donc
+# seul le binaire possède la fenêtre et branche egui dessus. C'est le seul binaire du workspace, donc
 # ce que lance `cargo run` depuis la racine.
 [[bin]]
 name = "frogenx"
@@ -20,8 +20,12 @@ frogenx-composition.workspace = true
 frogenx-layer.workspace = true
 frogenx-render.workspace = true
 frogenx-output.workspace = true
+frogenx-ui.workspace = true
 frogenx-osc.workspace = true
 frogenx-shape.workspace = true
 glam.workspace = true
 wgpu.workspace = true
 winit.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true

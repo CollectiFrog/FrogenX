@@ -1,24 +1,27 @@
 //! FrogenX — l'application : `cargo run`.
 //!
 //! Le binaire possède la fenêtre et la boucle d'événements ; tout le reste est
-//! dans `Engine`, qui ne connaît pas de fenêtre (§8.3 de
-//! `docs/ARCHITECTURE.md`). Le moteur se cadence sur sa propre échéance : la
-//! preview n'est qu'une sortie, et la masquer n'arrête rien.
+//! dans `Engine`, qui ne connaît pas de fenêtre, et dans `frogenx-ui`, qui
+//! décrit l'interface (§8.3, §23.5 de `docs/ARCHITECTURE.md`). Le moteur se
+//! cadence sur sa propre échéance : masquer la fenêtre n'arrête rien.
 //!
 //! ```bash
 //! cargo run                  # la fenêtre, jusqu'à sa fermeture
 //! cargo run -- --frames 120  # 120 frames, un bilan, puis quitte
 //! ```
 //!
-//! En attendant l'interface : les touches 1 à 4 déclenchent les colonnes de la
-//! grille, Espace tape le tempo, affiché dans le titre de la fenêtre.
+//! Au clavier, en plus de l'interface : les touches 1 à 4 déclenchent les
+//! colonnes de la grille, Espace tape le tempo.
 
-use frogenx_app::{demo, next_deadline, Engine};
+mod gui;
+
+use frogenx_app::{demo, next_deadline, Engine, FrameRate};
 use frogenx_composition::{ColumnId, Command};
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
-use frogenx_output::{OutputSink, Preview, PreviewHandle};
+use frogenx_output::{MonitorSink, OutputSink};
 use glam::UVec2;
+use gui::Gui;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -31,6 +34,8 @@ use winit::window::{Window, WindowId};
 
 /// La résolution de sortie, indépendante de la fenêtre (§8).
 const OUTPUT_SIZE: UVec2 = UVec2::new(1920, 1080);
+/// La taille du monitor dans l'interface : un quart de la sortie suffit.
+const MONITOR_SIZE: UVec2 = UVec2::new(960, 540);
 /// 60 fps cible.
 const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
 
@@ -80,10 +85,9 @@ fn key_action(key: KeyCode) -> Option<Action> {
 struct Running {
     window: Arc<Window>,
     engine: Engine,
-    preview: PreviewHandle,
+    gui: Gui,
     columns: Vec<ColumnId>,
-    /// Le tempo affiché dans le titre, pour ne le réécrire que s'il change.
-    shown_bpm: f32,
+    rate: FrameRate,
     started: Instant,
     last: Instant,
     deadline: Instant,
@@ -94,7 +98,7 @@ impl Running {
     fn start(event_loop: &ActiveEventLoop) -> Result<Self, String> {
         let attributs = Window::default_attributes()
             .with_title("FrogenX")
-            .with_inner_size(LogicalSize::new(1280.0, 720.0));
+            .with_inner_size(LogicalSize::new(1440.0, 900.0));
         let window = Arc::new(
             event_loop
                 .create_window(attributs)
@@ -112,13 +116,13 @@ impl Running {
             gpu.msaa_samples(LAYER_FORMAT)
         );
 
-        let taille = window.inner_size();
-        let (preview, handle) = Preview::new(&gpu, surface, taille.width, taille.height)
-            .map_err(|e| format!("preview impossible : {e}"))?;
+        let monitor = MonitorSink::new(&gpu, MONITOR_SIZE.x, MONITOR_SIZE.y);
+        let aspect = MONITOR_SIZE.x as f32 / MONITOR_SIZE.y as f32;
+        let gui = Gui::new(&window, &gpu, surface, &monitor.view(), aspect)?;
         let grille = demo::grid();
         let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, grille.composition);
         engine
-            .add_output(OutputSink::Gpu(Box::new(preview)))
+            .add_output(OutputSink::Gpu(Box::new(monitor)))
             .map_err(|e| e.to_string())?;
         engine.push(Command::TriggerColumn {
             column: grille.columns[0],
@@ -128,9 +132,9 @@ impl Running {
         Ok(Self {
             window,
             engine,
-            preview: handle,
+            gui,
             columns: grille.columns,
-            shown_bpm: 0.0,
+            rate: FrameRate::new(FRAME_PERIOD),
             started: maintenant,
             last: maintenant,
             deadline: maintenant,
@@ -139,24 +143,15 @@ impl Running {
     }
 
     fn frame(&mut self, now: Instant) {
-        self.engine.frame((now - self.last).as_secs_f64());
+        let dt = (now - self.last).as_secs_f64();
+        self.rate.tick(dt);
+        self.engine.frame(dt);
+        self.gui
+            .draw(&self.window, &mut self.engine, self.rate.fps());
+        self.gui.recover(&self.window, self.engine.gpu());
         self.last = now;
         self.frames += 1;
         self.deadline = next_deadline(self.deadline, now, FRAME_PERIOD);
-
-        let bpm = self.engine.bpm();
-        if bpm != self.shown_bpm {
-            self.shown_bpm = bpm;
-            self.window.set_title(&format!("FrogenX — {bpm:.1} BPM"));
-        }
-
-        // Seul `app` a la fenêtre : c'est donc lui qui recrée une surface perdue.
-        if self.preview.surface_lost() {
-            let instance = &self.engine.gpu().instance;
-            if let Ok(surface) = instance.create_surface(Arc::clone(&self.window)) {
-                self.preview.replace_surface(surface);
-            }
-        }
     }
 
     fn on_key(&mut self, key: KeyCode) {
@@ -173,11 +168,14 @@ impl Running {
 
     fn report(&self) {
         let duree = self.started.elapsed().as_secs_f64();
+        let (min, max) = self.rate.range_ms();
         println!(
-            "{} frames en {duree:.2} s ({:.1} fps), {} présentées — sorties : {:?}",
+            "{} frames en {duree:.2} s ({:.1} fps), {} présentées, intervalle {min:.1} à {max:.1} ms, interface {:.2} ms/frame \
+             — sorties : {:?}",
             self.frames,
             self.frames as f64 / duree,
-            self.preview.presented(),
+            self.gui.presented,
+            self.gui.spent.as_secs_f64() * 1000.0 / self.frames.max(1) as f64,
             self.engine.output_statuses()
         );
     }
@@ -204,16 +202,20 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let garde_par_egui = match &mut self.running {
+            Some(running) => running.gui.on_event(&running.window, &event),
+            None => false,
+        };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(taille) => {
-                if let Some(running) = &self.running {
-                    running.preview.resize(taille.width, taille.height);
+                if let Some(running) = &mut self.running {
+                    running.gui.resize(taille.width, taille.height);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let (true, false, PhysicalKey::Code(key), Some(running)) = (
-                    event.state.is_pressed(),
+                    event.state.is_pressed() && !garde_par_egui,
                     event.repeat,
                     event.physical_key,
                     &mut self.running,

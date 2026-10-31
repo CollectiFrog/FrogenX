@@ -22,7 +22,9 @@ const BYTES_PER_PIXEL_U8: u32 = 4;
 pub fn read_rgba16f(gpu: &Gpu, texture: &wgpu::Texture) -> Option<Vec<[f32; 4]>> {
     let octets = read_bytes(gpu, texture, BYTES_PER_PIXEL_F16)?;
     let pixels = octets
-        .chunks_exact(BYTES_PER_PIXEL_F16 as usize)
+        .as_chunks::<{ BYTES_PER_PIXEL_F16 as usize }>()
+        .0
+        .iter()
         .map(|px| {
             let c = |i: usize| f16_to_f32(u16::from_le_bytes([px[2 * i], px[2 * i + 1]]));
             [c(0), c(1), c(2), c(3)]

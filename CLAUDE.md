@@ -55,8 +55,9 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 7 faites.** `cargo run` ouvre l'application : une grille de démonstration
-provisoire à 60 fps, touches 1 à 4 pour les colonnes, Espace pour taper le tempo. Rendus sans fenêtre : `cargo run -p frogenx-render
+**Étapes 1 à 7b faites.** `cargo run` ouvre l'application : une interface egui sur une
+grille de démonstration provisoire, à 60 fps. On y déclenche des clips, on règle leurs
+paramètres et le tempo ; au clavier, 1 à 4 pour les colonnes et Espace pour taper. Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
 sequence` (un clip déterministe, skill `poc-video`). Les tests GPU se sautent proprement
 sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
@@ -81,15 +82,18 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 - `crates/render` : `Compositor` (passes shader en ping-pong, 5 modes), relecture
   GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
 - `crates/output` : `GpuSink` (`encode`/`after_submit`), `CpuSink`, étage `Outputs`,
-  passe de conversion 8 bits sRGB, `Preview`, `PngSequenceSink`. `fanout` (files bornées, politique
+  passe de conversion 8 bits sRGB, `PresentSurface`, `Preview`, `MonitorSink`,
+  `PngSequenceSink`. `fanout` (files bornées, politique
   de perte) ne connaît pas wgpu. `output` ne connaît pas `winit`.
+- `crates/ui` : l'interface, fonction de l'état. Lit la grille, rend des `Command`. Ne
+  connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
-  fenêtre, et le binaire `frogenx`, seul à connaître `winit`. La grille de `demo` est
+  fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`. La grille de `demo` est
   provisoire : la bibliothèque de clips la remplacera.
 
-**Prochaine étape : 7b, l'interface egui** (§23.5). Première version visée, §12 : 7b
-interface, 7c clips prédéfinis, 7d sortie plein écran, 7e sauvegarde, 8 audio (capture,
-BPM calculé, déclenchements, §7).
+**Prochaine étape : 7c, les clips prédéfinis.** Première version visée, §12 : 7c clips
+prédéfinis, 7d sortie plein écran, 7e sauvegarde, 8 audio (capture, BPM calculé,
+déclenchements, §7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

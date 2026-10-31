@@ -948,7 +948,7 @@ place en dernier.
 ## 10. Structure des crates
 
 Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
-`composition`, `layer`, `render`, `output` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+`composition`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -961,9 +961,9 @@ frogenx/
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Command ✅ (core, shape)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
-├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, Preview, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
-├── ui/        # egui : grille, tempo, monitor, réglages ; rend des Command (composition, core, egui)
-└── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit ✅
+├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
+├── ui/        # egui : grille, tempo, monitor, réglages ; rend des Command ✅ (composition, core, egui)
+└── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit, egui-wgpu, egui-winit ✅
 ```
 
 **Découpage `layer` / `render` (étape 5).** `layer` porte le contexte `Gpu` (device et
@@ -1038,7 +1038,7 @@ maintenable à mesure qu'il grossit.
 | Maths | `glam` ✅ | vecteurs, matrices |
 | Rendu | `wgpu` 30 | GPU multiplateforme (étape 5) |
 | Fenêtrage | `winit` 0.30 ✅ | fenêtre et boucle d'événements, dans `app` seulement (§8.3) |
-| UI | `egui` 0.37 | grille de clips, réglages (`ui`) ; `egui-wgpu`, `egui-winit` dans `app` ; `egui_kittest` en test |
+| UI | `egui` 0.37 ✅ | grille de clips, réglages (`ui`) ; `egui-wgpu`, `egui-winit` dans `app` ; `egui_kittest` en test ; feature `default_fonts` requise |
 | Bruit | interne à `osc` ✅ | value noise et fBm à graine explicite — pas la crate `noise` (§13, §20.3) |
 | Tessellation | `lyon_tessellation` | `Path` → triangles, remplissage et trait (étape 5) |
 | GPU, utilitaires | `bytemuck`, `pollster` | octets des buffers de sommets ; attente synchrone de l'adaptateur (étape 5) |
@@ -1084,7 +1084,7 @@ couches complètes empilées.
 | 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
 | 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
 | 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
-| 7b | Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** |
+| 7b | ✅ Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** — *fait* : `cargo run` |
 | 7c | Clips prédéfinis : une bibliothèque de formes réglables | une grille qu'on remplit soi-même |
 | 7d | Sortie plein écran sur un second écran (`Preview`) | usage sur scène |
 | 7e | Sauvegarde des patchs (§19) | retrouver son travail |
@@ -2343,7 +2343,19 @@ curseur émet `Command::SetParam`, qui passe par `Param::set_base` (§16.3 ter).
 **Le thread.** egui tourne sur le thread principal, dans la boucle du moteur (§20.2) :
 la frame d'abord, l'interface ensuite, puis une présentation, à chaque échéance. Une
 interface lente ralentirait le rendu ; son temps est mesuré et affiché dans le bilan de
-`--frames`. Un thread de rendu séparé reste possible si cette mesure le réclame.
+`--frames`. Mesuré à 0,3 ms par frame en release, 1,5 ms en debug, avec des intervalles
+de 15,8 à 17,6 ms : rien ne réclame un thread de rendu séparé.
+
+**Mesurer une cadence.** Moyenner `dt`, puis inverser ; jamais moyenner `1 / dt`. Un seul
+intervalle quasi nul, comme la toute première frame, affichait 420 fps sur un moteur à
+60. Le bilan donne aussi l'intervalle minimal et maximal, hors échauffement : une
+moyenne correcte peut cacher des saccades.
+
+**Pièges d'egui 0.37.** `default_fonts` n'est plus activée par défaut : sans elle, le
+premier texte panique. `TexturesDelta` vérifie, à sa destruction en build debug, qu'il a
+été **vidé**, y compris sur une frame sautée : le parcourir avec `drain()`. Un curseur
+expose deux nœuds de même nom : en test, viser le champ numérique par son rôle
+(`SpinButton`), le seul qui accepte une valeur simulée.
 
 **Le clavier** reste actif, sauf quand egui veut la saisie : Espace dans un champ ne doit
 pas taper le tempo.
@@ -2352,6 +2364,16 @@ pas taper le tempo.
 `Preview` n'y sert donc plus ; elle revient à l'étape 7d pour le plein écran. D'ici là,
 elle n'est couverte que par ses fonctions pures et par `PresentSurface`, qu'elle partage
 avec l'interface.
+
+**Ce qui est vérifié, et comment.** `egui_kittest` couvre la logique des clics, et un
+test d'`Engine` prouve qu'un `SetParam` change l'image à la frame suivante. L'affichage
+de la vraie fenêtre a été regardé sur des captures de sa seule zone (`PrintWindow`). Un
+clic réel sur une cellule y a été observé une fois, par messages postés à la fenêtre
+(`PostMessage`) ; deux essais suivants n'ont rien produit, peut-être parce que Windows
+signale la sortie du pointeur quand le vrai curseur est ailleurs, sans que cela soit
+établi. **La souris réelle a été validée à la main** sur la fenêtre de l'application. Le
+redimensionnement, la réduction et la récupération d'une surface perdue n'ont pas été
+essayés.
 
 **Non couvert.** Le navigateur de sources, les onglets et la modification de la grille
 viennent avec l'étape 7c et l'éditeur de nœuds. Les couleurs du style sont réglables par

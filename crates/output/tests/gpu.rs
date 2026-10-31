@@ -7,7 +7,7 @@
 use frogenx_layer::{Gpu, LAYER_FORMAT};
 use frogenx_output::{
     letterbox, ConversionMode, ConversionPass, CpuFrame, CpuSink, DropPolicy, GpuFrame, GpuSink,
-    OutputError, OutputSink, Outputs, SinkStatus,
+    MonitorSink, OutputError, OutputSink, Outputs, SinkStatus,
 };
 use frogenx_render::{f16_to_f32, linear_premul_to_srgb8, read_rgba8};
 use std::sync::{Arc, Mutex};
@@ -232,6 +232,37 @@ impl GpuSink for JournalGpu {
             SinkStatus::Active
         }
     }
+}
+
+#[test]
+fn le_monitor_recoit_la_frame_encodee_en_srgb_et_en_proportions() {
+    let Some(gpu) = gpu() else { return };
+    let monitor = MonitorSink::new(&gpu, 8, 8);
+    let texture = monitor.texture();
+    assert_eq!(
+        texture.format(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        "imposé par egui"
+    );
+
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossless);
+    sorties.add(OutputSink::Gpu(Box::new(monitor))).unwrap();
+    // Source 2×1 : l'image occupe la moitié centrale du monitor.
+    let gris = [F025, F025, F025, F1];
+    sorties.submit(&gpu, &source(&gpu, 2, &[gris, gris]), 0.0);
+
+    let image = read_rgba8(&gpu, &texture).expect("relecture GPU");
+    let attendu = linear_premul_to_srgb8([0.25, 0.25, 0.25, 1.0]);
+    let centre = pixel(&image, 8, 4, 4);
+    assert!(
+        centre
+            .iter()
+            .zip(&attendu)
+            .all(|(a, b)| a.abs_diff(*b) <= 1),
+        "centre {centre:?}, attendu {attendu:?}"
+    );
+    assert_eq!(pixel(&image, 8, 4, 0), [0, 0, 0, 255], "bande haute");
+    assert_eq!(sorties.statuses(), vec![SinkStatus::Active]);
 }
 
 #[test]

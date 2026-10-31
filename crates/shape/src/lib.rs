@@ -59,9 +59,11 @@ pub mod path;
 pub mod primitives;
 pub mod style;
 
-pub use generator::{ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
+pub use generator::{ParamDesc, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 pub use ops::{Chain, Deform, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform};
 pub use parametric::{Lissajous, Rose, Superformula};
 pub use path::{Contour, Path};
 pub use primitives::{Arc, Ellipse, Polygon, Rect, Star};
-pub use style::{srgb_to_linear, BlendMode, BlendParams, ColorParam, ShapeStyle, StrokeStyle};
+pub use style::{
+    srgb_to_linear, BlendMode, BlendParams, ColorParam, ShapeStyle, StrokeStyle, COLOR_CHANNELS,
+};

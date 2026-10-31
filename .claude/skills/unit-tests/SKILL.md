@@ -31,6 +31,7 @@ dépendance du §10 de `docs/ARCHITECTURE.md`, et elle existe pour ça.
 | **Tessellation** | aire couverte, contour ouvert jamais rempli, contours disjoints sans triangle à cheval, dégénérés sans panique |
 | **Couches** | pixels relus en quelques points, comparés à une référence CPU (`srgb_to_linear`, `blend_premul`) |
 | **Audio** | features sur signaux **synthétiques** : sinus pur → centroïde connu, silence → RMS nul |
+| **Interface** | `egui_kittest` : un clic simulé produit la bonne `Command`, sans GPU ni écran. Un curseur se vise par `Role::SpinButton` |
 | **Pilotage** | `Command` testées sans GPU sur `Composition` ; un refus ne touche à rien. `Engine` : clip inactif jamais évalué (`Signal` compteur), changement de clip sans résidu |
 | **Sorties** | `CpuSink` factice lent : indices contigus en `Fixed`, pertes comptées sans ralentir la boucle en `Realtime` ; relecture seulement si une sortie CPU est active ; `GpuSink` factice : `after_submit` une fois par frame, après `encode` (§8.0) |
 | **Patchs** | chaque fixture d'ancienne version se migre et se charge (§19.2) |

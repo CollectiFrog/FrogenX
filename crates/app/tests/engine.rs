@@ -251,6 +251,30 @@ fn le_tempo_atteint_le_clip_actif() {
 }
 
 #[test]
+fn un_reglage_change_l_image_a_la_frame_suivante() {
+    let Some(gpu) = gpu() else { return };
+    let (c, layer, clip, _) = une_piste();
+    // Le rouge du remplissage, tel que l'interface le désigne.
+    let slot = c.clip(clip).unwrap().params()[1].params[0].slot;
+    let (mut moteur, recu) = moteur(gpu, c);
+
+    moteur.push(Command::TriggerClip { layer, clip });
+    moteur.frame(0.0);
+    moteur.push(Command::SetParam {
+        clip,
+        slot,
+        value: 0.0,
+    });
+    moteur.frame(0.0);
+    moteur.finish();
+
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(pixel(&frames[0], 16, 16), ROUGE);
+    assert_eq!(pixel(&frames[1], 16, 16), [0, 0, 0, 255], "plus de rouge");
+    assert_eq!(moteur.refused_commands(), 0);
+}
+
+#[test]
 fn une_commande_refusee_se_compte_sans_paniquer() {
     let Some(gpu) = gpu() else { return };
     let (c, layer, ..) = une_piste();

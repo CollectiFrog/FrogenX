@@ -3,6 +3,7 @@
 //! Tout pilote passe par là : clavier, interface, MIDI, OSC. Elles s'appliquent
 //! entre deux frames, jamais pendant l'évaluation, et se testent sans GPU.
 
+use crate::clip::ParamSlot;
 use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, DeckId, LayerId};
 use frogenx_core::Param;
@@ -25,6 +26,12 @@ pub enum Command {
     SetLayerOpacity {
         layer: LayerId,
         opacity: Param,
+    },
+    /// Règle un paramètre d'un clip, sans couper sa modulation.
+    SetParam {
+        clip: ClipId,
+        slot: ParamSlot,
+        value: f32,
     },
     SetActiveDeck(DeckId),
     SetBpm(f32),
@@ -53,6 +60,9 @@ impl Composition {
                 }
                 None => false,
             },
+            Command::SetParam { clip, slot, value } => self
+                .clip_mut(clip)
+                .is_some_and(|c| c.set_param(slot, value)),
             Command::SetActiveDeck(deck) => self.set_active_deck(deck),
             Command::SetBpm(bpm) => {
                 if bpm.is_finite() {
@@ -206,6 +216,40 @@ mod tests {
         c.trigger(piste, a);
         c.trigger(piste, b);
         assert_eq!(c.layer(piste).unwrap().blend.opacity, opacity);
+    }
+
+    #[test]
+    fn une_commande_regle_un_parametre_du_clip() {
+        let (mut c, _, [a, _], _) = grille();
+        let slot = ParamSlot::Generator(0);
+        assert!(c.apply(
+            Command::SetParam {
+                clip: a,
+                slot,
+                value: 0.75
+            },
+            0.0
+        ));
+        let rayon = c.clip(a).unwrap().params()[0].params[0].desc.value;
+        assert_eq!(rayon, Param::fixed(0.75));
+
+        let perime = ClipId::new(99, 0);
+        assert!(!c.apply(
+            Command::SetParam {
+                clip: perime,
+                slot,
+                value: 0.75
+            },
+            0.0
+        ));
+    }
+
+    #[test]
+    fn la_grille_garde_l_ordre_de_ses_colonnes_et_nomme_ses_pistes() {
+        let (mut c, piste, ..) = grille();
+        let (a, b) = (c.add_column(), c.add_column());
+        assert_eq!(c.columns(), [a, b]);
+        assert_eq!(c.layer(piste).unwrap().name, "Piste 1");
     }
 
     #[test]

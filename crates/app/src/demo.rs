@@ -45,6 +45,7 @@ fn blob() -> Clip {
     let lfo = lfo_on_beat(&mut g, CYCLE);
     let style = ShapeStyle::filled(ColorParam::srgb(0.08, 0.22, 0.55, 1.0));
     clip(g, Box::new(Ellipse::circle(0.72)), style)
+        .with_name("Blob")
         .with_effect(Box::new(
             Deform::new(0.08, 5.0).with_phase(Param::modulated(0.0, 1.0, lfo)),
         ))
@@ -57,6 +58,7 @@ fn rosace() -> Clip {
     let lfo = lfo_on_beat(&mut g, CYCLE);
     let style = ShapeStyle::filled(ColorParam::srgb(1.0, 0.55, 0.15, 0.9));
     clip(g, Box::new(Polygon::new(3.0, 0.2)), style)
+        .with_name("Rosace")
         .with_effect(Box::new(Transform {
             translate_x: Param::fixed(0.46),
             ..Default::default()
@@ -76,14 +78,15 @@ fn polygone_qui_respire() -> Clip {
         ..Polygon::new(6.0, 0.7)
     };
     let style = ShapeStyle::filled(ColorParam::srgb(0.75, 0.12, 0.4, 1.0));
-    clip(g, Box::new(forme), style)
+    clip(g, Box::new(forme), style).with_name("Polygone")
 }
 
 fn fleur() -> Clip {
     let mut g = Graph::new();
     let lfo = lfo_on_beat(&mut g, CYCLE);
     let style = ShapeStyle::filled(ColorParam::srgb(0.1, 0.6, 0.45, 1.0));
-    clip(g, Box::new(Rose::new(5.0, 0.8)), style).with_effect(Box::new(Transform {
+    let rose = clip(g, Box::new(Rose::new(5.0, 0.8)), style).with_name("Fleur");
+    rose.with_effect(Box::new(Transform {
         rotation: Param::modulated(0.0, 1.2, lfo),
         ..Default::default()
     }))
@@ -121,7 +124,7 @@ fn superformule() -> Clip {
 /// quoi agir. Un rectangle de 4 couvre l'espace normalisé même en 16:9.
 fn fond() -> Clip {
     let style = ShapeStyle::filled(ColorParam::srgb(0.03, 0.03, 0.06, 1.0));
-    clip(Graph::new(), Box::new(Rect::new(4.0, 4.0)), style)
+    clip(Graph::new(), Box::new(Rect::new(4.0, 4.0)), style).with_name("Fond")
 }
 
 /// Ajoute une colonne qui déclenche `clips`, une entrée par piste de `pistes`.
@@ -143,6 +146,11 @@ pub fn grid() -> DemoGrid {
     let groupe = c.add_layer_group(deck).expect("le deck vient d'être créé");
     let piste = |c: &mut Composition| c.add_layer(groupe).expect("le groupe vient d'être créé");
     let (arriere, formes, traits) = (piste(&mut c), piste(&mut c), piste(&mut c));
+    for (id, nom) in [(arriere, "Fond"), (formes, "Formes"), (traits, "Traits")] {
+        if let Some(l) = c.layer_mut(id) {
+            l.name = nom.to_string();
+        }
+    }
 
     let clip_fond = c
         .add_clip(arriere, fond())

@@ -8,6 +8,7 @@ members = [
     "crates/layer",
     "crates/render",
     "crates/output",
+    "crates/ui",
     "crates/app",
 ]
 
@@ -23,6 +24,7 @@ frogenx-composition = { path = "crates/composition" }
 frogenx-layer = { path = "crates/layer" }
 frogenx-render = { path = "crates/render" }
 frogenx-output = { path = "crates/output" }
+frogenx-ui = { path = "crates/ui" }
 frogenx-app = { path = "crates/app" }
 glam = "0.29"
 serde = { version = "1", features = ["derive"] }
@@ -35,12 +37,17 @@ pollster = "1"
 png = "0.18"
 # Imposé par `egui-wgpu` pour wgpu 30 (§11) ; dans `app` seulement (§8.3).
 winit = "0.30"
+# Interface (§23.5) : `egui` dans `ui`, les deux intégrations dans `app`.
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+egui-winit = "0.37"
+egui_kittest = "0.37"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-# Minimum de wgpu 30 (docs/ARCHITECTURE.md §11) : relevé avec la majeure de wgpu.
-rust-version = "1.87"
+# Minimum d'egui 0.37, qui dépasse celui de wgpu 30 (docs/ARCHITECTURE.md §11).
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 
 [profile.release]

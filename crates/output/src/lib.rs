@@ -25,6 +25,7 @@
 
 pub mod conversion;
 pub mod fanout;
+pub mod monitor;
 pub mod outputs;
 pub mod png_sequence;
 pub mod preview;
@@ -32,7 +33,11 @@ pub mod sink;
 
 pub use conversion::{ConversionMode, ConversionPass, Rect};
 pub use fanout::{CpuFanout, DropPolicy, QUEUE_DEPTH};
+pub use monitor::{MonitorSink, MONITOR_FORMAT};
 pub use outputs::{OutputError, Outputs};
 pub use png_sequence::PngSequenceSink;
-pub use preview::{letterbox, pick_format, pick_present_mode, Preview, PreviewHandle};
+pub use preview::{
+    letterbox, pick_format, pick_present_mode, FormatPreference, PresentSurface, Preview,
+    PreviewHandle,
+};
 pub use sink::{CpuFrame, CpuSink, GpuFrame, GpuSink, OutputSink, SinkStatus};

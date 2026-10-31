@@ -33,6 +33,75 @@ pub fn drop_policy(mode: ClockMode) -> DropPolicy {
     }
 }
 
+/// Le statut des sorties, en mots : ce que lit l'interface.
+pub fn describe_outputs(statuses: &[SinkStatus]) -> String {
+    let mut perdues = 0;
+    let mut pannes = Vec::new();
+    for status in statuses {
+        match status {
+            SinkStatus::Active => {}
+            SinkStatus::Degraded { dropped } => perdues += dropped,
+            SinkStatus::Failed(message) => pannes.push(message.as_str()),
+        }
+    }
+    if !pannes.is_empty() {
+        format!("Sortie en panne : {}", pannes.join(" ; "))
+    } else if perdues > 0 {
+        format!("{perdues} frames perdues")
+    } else {
+        format!("Sorties actives : {}", statuses.len())
+    }
+}
+
+/// La cadence mesurée, lissée pour que le chiffre reste lisible.
+///
+/// C'est la durée qu'on moyenne, pas son inverse : quelques frames très
+/// rapprochées suffiraient à fausser une moyenne de `1 / dt`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameRate {
+    dt: f64,
+    min: f64,
+    max: f64,
+    /// Frames vues : l'échauffement (compilation des shaders) ne compte pas
+    /// dans les extrêmes.
+    seen: u32,
+}
+
+/// Frames ignorées par les extrêmes de [`FrameRate`].
+const WARM_UP: u32 = 30;
+
+impl FrameRate {
+    pub fn new(period: Duration) -> Self {
+        Self {
+            dt: period.as_secs_f64(),
+            min: f64::INFINITY,
+            max: 0.0,
+            seen: 0,
+        }
+    }
+
+    pub fn tick(&mut self, dt: f64) {
+        if dt > 0.0 {
+            self.dt += (dt - self.dt) * 0.05;
+            self.seen = self.seen.saturating_add(1);
+            if self.seen > WARM_UP {
+                self.min = self.min.min(dt);
+                self.max = self.max.max(dt);
+            }
+        }
+    }
+
+    pub fn fps(&self) -> f32 {
+        (1.0 / self.dt) as f32
+    }
+
+    /// Le plus court et le plus long intervalle vus : la régularité, qu'une
+    /// moyenne cache.
+    pub fn range_ms(&self) -> (f64, f64) {
+        (self.min * 1000.0, self.max * 1000.0)
+    }
+}
+
 /// La prochaine échéance du moteur, qui se cadence lui-même (§8.3).
 ///
 /// Une frame en retard ne se rattrape pas : accumuler le retard enchaînerait
@@ -278,6 +347,47 @@ mod tests {
         let periode = Duration::from_millis(16);
         let maintenant = debut + Duration::from_millis(1);
         assert_eq!(next_deadline(debut, maintenant, periode), debut + periode);
+    }
+
+    #[test]
+    fn la_cadence_n_est_pas_faussee_par_des_frames_rapprochees() {
+        // Un intervalle sur deux très court : 30 fps... en moyenne de durées
+        // (8.5 + 25 ms ne font pas une frame sur 16 ms).
+        let mut r = FrameRate::new(Duration::from_millis(16));
+        for _ in 0..1000 {
+            r.tick(0.002);
+            r.tick(0.0313);
+        }
+        assert!((r.fps() - 60.0).abs() < 4.0, "got {}", r.fps());
+        let (min, max) = r.range_ms();
+        assert!((min - 2.0).abs() < 1e-6 && (max - 31.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn la_cadence_ignore_un_intervalle_nul() {
+        let mut r = FrameRate::new(Duration::from_millis(16));
+        let avant = r.fps();
+        r.tick(0.0);
+        assert_eq!(r.fps(), avant);
+    }
+
+    #[test]
+    fn le_statut_des_sorties_dit_d_abord_le_plus_grave() {
+        let actif = SinkStatus::Active;
+        let lent = SinkStatus::Degraded { dropped: 3 };
+        let panne = SinkStatus::Failed("disque plein".into());
+        assert_eq!(
+            describe_outputs(std::slice::from_ref(&actif)),
+            "Sorties actives : 1"
+        );
+        assert_eq!(
+            describe_outputs(&[actif.clone(), lent.clone()]),
+            "3 frames perdues"
+        );
+        assert_eq!(
+            describe_outputs(&[actif, lent, panne]),
+            "Sortie en panne : disque plein"
+        );
     }
 
     #[test]

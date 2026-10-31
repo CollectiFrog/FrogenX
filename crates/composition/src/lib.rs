@@ -42,7 +42,7 @@ pub mod ids;
 pub mod position;
 pub mod transport;
 
-pub use clip::{Clip, ClipSource, ClipTransition, WipeDirection};
+pub use clip::{Clip, ClipParam, ClipSource, ClipTransition, ParamGroup, ParamSlot, WipeDirection};
 pub use command::Command;
 pub use crossfader::{CrossFader, FadeCurve};
 pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup};

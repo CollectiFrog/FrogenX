@@ -4,7 +4,7 @@
 //! volontairement ennuyeuses seules : c'est la composition avec les opérateurs
 //! (§5.4) qui produit la richesse.
 
-use crate::generator::{ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
+use crate::generator::{params, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 use crate::path::Path;
 use frogenx_core::{Ctx, Graph, Param};
 use glam::Vec2;
@@ -53,6 +53,13 @@ impl Ellipse {
 }
 
 impl ShapeGenerator for Ellipse {
+    params! {
+        "Ellipse";
+        radius: "rayon", 0.0, 2.0;
+        eccentricity: "excentricité", 0.0, 1.0;
+        segments: "segments", 3.0, 256.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         // Un rayon négatif viendrait d'une modulation trop profonde : on le
@@ -133,6 +140,15 @@ fn polygon_radius(a: f32, sides: f32) -> f32 {
 }
 
 impl ShapeGenerator for Polygon {
+    params! {
+        "Polygone";
+        sides: "côtés", 2.0, 32.0;
+        radius: "rayon", 0.0, 2.0;
+        rotation: "rotation", -std::f32::consts::PI, std::f32::consts::PI;
+        corner_radius: "arrondi", 0.0, 1.0;
+        segments: "segments", 1.0, 32.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let sides = self.sides.get(g);
@@ -190,6 +206,14 @@ impl Star {
 }
 
 impl ShapeGenerator for Star {
+    params! {
+        "Étoile";
+        points: "branches", 2.0, 32.0;
+        radius: "rayon", 0.0, 2.0;
+        inner_ratio: "creux", 0.0, 1.0;
+        rotation: "rotation", -std::f32::consts::PI, std::f32::consts::PI;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let p = self.points.get(g);
@@ -242,6 +266,14 @@ impl Rect {
 }
 
 impl ShapeGenerator for Rect {
+    params! {
+        "Rectangle";
+        width: "largeur", 0.0, 4.0;
+        height: "hauteur", 0.0, 4.0;
+        corner_radius: "arrondi", 0.0, 1.0;
+        corner_segments: "segments d'arrondi", 1.0, 32.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let w = self.width.get(g).max(0.0) * 0.5;
@@ -308,6 +340,14 @@ impl Arc {
 }
 
 impl ShapeGenerator for Arc {
+    params! {
+        "Arc";
+        start: "début", -std::f32::consts::TAU, std::f32::consts::TAU;
+        sweep: "ouverture", -std::f32::consts::TAU, std::f32::consts::TAU;
+        radius: "rayon", 0.0, 2.0;
+        segments: "segments", 3.0, 256.0;
+    }
+
     fn generate(&self, _t: f64, _ctx: &Ctx, g: &Graph, out: &mut Path) {
         out.clear();
         let start = self.start.get(g);

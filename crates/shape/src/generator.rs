@@ -1,7 +1,7 @@
 //! Le trait `ShapeGenerator` et le contrat des formes — §16.3.
 
 use crate::path::Path;
-use frogenx_core::{Ctx, Graph};
+use frogenx_core::{Ctx, Graph, Param};
 
 /// Tout ce qui produit une forme.
 ///
@@ -31,7 +31,59 @@ pub trait ShapeGenerator {
     /// sont déjà dans le cache. `ctx` donne accès à `dt` et aux features audio
     /// pour les générateurs qui en ont besoin.
     fn generate(&self, t: f64, ctx: &Ctx, g: &Graph, out: &mut Path);
+
+    /// Le nom de ce type de forme, tel qu'affiché.
+    fn kind(&self) -> &'static str;
+
+    /// Ses paramètres réglables (§16.3 ter). Déclarés par [`params!`].
+    fn params(&self) -> Vec<ParamDesc>;
+
+    /// Le `index`-ième paramètre de [`Self::params`], en écriture.
+    fn param_mut(&mut self, index: usize) -> Option<&mut Param>;
 }
+
+/// Un paramètre réglable, décrit pour qui ne connaît pas le type de la forme.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParamDesc {
+    pub name: &'static str,
+    /// Plage du curseur. Ce n'est pas une saturation : une modulation peut en
+    /// sortir, et c'est le consommateur qui sature (§18.4).
+    pub min: f32,
+    pub max: f32,
+    pub value: Param,
+}
+
+/// Écrit `kind`, `params` et `param_mut` depuis une seule liste : `param_mut(i)`
+/// désigne ainsi toujours le `i`-ème de `params()`.
+macro_rules! params {
+    ($kind:literal; $($field:ident: $name:literal, $min:expr, $max:expr;)*) => {
+        fn kind(&self) -> &'static str {
+            $kind
+        }
+
+        fn params(&self) -> Vec<$crate::generator::ParamDesc> {
+            vec![$($crate::generator::ParamDesc {
+                name: $name,
+                min: $min,
+                max: $max,
+                value: self.$field,
+            }),*]
+        }
+
+        fn param_mut(&mut self, index: usize) -> Option<&mut frogenx_core::Param> {
+            let mut i = 0;
+            $(
+                if i == index {
+                    return Some(&mut self.$field);
+                }
+                i += 1;
+            )*
+            let _ = (i, index);
+            None
+        }
+    };
+}
+pub(crate) use params;
 
 /// Nombre de segments utilisé pour discrétiser une courbe lisse.
 ///
@@ -108,5 +160,117 @@ mod tests {
                 "la résolution lisse doit tenir sous la borne dure"
             )
         };
+    }
+}
+
+#[cfg(test)]
+mod params_tests {
+    use super::ParamDesc;
+    use crate::*;
+
+    /// Une liste cohérente, et `param_mut(i)` qui atteint bien le `i`-ème.
+    fn verifie(
+        kind: &str,
+        attendus: usize,
+        params: impl Fn() -> Vec<ParamDesc>,
+        mut ecrit: impl FnMut(usize, f32) -> bool,
+    ) {
+        assert_eq!(params().len(), attendus, "{kind}");
+        for p in params().iter() {
+            assert!(p.min < p.max, "{kind}.{}", p.name);
+            assert!(!p.name.is_empty(), "{kind}");
+        }
+        for i in 0..attendus {
+            let valeur = 1000.0 + i as f32;
+            assert!(ecrit(i, valeur), "{kind} : param_mut({i})");
+        }
+        for (i, p) in params().iter().enumerate() {
+            assert_eq!(p.value.base(), 1000.0 + i as f32, "{kind}.{}", p.name);
+        }
+        assert!(!ecrit(attendus, 0.0), "{kind} : au-delà de la liste");
+    }
+
+    /// Le compte de chaque ligne est celui des champs `Param` de la structure :
+    /// un champ oublié dans `params!` serait invisible pour l'interface, la
+    /// sauvegarde et le MIDI.
+    #[test]
+    fn chaque_forme_declare_tous_ses_param() {
+        let generateurs: Vec<(Box<dyn ShapeGenerator>, usize)> = vec![
+            (Box::new(Ellipse::circle(0.5)), 3),
+            (Box::new(Polygon::new(5.0, 0.5)), 5),
+            (Box::new(Star::new(5.0, 0.5, 0.5)), 4),
+            (Box::new(Rect::new(1.0, 1.0)), 4),
+            (Box::new(Arc::new(0.0, 1.0, 0.5)), 4),
+            (Box::new(Lissajous::new(3.0, 2.0)), 5),
+            (Box::new(Rose::new(5.0, 0.5)), 3),
+            (Box::new(Superformula::new(5.0)), 8),
+        ];
+        for (forme, n) in generateurs {
+            let forme = std::cell::RefCell::new(forme);
+            let kind = forme.borrow().kind();
+            verifie(
+                kind,
+                n,
+                || forme.borrow().params(),
+                |i, v| {
+                    let mut f = forme.borrow_mut();
+                    match f.param_mut(i) {
+                        Some(p) => {
+                            p.set_base(v);
+                            true
+                        }
+                        None => false,
+                    }
+                },
+            );
+        }
+
+        let operateurs: Vec<(Box<dyn ShapeOp>, usize)> = vec![
+            (Box::new(Deform::new(0.1, 3.0)), 3),
+            (Box::new(NoiseDisplace::new(0.1, 3.0, 1)), 3),
+            (Box::new(RadialRepeat::new(3.0)), 2),
+            (Box::new(Transform::default()), 4),
+            (Box::new(Smooth::new(1.0, 0.5)), 2),
+        ];
+        for (op, n) in operateurs {
+            let op = std::cell::RefCell::new(op);
+            let kind = op.borrow().kind();
+            verifie(
+                kind,
+                n,
+                || op.borrow().params(),
+                |i, v| {
+                    let mut o = op.borrow_mut();
+                    match o.param_mut(i) {
+                        Some(p) => {
+                            p.set_base(v);
+                            true
+                        }
+                        None => false,
+                    }
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn une_chaine_expose_sa_source_puis_ses_operateurs() {
+        let mut chaine = Chain::new(Box::new(Rose::new(5.0, 0.5)))
+            .then(Box::new(Deform::new(0.1, 3.0)))
+            .then(Box::new(RadialRepeat::new(3.0)));
+        assert_eq!(chaine.params().len(), 3 + 3 + 2);
+
+        chaine
+            .param_mut(3)
+            .expect("force de la déformation")
+            .set_base(0.4);
+        chaine
+            .param_mut(6)
+            .expect("copies de la répétition")
+            .set_base(7.0);
+        let params = chaine.params();
+        assert_eq!(params[3].value.base(), 0.4);
+        assert_eq!(params[6].value.base(), 7.0);
+        assert!(chaine.param_mut(8).is_none());
     }
 }

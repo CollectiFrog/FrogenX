@@ -24,8 +24,8 @@ crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← cor
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
                      à venir : NDI / Spout / Syphon / recorder
-crates/ui/           egui : grille, tempo, monitor, réglages ; rend des Command ← core, composition, egui
-crates/app/          Engine (sans fenêtre) + binaire `frogenx` (`cargo run`) ← tout le reste, winit ✅
+crates/ui/           egui : grille, tempo, monitor, réglages ; rend des Command ← core, composition, egui ✅
+crates/app/          Engine (sans fenêtre) + binaire `frogenx` (`cargo run`) ← tout le reste, winit, egui-wgpu ✅
 ```
 
 **Ajouter une crate** demande deux éditions du `Cargo.toml` racine — `members` **et**

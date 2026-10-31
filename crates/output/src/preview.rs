@@ -1,8 +1,9 @@
-//! La preview — §8.3 de `docs/ARCHITECTURE.md`.
+//! Présenter sur une surface — §8.3 de `docs/ARCHITECTURE.md`.
 //!
-//! Une sortie comme les autres : elle reçoit une `wgpu::Surface`, jamais une
-//! fenêtre. Le moteur a sa propre échéance ; une preview indisponible saute sa
-//! frame sans rien ralentir.
+//! [`PresentSurface`] porte ce qui est commun à toute fenêtre : acquisition,
+//! reconfiguration, perte. [`Preview`] en fait une sortie comme les autres :
+//! elle reçoit une `wgpu::Surface`, jamais une fenêtre. Le moteur a sa propre
+//! échéance ; une surface indisponible saute sa frame sans rien ralentir.
 
 use crate::conversion::{ConversionMode, ConversionPass, Rect};
 use crate::outputs::OutputError;
@@ -21,20 +22,38 @@ pub fn pick_present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
     }
 }
 
-/// Un format `*Srgb` si possible, le matériel encode alors ; sinon du 8 bits,
-/// encodé par la passe. Rend `None` si la surface n'en propose aucun.
-pub fn pick_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
+/// Quel format préférer pour une surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatPreference {
+    /// Le matériel encode le sRGB : ce que veut la preview.
+    Srgb,
+    /// L'application écrit des valeurs déjà encodées : ce que veut egui.
+    Unorm,
+}
+
+/// Un format 8 bits selon `preference`, sinon l'autre famille 8 bits, sinon le
+/// premier proposé. Rend `None` si la surface n'en propose aucun.
+pub fn pick_format(
+    formats: &[wgpu::TextureFormat],
+    preference: FormatPreference,
+) -> Option<wgpu::TextureFormat> {
     use wgpu::TextureFormat as F;
-    formats
-        .iter()
-        .find(|f| matches!(f, F::Bgra8UnormSrgb | F::Rgba8UnormSrgb))
-        .or_else(|| {
-            formats
-                .iter()
-                .find(|f| matches!(f, F::Bgra8Unorm | F::Rgba8Unorm))
-        })
-        .or(formats.first())
-        .copied()
+    let srgb = || {
+        formats
+            .iter()
+            .find(|f| matches!(f, F::Bgra8UnormSrgb | F::Rgba8UnormSrgb))
+    };
+    let unorm = || {
+        formats
+            .iter()
+            .find(|f| matches!(f, F::Bgra8Unorm | F::Rgba8Unorm))
+    };
+    match preference {
+        FormatPreference::Srgb => srgb().or_else(unorm),
+        FormatPreference::Unorm => unorm().or_else(srgb),
+    }
+    .or(formats.first())
+    .copied()
 }
 
 /// Le rectangle de `target` qui montre `source` sans la déformer, centré.
@@ -60,6 +79,145 @@ pub fn letterbox(source: (u32, u32), target: (u32, u32)) -> Rect {
         y: (target.1 - height) / 2,
         width,
         height,
+    }
+}
+
+fn configuration(
+    gpu: &Gpu,
+    surface: &wgpu::Surface<'static>,
+    width: u32,
+    height: u32,
+    preference: FormatPreference,
+) -> Result<wgpu::SurfaceConfiguration, OutputError> {
+    let capacites = surface.get_capabilities(&gpu.adapter);
+    let mut config = surface
+        .get_default_config(&gpu.adapter, width, height)
+        .ok_or(OutputError::SurfaceNotCompatible)?;
+    config.format =
+        pick_format(&capacites.formats, preference).ok_or(OutputError::SurfaceNotCompatible)?;
+    config.present_mode = pick_present_mode(&capacites.present_modes);
+    if capacites
+        .alpha_modes
+        .contains(&wgpu::CompositeAlphaMode::Opaque)
+    {
+        config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
+    }
+    Ok(config)
+}
+
+/// Une surface et sa configuration : le tableau du §8.3, écrit une seule fois.
+pub struct PresentSurface {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    preference: FormatPreference,
+    reconfigure: bool,
+    lost: bool,
+    /// Frames perdues parce que la surface n'a pas répondu. Une fenêtre
+    /// simplement masquée n'en fait pas partie : rien n'y est anormal.
+    skipped: u32,
+}
+
+impl PresentSurface {
+    pub fn new(
+        gpu: &Gpu,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        preference: FormatPreference,
+    ) -> Result<Self, OutputError> {
+        let config = configuration(gpu, &surface, width, height, preference)?;
+        let mut present = Self {
+            surface,
+            config,
+            preference,
+            reconfigure: true,
+            lost: false,
+            skipped: 0,
+        };
+        present.configure(gpu);
+        Ok(present)
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    pub fn skipped(&self) -> u32 {
+        self.skipped
+    }
+
+    /// La surface est perdue : seul qui possède la fenêtre peut la recréer.
+    pub fn is_lost(&self) -> bool {
+        self.lost
+    }
+
+    /// Prise en compte à la prochaine acquisition, jamais pendant une frame.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if (width, height) != self.size() {
+            self.config.width = width;
+            self.config.height = height;
+            self.reconfigure = true;
+        }
+    }
+
+    /// Remplace une surface perdue. Le format peut changer avec elle.
+    pub fn replace(
+        &mut self,
+        gpu: &Gpu,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<(), OutputError> {
+        let (width, height) = self.size();
+        self.config = configuration(gpu, &surface, width, height, self.preference)?;
+        self.surface = surface;
+        self.lost = false;
+        self.reconfigure = true;
+        Ok(())
+    }
+
+    /// wgpu panique sur une taille nulle, qui est celle d'une fenêtre réduite,
+    /// et si une `SurfaceTexture` est encore vivante : d'où un seul point
+    /// d'appel, avant d'acquérir.
+    fn configure(&mut self, gpu: &Gpu) {
+        if self.config.width > 0 && self.config.height > 0 {
+            self.surface.configure(&gpu.device, &self.config);
+            self.reconfigure = false;
+        }
+    }
+
+    /// La texture de la frame, ou `None` s'il faut la sauter. L'appelant la
+    /// présente par `gpu.queue.present`, après soumission.
+    pub fn acquire(&mut self, gpu: &Gpu) -> Option<wgpu::SurfaceTexture> {
+        if self.reconfigure {
+            self.configure(gpu);
+        }
+        if self.reconfigure || self.lost || self.config.width == 0 || self.config.height == 0 {
+            return None;
+        }
+        match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture) => Some(texture),
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                self.reconfigure = true;
+                Some(texture)
+            }
+            wgpu::CurrentSurfaceTexture::Occluded => None,
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.reconfigure = true;
+                None
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Validation => {
+                self.skipped = self.skipped.saturating_add(1);
+                None
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.skipped = self.skipped.saturating_add(1);
+                self.lost = true;
+                None
+            }
+        }
     }
 }
 
@@ -108,15 +266,10 @@ impl PreviewHandle {
 
 /// La sortie vers une fenêtre : le rendu en letterbox, sur du noir.
 pub struct Preview {
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
+    surface: PresentSurface,
     pass: ConversionPass,
     /// Acquise par `encode`, présentée par `after_submit`.
     pending: Option<wgpu::SurfaceTexture>,
-    reconfigure: bool,
-    /// Frames perdues parce que la surface n'a pas répondu. Une fenêtre
-    /// simplement masquée n'en fait pas partie : rien n'y est anormal.
-    skipped: u32,
     handle: PreviewHandle,
 }
 
@@ -128,116 +281,50 @@ impl Preview {
         width: u32,
         height: u32,
     ) -> Result<(Self, PreviewHandle), OutputError> {
-        let config = configuration(gpu, &surface, width, height)?;
-        if config.width > 0 && config.height > 0 {
-            surface.configure(&gpu.device, &config);
-        }
-        let pass = ConversionPass::new(gpu, config.format, ConversionMode::OverBlack);
+        let surface = PresentSurface::new(gpu, surface, width, height, FormatPreference::Srgb)?;
+        let pass = ConversionPass::new(gpu, surface.format(), ConversionMode::OverBlack);
         let handle = PreviewHandle(Arc::new(Mutex::new(Control::default())));
         let preview = Self {
             surface,
-            config,
             pass,
             pending: None,
-            reconfigure: false,
-            skipped: 0,
             handle: handle.clone(),
         };
         Ok((preview, handle))
     }
 
-    /// Applique ce que `app` a demandé depuis la dernière frame. Aucune texture
-    /// n'est alors acquise : wgpu panique si l'on reconfigure avec une
-    /// `SurfaceTexture` encore vivante.
+    /// Applique ce que `app` a demandé depuis la dernière frame.
     fn apply_control(&mut self, gpu: &Gpu) {
         let (size, surface) = {
             let mut control = self.handle.lock();
             (control.size.take(), control.surface.take())
         };
         if let Some(surface) = surface {
-            if let Ok(config) = configuration(gpu, &surface, self.config.width, self.config.height)
-            {
-                if config.format != self.config.format {
-                    self.pass = ConversionPass::new(gpu, config.format, ConversionMode::OverBlack);
-                }
-                self.config = config;
-                self.surface = surface;
-                self.reconfigure = true;
+            let format = self.surface.format();
+            if self.surface.replace(gpu, surface).is_ok() && self.surface.format() != format {
+                self.pass =
+                    ConversionPass::new(gpu, self.surface.format(), ConversionMode::OverBlack);
             }
         }
         if let Some((width, height)) = size {
-            if (width, height) != (self.config.width, self.config.height) {
-                self.config.width = width;
-                self.config.height = height;
-                self.reconfigure = true;
-            }
-        }
-        if self.reconfigure {
-            self.configure(gpu);
+            self.surface.resize(width, height);
         }
     }
-
-    /// wgpu panique sur une taille nulle : c'est celle d'une fenêtre réduite.
-    fn configure(&mut self, gpu: &Gpu) {
-        if self.config.width > 0 && self.config.height > 0 {
-            self.surface.configure(&gpu.device, &self.config);
-        }
-        self.reconfigure = false;
-    }
-}
-
-fn configuration(
-    gpu: &Gpu,
-    surface: &wgpu::Surface<'static>,
-    width: u32,
-    height: u32,
-) -> Result<wgpu::SurfaceConfiguration, OutputError> {
-    let capacites = surface.get_capabilities(&gpu.adapter);
-    let mut config = surface
-        .get_default_config(&gpu.adapter, width, height)
-        .ok_or(OutputError::SurfaceNotCompatible)?;
-    config.format = pick_format(&capacites.formats).ok_or(OutputError::SurfaceNotCompatible)?;
-    config.present_mode = pick_present_mode(&capacites.present_modes);
-    if capacites
-        .alpha_modes
-        .contains(&wgpu::CompositeAlphaMode::Opaque)
-    {
-        config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
-    }
-    Ok(config)
 }
 
 impl GpuSink for Preview {
     fn encode(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, frame: &GpuFrame<'_>) {
         self.apply_control(gpu);
-        if self.config.width == 0 || self.config.height == 0 || self.handle.surface_lost() {
-            return;
-        }
-        let sortie = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                self.reconfigure = true;
-                texture
-            }
-            wgpu::CurrentSurfaceTexture::Occluded => return,
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.configure(gpu);
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Validation => {
-                self.skipped = self.skipped.saturating_add(1);
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                self.skipped = self.skipped.saturating_add(1);
+        let Some(sortie) = self.surface.acquire(gpu) else {
+            if self.surface.is_lost() {
                 self.handle.lock().lost = true;
-                return;
             }
+            return;
         };
         let vue = sortie.texture.create_view(&Default::default());
         let rect = letterbox(
             (frame.texture.width(), frame.texture.height()),
-            (self.config.width, self.config.height),
+            self.surface.size(),
         );
         self.pass
             .encode(gpu, encoder, frame.texture, &vue, Some(rect));
@@ -252,12 +339,9 @@ impl GpuSink for Preview {
     }
 
     fn status(&self) -> SinkStatus {
-        if self.skipped > 0 {
-            SinkStatus::Degraded {
-                dropped: self.skipped,
-            }
-        } else {
-            SinkStatus::Active
+        match self.surface.skipped() {
+            0 => SinkStatus::Active,
+            dropped => SinkStatus::Degraded { dropped },
         }
     }
 }
@@ -320,16 +404,32 @@ mod tests {
     }
 
     #[test]
-    fn un_format_srgb_est_prefere_puis_un_format_8_bits() {
+    fn la_preview_prefere_srgb_et_l_interface_unorm() {
+        let tous = [F::Rgba16Float, F::Bgra8Unorm, F::Bgra8UnormSrgb];
         assert_eq!(
-            pick_format(&[F::Rgba16Float, F::Bgra8Unorm, F::Bgra8UnormSrgb]),
+            pick_format(&tous, FormatPreference::Srgb),
             Some(F::Bgra8UnormSrgb)
         );
         assert_eq!(
-            pick_format(&[F::Rgba16Float, F::Rgba8Unorm]),
+            pick_format(&tous, FormatPreference::Unorm),
+            Some(F::Bgra8Unorm)
+        );
+    }
+
+    #[test]
+    fn faute_de_mieux_on_prend_l_autre_famille_puis_le_premier_format() {
+        assert_eq!(
+            pick_format(&[F::Rgba16Float, F::Rgba8Unorm], FormatPreference::Srgb),
             Some(F::Rgba8Unorm)
         );
-        assert_eq!(pick_format(&[F::Rgba16Float]), Some(F::Rgba16Float));
-        assert_eq!(pick_format(&[]), None);
+        assert_eq!(
+            pick_format(&[F::Bgra8UnormSrgb], FormatPreference::Unorm),
+            Some(F::Bgra8UnormSrgb)
+        );
+        assert_eq!(
+            pick_format(&[F::Rgba16Float], FormatPreference::Srgb),
+            Some(F::Rgba16Float)
+        );
+        assert_eq!(pick_format(&[], FormatPreference::Unorm), None);
     }
 }

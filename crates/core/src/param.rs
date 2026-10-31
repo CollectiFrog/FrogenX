@@ -111,6 +111,23 @@ impl Param {
         }
     }
 
+    /// La valeur réglée par l'utilisateur, avant toute modulation.
+    pub fn base(&self) -> f32 {
+        match *self {
+            Param::Fixed(v) => v,
+            Param::Modulated { base, .. } => base,
+        }
+    }
+
+    /// Règle la valeur sans débrancher une éventuelle modulation : un curseur
+    /// ne doit pas couper un câble sans le dire (§16.3 ter).
+    pub fn set_base(&mut self, value: f32) {
+        match self {
+            Param::Fixed(v) => *v = value,
+            Param::Modulated { base, .. } => *base = value,
+        }
+    }
+
     /// La source de modulation, si ce paramètre est modulé.
     pub fn source(&self) -> Option<NodeId> {
         match *self {
@@ -135,6 +152,23 @@ impl Default for Param {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_base_remplace_une_valeur_fixe() {
+        let mut p = Param::fixed(1.0);
+        p.set_base(0.25);
+        assert_eq!(p, Param::fixed(0.25));
+        assert_eq!(p.base(), 0.25);
+    }
+
+    #[test]
+    fn set_base_garde_la_modulation() {
+        let source = NodeId::new(3, 1);
+        let mut p = Param::modulated(1.0, 0.5, source);
+        p.set_base(0.25);
+        assert_eq!(p, Param::modulated(0.25, 0.5, source));
+        assert_eq!(p.base(), 0.25);
+    }
     use crate::graph::Graph;
     use crate::signal::Constant;
 
