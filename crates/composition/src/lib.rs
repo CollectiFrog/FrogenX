@@ -21,15 +21,21 @@
 //! motive la règle de dépendance — elle déplace seulement la position de
 //! `composition` dans la chaîne.
 //!
+//! ## Ce que `composition` ne fait pas
+//!
+//! Elle ne dessine rien et ne connaît pas wgpu. `frogenx-app` lit le clip actif
+//! de chaque piste et le confie au renderer de la piste (§3bis.2).
+//!
 //! ## Ce qui n'est pas encore représenté
 //!
 //! - `ClipSource::Scene3d`/`Video` (étapes 12-13, §12) : non ajoutés avant
 //!   que `scene3d` et le décodage vidéo n'existent.
-//! - Le rendu de `ClipTransition::Fade`/`Wipe` (étape 5, §12) : le type
-//!   existe pour fixer le contrat, mais `composition` ne doit pas connaître
-//!   le compositeur de couches qui en a besoin.
+//! - Le rendu de `ClipTransition::Fade`/`Wipe` : le type fixe le contrat, seul
+//!   `Cut` est appliqué (§3bis.2).
+//! - L'effet de `PlayMode` : rien ne le lit encore (§3bis.3).
 
 pub mod clip;
+pub mod command;
 pub mod crossfader;
 pub mod hierarchy;
 pub mod ids;
@@ -37,8 +43,9 @@ pub mod position;
 pub mod transport;
 
 pub use clip::{Clip, ClipSource, ClipTransition, WipeDirection};
+pub use command::Command;
 pub use crossfader::{CrossFader, FadeCurve};
 pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup};
 pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId};
-pub use position::PositionSignal;
-pub use transport::{PlayMode, TempoController, Transport};
+pub use position::{BeatRate, PositionSignal};
+pub use transport::{sanitize_bpm, PlayMode, TempoController, Transport, MAX_BPM, MIN_BPM};

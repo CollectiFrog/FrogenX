@@ -5,13 +5,29 @@ use frogenx_core::{Ctx, Graph};
 use frogenx_layer::{Gpu, RenderLayer, LAYER_FORMAT};
 use glam::UVec2;
 
-/// Une couche à composer, avec le graphe qui résout ses `Param`.
+/// Une couche à composer, avec les graphes qui résolvent ses `Param`.
 ///
 /// Chaque clip porte son propre `Graph` (§3) : le compositeur ne suppose pas
 /// un graphe unique pour toutes les couches.
 pub struct LayerInput<'a> {
     pub layer: &'a mut dyn RenderLayer,
+    /// Résout le contenu de la couche.
     pub graph: &'a Graph,
+    /// Résout son mélange : celui d'une piste appartient au graphe de
+    /// composition, pas au clip qu'elle joue (§22.1).
+    pub blend_graph: &'a Graph,
+}
+
+impl<'a> LayerInput<'a> {
+    /// Une couche dont le contenu et le mélange se résolvent dans le même
+    /// graphe.
+    pub fn new(layer: &'a mut dyn RenderLayer, graph: &'a Graph) -> Self {
+        Self {
+            layer,
+            graph,
+            blend_graph: graph,
+        }
+    }
 }
 
 /// Uniformes d'une passe de composition — miroir de `Params` dans
@@ -170,7 +186,7 @@ impl Compositor {
         for (i, input) in inputs.iter().enumerate() {
             let blend = input.layer.blend();
             let params = CompositeParams {
-                opacity: saturate_opacity(blend.opacity.get(input.graph)),
+                opacity: saturate_opacity(blend.opacity.get(input.blend_graph)),
                 mode: blend.mode as u32,
                 _pad: [0; 2],
             };

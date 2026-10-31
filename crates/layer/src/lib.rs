@@ -5,12 +5,10 @@
 //! `docs/ARCHITECTURE.md`.
 //!
 //! C'est la **première crate qui dépend du GPU** (§10). Elle garde pourtant
-//! trois modules qui ne connaissent pas wgpu, testables en CI sans GPU :
+//! deux modules qui ne connaissent pas wgpu, testables en CI sans GPU :
 //!
 //! - [`tessellate`] : `Path` → triangles. Les cas limites de l'étape 5 se
 //!   logent là — contour dégénéré, auto-intersection, contour ouvert.
-//! - [`color`] : quatre `Param` saisis en sRGB, résolus en linéaire
-//!   prémultiplié (§21).
 //! - [`space`] : espace normalisé des formes → coordonnées GPU, avec la
 //!   correction de proportion (§17).
 //!
@@ -24,16 +22,17 @@
 //! crate désigne un objet qui produit une texture ; les deux coexisteront dans
 //! `render` et `ui` (§6).
 
-pub mod color;
 pub mod gpu;
 pub mod render_layer;
 pub mod shape_layer;
 pub mod space;
 pub mod tessellate;
 
-pub use color::{srgb_to_linear, ColorParam};
+pub use frogenx_shape::{
+    srgb_to_linear, BlendMode, BlendParams, ColorParam, ShapeStyle, StrokeStyle,
+};
 pub use gpu::{Gpu, LAYER_FORMAT};
-pub use render_layer::{BlendMode, BlendParams, RenderDiagnostics, RenderLayer};
-pub use shape_layer::{ShapeLayer, StrokeStyle};
+pub use render_layer::{RenderDiagnostics, RenderLayer};
+pub use shape_layer::{ShapeContent, ShapeLayer, ShapeRenderer};
 pub use space::normalized_to_ndc;
 pub use tessellate::{Mesh, Tessellator};

@@ -7,10 +7,11 @@
 
 use frogenx_core::{AudioFeatures, Constant, Ctx, Graph, Param};
 use frogenx_layer::{
-    srgb_to_linear, BlendMode, BlendParams, ColorParam, Gpu, RenderLayer, ShapeLayer,
+    srgb_to_linear, BlendMode, BlendParams, ColorParam, Gpu, RenderLayer, ShapeContent, ShapeLayer,
+    ShapeRenderer, ShapeStyle,
 };
 use frogenx_render::{blend_premul, read_rgba16f, Compositor, LayerInput};
-use frogenx_shape::{Arc, Chain, Ellipse, Rect, Transform};
+use frogenx_shape::{Arc, Chain, Ellipse, Rect, ShapeOp, Transform};
 use glam::UVec2;
 
 /// Tolérance des comparaisons : les textures intermédiaires sont en
@@ -30,10 +31,7 @@ fn composer(gpu: &Gpu, size: UVec2, couches: &mut [ShapeLayer], g: &Graph) -> Ve
     let audio = AudioFeatures::default();
     let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
     let mut comp = Compositor::new(gpu, size);
-    let mut inputs: Vec<LayerInput> = couches
-        .iter_mut()
-        .map(|c| LayerInput { layer: c, graph: g })
-        .collect();
+    let mut inputs: Vec<LayerInput> = couches.iter_mut().map(|c| LayerInput::new(c, g)).collect();
     comp.render(gpu, 0.0, &ctx, &mut inputs);
     read_rgba16f(gpu, comp.output_texture()).expect("relecture GPU")
 }
@@ -47,6 +45,111 @@ fn proche(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 const VIDE: [f32; 4] = [0.0; 4];
+
+/// Un renderer utilisé seul, comme la piste d'une grille : rend son image.
+fn rendre(
+    gpu: &Gpu,
+    renderer: &mut ShapeRenderer,
+    content: &ShapeContent<'_>,
+    g: &Graph,
+) -> Vec<[f32; 4]> {
+    let audio = AudioFeatures::default();
+    let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+    renderer.prepare(content, 0.0, &ctx, g, gpu);
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    renderer.encode(&mut encoder);
+    gpu.queue.submit(std::iter::once(encoder.finish()));
+    read_rgba16f(gpu, renderer.output_texture()).expect("relecture GPU")
+}
+
+#[test]
+fn un_meme_renderer_dessine_un_autre_contenu_sans_garder_le_precedent() {
+    let Some(gpu) = gpu() else { return };
+    let size = UVec2::new(32, 32);
+    let g = Graph::new();
+    let mut renderer = ShapeRenderer::new(&gpu, size);
+
+    let carre = Rect::new(1.0, 1.0);
+    let rouge = ShapeContent {
+        generator: &carre,
+        effects: &[],
+        style: ShapeStyle::filled(ColorParam::srgb(1.0, 0.0, 0.0, 1.0)),
+    };
+    assert_eq!(
+        px(&rendre(&gpu, &mut renderer, &rouge, &g), size, 16, 16),
+        [1.0, 0.0, 0.0, 1.0]
+    );
+
+    let cercle = Ellipse::circle(0.25);
+    let bleu = ShapeContent {
+        generator: &cercle,
+        effects: &[],
+        style: ShapeStyle::filled(ColorParam::srgb(0.0, 0.0, 1.0, 1.0)),
+    };
+    let image = rendre(&gpu, &mut renderer, &bleu, &g);
+    assert_eq!(px(&image, size, 16, 16), [0.0, 0.0, 1.0, 1.0]);
+    // Un coin du carré, hors du cercle : rien du contenu précédent.
+    assert_eq!(px(&image, size, 10, 10), VIDE);
+}
+
+#[test]
+fn les_effets_du_contenu_transforment_la_forme() {
+    let Some(gpu) = gpu() else { return };
+    let size = UVec2::new(32, 32);
+    let g = Graph::new();
+    let mut renderer = ShapeRenderer::new(&gpu, size);
+    let carre = Rect::new(0.5, 0.5);
+    let effets: Vec<Box<dyn ShapeOp>> = vec![Box::new(Transform {
+        translate_x: Param::fixed(0.5),
+        ..Default::default()
+    })];
+    let contenu = ShapeContent {
+        generator: &carre,
+        effects: &effets,
+        style: ShapeStyle::filled(ColorParam::srgb(1.0, 1.0, 1.0, 1.0)),
+    };
+    let image = rendre(&gpu, &mut renderer, &contenu, &g);
+    assert_eq!(px(&image, size, 16, 16), VIDE, "le centre est libéré");
+    assert_eq!(px(&image, size, 24, 16), [1.0; 4], "la forme est à droite");
+}
+
+#[test]
+fn l_opacite_se_resout_dans_le_graphe_de_melange() {
+    let Some(gpu) = gpu() else { return };
+    let size = UVec2::new(16, 16);
+    let audio = AudioFeatures::default();
+    let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+
+    // Le graphe de la couche n'a pas le nœud : seul celui de mélange résout.
+    let contenu = Graph::new();
+    let mut melange = Graph::new();
+    let moitie = melange.add(Box::new(Constant(0.5)));
+    melange.eval_frame(0.0, 1.0 / 60.0);
+
+    let mut couche = ShapeLayer::new(&gpu, size, Box::new(Rect::new(4.0, 4.0)))
+        .with_fill(ColorParam::srgb(1.0, 1.0, 1.0, 1.0))
+        .with_blend(BlendParams {
+            opacity: Param::modulated(0.0, 1.0, moitie),
+            mode: BlendMode::Normal,
+        });
+    let mut comp = Compositor::new(&gpu, size);
+    comp.render(
+        &gpu,
+        0.0,
+        &ctx,
+        &mut [LayerInput {
+            layer: &mut couche,
+            graph: &contenu,
+            blend_graph: &melange,
+        }],
+    );
+    let image = read_rgba16f(&gpu, comp.output_texture()).expect("relecture GPU");
+    assert!(
+        proche(px(&image, size, 8, 8), [0.5; 4]),
+        "got {:?}",
+        px(&image, size, 8, 8)
+    );
+}
 
 #[test]
 fn un_carre_plein_au_centre_a_la_couleur_lineaire_premultipliee() {
@@ -222,15 +325,7 @@ fn une_couche_videe_est_effacee_a_la_frame_suivante() {
         .with_fill(ColorParam::srgb(1.0, 1.0, 1.0, 1.0));
     let mut comp = Compositor::new(&gpu, size);
 
-    comp.render(
-        &gpu,
-        0.0,
-        &ctx,
-        &mut [LayerInput {
-            layer: &mut couche,
-            graph: &g,
-        }],
-    );
+    comp.render(&gpu, 0.0, &ctx, &mut [LayerInput::new(&mut couche, &g)]);
     let avant = read_rgba16f(&gpu, comp.output_texture()).unwrap();
     assert_ne!(px(&avant, size, 8, 8), VIDE);
 
@@ -239,10 +334,7 @@ fn une_couche_videe_est_effacee_a_la_frame_suivante() {
         &gpu,
         1.0 / 60.0,
         &ctx,
-        &mut [LayerInput {
-            layer: &mut couche,
-            graph: &g,
-        }],
+        &mut [LayerInput::new(&mut couche, &g)],
     );
     let apres = read_rgba16f(&gpu, comp.output_texture()).unwrap();
     assert!(apres.iter().all(|p| *p == VIDE));
@@ -261,15 +353,7 @@ fn le_redimensionnement_change_la_taille_de_la_sortie() {
     let nouvelle = UVec2::new(40, 24);
     couche.resize(nouvelle, &gpu);
     comp.resize(&gpu, nouvelle);
-    comp.render(
-        &gpu,
-        0.0,
-        &ctx,
-        &mut [LayerInput {
-            layer: &mut couche,
-            graph: &g,
-        }],
-    );
+    comp.render(&gpu, 0.0, &ctx, &mut [LayerInput::new(&mut couche, &g)]);
     let image = read_rgba16f(&gpu, comp.output_texture()).unwrap();
     assert_eq!(image.len(), 40 * 24);
     assert_ne!(

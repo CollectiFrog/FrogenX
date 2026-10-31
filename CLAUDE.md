@@ -55,8 +55,8 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 6 faites.** `cargo run` ouvre l'application : la fenêtre, à 60 fps, sur une
-scène de démonstration provisoire. Rendus sans fenêtre : `cargo run -p frogenx-render
+**Étapes 1 à 7 faites.** `cargo run` ouvre l'application : une grille de démonstration
+provisoire à 60 fps, touches 1 à 4 pour les colonnes, Espace pour taper le tempo. Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
 sequence` (un clip déterministe, skill `poc-video`). Les tests GPU se sautent proprement
 sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
@@ -69,22 +69,27 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
   fermés ou ouverts, §16.3). Primitives (`Ellipse`, `Polygon` à côtés flottants, `Star`,
   `Rect`, `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et
   opérateurs en place (`Deform`, `NoiseDisplace`, `RadialRepeat`, `Transform`, `Smooth`,
-  `Chain`).
+  `Chain`). Le style y vit aussi (`ColorParam`, `ShapeStyle`, `BlendParams`) : un clip le
+  porte, et `composition` ne connaît pas wgpu.
 - `crates/composition` : la grille (§3bis) — `Deck`/`LayerGroup`/`Layer`/`Column`/
-  `Clip`, `CrossFader`, `TempoController`, `PositionSignal`. Dépend de `core` et `shape`.
+  `Clip`, `CrossFader`, `TempoController`, `PositionSignal`, `BeatRate`, `Command`, graphe
+  de composition. Dépend de `core` et `shape`. Seul `Cut` s'applique, et `PlayMode` n'a
+  pas encore d'effet (§3bis.3).
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
-  `ShapeLayer`, tessellation lyon (module sans wgpu), couleur en `Param` sRGB.
+  `ShapeRenderer` (un par piste, le clip lui prête son `ShapeContent`), `ShapeLayer`,
+  tessellation lyon (module sans wgpu).
 - `crates/render` : `Compositor` (passes shader en ping-pong, 5 modes), relecture
   GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
 - `crates/output` : `GpuSink` (`encode`/`after_submit`), `CpuSink`, étage `Outputs`,
   passe de conversion 8 bits sRGB, `Preview`, `PngSequenceSink`. `fanout` (files bornées, politique
   de perte) ne connaît pas wgpu. `output` ne connaît pas `winit`.
-- `crates/app` : `Engine`, la boucle de frame du §20.1, sans fenêtre, et le binaire
-  `frogenx`, seul à connaître `winit`. Sa scène (`SceneGroup`, `demo`) est provisoire :
-  l'étape 7 la remplace par la grille.
+- `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
+  fenêtre, et le binaire `frogenx`, seul à connaître `winit`. La grille de `demo` est
+  provisoire : la bibliothèque de clips la remplacera.
 
-**Prochaine étape : 7 — la grille pilote le rendu.** Le §12 ne contient pas encore
-d'étape d'interface ; le périmètre d'une première version utilisable reste à valider.
+**Prochaine étape : l'interface egui** (grille, monitor, paramètres). Le §12 ne contient
+pas encore cette étape. Première version visée : interface, clips prédéfinis, sortie
+plein écran, sauvegarde, puis audio (capture, BPM calculé, déclenchements, §7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

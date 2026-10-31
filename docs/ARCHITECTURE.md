@@ -1061,7 +1061,7 @@ couches complètes empilées.
 | 4 | ✅ `composition` : `Deck`/`LayerGroup`/`Layer`/`Column`/`Clip`, `CrossFader`, `TempoController` (§3bis) | **la grille existe, sans rendu** — *fait* |
 | 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
 | 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
-| 7 | La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — `cargo run`, touches 1 à 4 |
+| 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
 | 8 | Audio → features → `Signal` | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |

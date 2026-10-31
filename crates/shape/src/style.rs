@@ -1,6 +1,9 @@
-//! Couleur des formes — §21 de `docs/ARCHITECTURE.md`.
+//! Le style d'une forme et le mélange d'une piste — §10, §21 de
+//! `docs/ARCHITECTURE.md`.
 //!
-//! **Ce module ne connaît pas wgpu** : fonctions pures, testées sans GPU.
+//! Ces types vivent ici, pas dans `layer` : un clip et une piste de
+//! `composition` les portent, et `composition` ne peut pas dépendre de wgpu.
+//! Quatre `Param` et une énumération : rien en eux ne touche au GPU.
 //!
 //! Une couleur est **quatre `Param`**, jamais un `[f32; 4]` en dur — c'est un
 //! champ qu'on voudra moduler par un LFO ou une feature audio (§16.4). Les
@@ -62,6 +65,76 @@ impl ColorParam {
     }
 }
 
+/// Le trait d'une forme : largeur en unités de l'espace normalisé (§17).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrokeStyle {
+    pub width: Param,
+    pub color: ColorParam,
+}
+
+/// Comment une forme se dessine : remplissage, trait, ou les deux.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ShapeStyle {
+    pub fill: Option<ColorParam>,
+    pub stroke: Option<StrokeStyle>,
+}
+
+impl ShapeStyle {
+    pub fn filled(color: ColorParam) -> Self {
+        Self {
+            fill: Some(color),
+            stroke: None,
+        }
+    }
+
+    pub fn stroked(width: Param, color: ColorParam) -> Self {
+        Self {
+            fill: None,
+            stroke: Some(StrokeStyle { width, color }),
+        }
+    }
+}
+
+/// Comment une couche se mélange à ce qu'il y a dessous (§22).
+///
+/// L'indice de chaque variante est celui que lit le shader du compositeur :
+/// ne pas réordonner sans mettre à jour `composite.wgsl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendMode {
+    Normal = 0,
+    Add = 1,
+    Multiply = 2,
+    Screen = 3,
+    Difference = 4,
+}
+
+impl BlendMode {
+    pub const ALL: [BlendMode; 5] = [
+        BlendMode::Normal,
+        BlendMode::Add,
+        BlendMode::Multiply,
+        BlendMode::Screen,
+        BlendMode::Difference,
+    ];
+}
+
+/// La seule donnée que le compositeur lit pour mélanger une couche (§22).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlendParams {
+    /// Modulable — c'est par ce `Param` que le `CrossFader` agit (§3bis.4).
+    pub opacity: Param,
+    pub mode: BlendMode,
+}
+
+impl Default for BlendParams {
+    fn default() -> Self {
+        Self {
+            opacity: Param::fixed(1.0),
+            mode: BlendMode::Normal,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +178,33 @@ mod tests {
 
         let c = ColorParam::srgb(2.0, -1.0, f32::NAN, 1.0).resolve(&g);
         assert_eq!(c, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn les_indices_des_modes_sont_ceux_du_shader() {
+        // composite.wgsl compare `mode` à ces entiers.
+        let indices: Vec<u32> = BlendMode::ALL.iter().map(|m| *m as u32).collect();
+        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn le_melange_par_defaut_est_normal_et_opaque() {
+        let b = BlendParams::default();
+        assert_eq!(b.mode, BlendMode::Normal);
+        assert_eq!(b.opacity, Param::fixed(1.0));
+    }
+
+    #[test]
+    fn un_style_par_defaut_ne_dessine_rien() {
+        assert_eq!(ShapeStyle::default().fill, None);
+        assert_eq!(ShapeStyle::default().stroke, None);
+    }
+
+    #[test]
+    fn un_style_rempli_n_a_pas_de_trait_et_inversement() {
+        let rouge = ColorParam::srgb(1.0, 0.0, 0.0, 1.0);
+        assert_eq!(ShapeStyle::filled(rouge).stroke, None);
+        assert_eq!(ShapeStyle::stroked(Param::fixed(0.1), rouge).fill, None);
     }
 
     #[test]

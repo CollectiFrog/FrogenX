@@ -5,7 +5,7 @@
 //! sérialisation triviale, pas d'emprunts imbriqués à l'exécution.
 
 use crate::param::NodeId;
-use crate::signal::{AudioFeatures, Ctx, Diagnostics, NodeState, Signal};
+use crate::signal::{AudioFeatures, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
 
 /// Erreurs du régime **édition** (§18.1) : câblage, suppression, chargement.
 ///
@@ -63,6 +63,8 @@ pub struct Graph {
     order_dirty: bool,
     diagnostics: Diagnostics,
     audio: AudioFeatures,
+    /// Tempo de la frame, exposé aux modules via `Ctx::bpm` (§3bis.3).
+    bpm: f32,
     /// Compteur de frames, exposé aux modules via `Ctx::frame` (§16.2).
     frame: u64,
 }
@@ -83,6 +85,7 @@ impl Graph {
             order_dirty: true,
             diagnostics: Diagnostics::default(),
             audio: AudioFeatures::default(),
+            bpm: DEFAULT_BPM,
             frame: 0,
         }
     }
@@ -222,6 +225,10 @@ impl Graph {
         self.audio = audio;
     }
 
+    pub fn set_bpm(&mut self, bpm: f32) {
+        self.bpm = bpm;
+    }
+
     /// Remet tout l'état persistant à zéro, sans toucher à la topologie (§16.1).
     pub fn reset_state(&mut self) {
         self.state.iter_mut().for_each(|s| *s = 0.0);
@@ -263,7 +270,7 @@ impl Graph {
             // est précisément pourquoi `Ctx` porte le cache et non `&Graph`.
             let (off, len) = (slot.state_off, slot.state_len);
             let (cache, state) = (&self.cache, &mut self.state);
-            let ctx = Ctx::with_cache(dt, self.frame, &audio, cache);
+            let ctx = Ctx::with_cache(dt, self.frame, &audio, cache).with_bpm(self.bpm);
             let mut st = NodeState::new(&mut state[off..off + len]);
             let v = signal.eval(t, &ctx, &mut st);
 
@@ -346,6 +353,27 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rend le tempo que voit un `Signal`.
+    struct Tempo;
+
+    impl Signal for Tempo {
+        fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
+            ctx.bpm
+        }
+    }
+
+    #[test]
+    fn un_signal_voit_le_tempo_du_graphe() {
+        let mut g = Graph::new();
+        let n = g.add(Box::new(Tempo));
+        g.eval_frame(0.0, 1.0 / 60.0);
+        assert_eq!(g.value(n), DEFAULT_BPM);
+
+        g.set_bpm(174.0);
+        g.eval_frame(0.0, 1.0 / 60.0);
+        assert_eq!(g.value(n), 174.0);
+    }
     use crate::param::Param;
     use crate::signal::Constant;
     use std::cell::Cell;

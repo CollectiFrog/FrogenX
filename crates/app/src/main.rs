@@ -9,8 +9,12 @@
 //! cargo run                  # la fenêtre, jusqu'à sa fermeture
 //! cargo run -- --frames 120  # 120 frames, un bilan, puis quitte
 //! ```
+//!
+//! En attendant l'interface : les touches 1 à 4 déclenchent les colonnes de la
+//! grille, Espace tape le tempo, affiché dans le titre de la fenêtre.
 
 use frogenx_app::{demo, next_deadline, Engine};
+use frogenx_composition::{ColumnId, Command};
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
 use frogenx_output::{OutputSink, Preview, PreviewHandle};
@@ -22,6 +26,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 /// La résolution de sortie, indépendante de la fenêtre (§8).
@@ -52,11 +57,33 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     Ok(options)
 }
 
+/// Ce qu'une touche demande. La touche physique, pas le caractère : la rangée
+/// des chiffres reste la même en AZERTY, où elle produit `&`, `é`, `"`, `'`.
+#[derive(Debug, PartialEq, Eq)]
+enum Action {
+    Column(usize),
+    Tap,
+}
+
+fn key_action(key: KeyCode) -> Option<Action> {
+    match key {
+        KeyCode::Digit1 | KeyCode::Numpad1 => Some(Action::Column(0)),
+        KeyCode::Digit2 | KeyCode::Numpad2 => Some(Action::Column(1)),
+        KeyCode::Digit3 | KeyCode::Numpad3 => Some(Action::Column(2)),
+        KeyCode::Digit4 | KeyCode::Numpad4 => Some(Action::Column(3)),
+        KeyCode::Space => Some(Action::Tap),
+        _ => None,
+    }
+}
+
 /// Ce qui n'existe qu'une fois la fenêtre ouverte.
 struct Running {
     window: Arc<Window>,
     engine: Engine,
     preview: PreviewHandle,
+    columns: Vec<ColumnId>,
+    /// Le tempo affiché dans le titre, pour ne le réécrire que s'il change.
+    shown_bpm: f32,
     started: Instant,
     last: Instant,
     deadline: Instant,
@@ -88,17 +115,22 @@ impl Running {
         let taille = window.inner_size();
         let (preview, handle) = Preview::new(&gpu, surface, taille.width, taille.height)
             .map_err(|e| format!("preview impossible : {e}"))?;
-        let scene = demo::scene(&gpu, OUTPUT_SIZE);
-        let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, vec![scene]);
+        let grille = demo::grid();
+        let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, grille.composition);
         engine
             .add_output(OutputSink::Gpu(Box::new(preview)))
             .map_err(|e| e.to_string())?;
+        engine.push(Command::TriggerColumn {
+            column: grille.columns[0],
+        });
 
         let maintenant = Instant::now();
         Ok(Self {
             window,
             engine,
             preview: handle,
+            columns: grille.columns,
+            shown_bpm: 0.0,
             started: maintenant,
             last: maintenant,
             deadline: maintenant,
@@ -112,12 +144,30 @@ impl Running {
         self.frames += 1;
         self.deadline = next_deadline(self.deadline, now, FRAME_PERIOD);
 
+        let bpm = self.engine.bpm();
+        if bpm != self.shown_bpm {
+            self.shown_bpm = bpm;
+            self.window.set_title(&format!("FrogenX — {bpm:.1} BPM"));
+        }
+
         // Seul `app` a la fenêtre : c'est donc lui qui recrée une surface perdue.
         if self.preview.surface_lost() {
             let instance = &self.engine.gpu().instance;
             if let Ok(surface) = instance.create_surface(Arc::clone(&self.window)) {
                 self.preview.replace_surface(surface);
             }
+        }
+    }
+
+    fn on_key(&mut self, key: KeyCode) {
+        match key_action(key) {
+            Some(Action::Column(i)) => {
+                if let Some(column) = self.columns.get(i).copied() {
+                    self.engine.push(Command::TriggerColumn { column });
+                }
+            }
+            Some(Action::Tap) => self.engine.push(Command::TapTempo),
+            None => {}
         }
     }
 
@@ -159,6 +209,16 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(taille) => {
                 if let Some(running) = &self.running {
                     running.preview.resize(taille.width, taille.height);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let (true, false, PhysicalKey::Code(key), Some(running)) = (
+                    event.state.is_pressed(),
+                    event.repeat,
+                    event.physical_key,
+                    &mut self.running,
+                ) {
+                    running.on_key(key);
                 }
             }
             _ => {}
@@ -235,6 +295,14 @@ mod tests {
         assert!(parse(&["--frames"]).is_err());
         assert!(parse(&["--frames", "abc"]).is_err());
         assert!(parse(&["--frames", "-1"]).is_err());
+    }
+
+    #[test]
+    fn les_chiffres_declenchent_les_colonnes_et_espace_tape() {
+        assert_eq!(key_action(KeyCode::Digit1), Some(Action::Column(0)));
+        assert_eq!(key_action(KeyCode::Numpad4), Some(Action::Column(3)));
+        assert_eq!(key_action(KeyCode::Space), Some(Action::Tap));
+        assert_eq!(key_action(KeyCode::KeyA), None);
     }
 
     #[test]

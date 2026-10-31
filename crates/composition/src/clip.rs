@@ -2,7 +2,7 @@
 //! `docs/ARCHITECTURE.md`.
 
 use frogenx_core::Graph;
-use frogenx_shape::{ShapeGenerator, ShapeOp};
+use frogenx_shape::{ShapeGenerator, ShapeOp, ShapeStyle};
 
 use crate::crossfader::FadeCurve;
 use crate::position::PositionSignal;
@@ -18,6 +18,7 @@ pub enum ClipSource {
     Shape {
         graph: Graph,
         generator: Box<dyn ShapeGenerator>,
+        style: ShapeStyle,
     },
     // `Scene3d(Graph)` et `Video(VideoTrack)` arrivent aux étapes 13 et 12
     // de la feuille de route (§12) — non représentés avant que `scene3d` et
@@ -72,11 +73,32 @@ impl Clip {
     /// Un clip de forme procédurale, sans effet, coupure instantanée.
     pub fn shape(graph: Graph, generator: Box<dyn ShapeGenerator>, transport: Transport) -> Self {
         Self {
-            source: ClipSource::Shape { graph, generator },
+            source: ClipSource::Shape {
+                graph,
+                generator,
+                style: ShapeStyle::default(),
+            },
             effects: Vec::new(),
             transport,
             transition: ClipTransition::Cut,
         }
+    }
+
+    pub fn with_style(mut self, new_style: ShapeStyle) -> Self {
+        let ClipSource::Shape { style, .. } = &mut self.source;
+        *style = new_style;
+        self
+    }
+
+    /// Le graphe qui pilote ce clip.
+    pub fn graph(&self) -> &Graph {
+        let ClipSource::Shape { graph, .. } = &self.source;
+        graph
+    }
+
+    pub fn graph_mut(&mut self) -> &mut Graph {
+        let ClipSource::Shape { graph, .. } = &mut self.source;
+        graph
     }
 
     pub fn with_effect(mut self, op: Box<dyn ShapeOp>) -> Self {
@@ -132,7 +154,9 @@ mod tests {
         )
         .with_effect(Box::new(RadialRepeat::new(3.0)));
 
-        let ClipSource::Shape { graph, generator } = &clip.source;
+        let ClipSource::Shape {
+            graph, generator, ..
+        } = &clip.source;
         let audio = AudioFeatures::default();
         let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
         let mut path = Path::new();
@@ -142,6 +166,23 @@ mod tests {
         }
         assert_eq!(path.contours.len(), 3, "le cercle répété trois fois");
         assert!(path.is_valid());
+    }
+
+    #[test]
+    fn un_clip_ne_dessine_rien_tant_qu_il_n_a_pas_de_style() {
+        let transport = Transport::Timeline {
+            position: dummy_position(),
+            speed: Param::fixed(1.0),
+        };
+        let nu = Clip::shape(Graph::new(), Box::new(Ellipse::circle(0.5)), transport);
+        let ClipSource::Shape { style, .. } = &nu.source;
+        assert_eq!(*style, ShapeStyle::default());
+
+        let rouge = frogenx_shape::ColorParam::srgb(1.0, 0.0, 0.0, 1.0);
+        let style_voulu = ShapeStyle::filled(rouge);
+        let colore = nu.with_style(style_voulu);
+        let ClipSource::Shape { style, .. } = &colore.source;
+        assert_eq!(*style, style_voulu);
     }
 
     #[test]

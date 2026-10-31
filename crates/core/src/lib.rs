@@ -45,7 +45,7 @@ pub mod signal;
 pub use clock::{Clock, ClockMode};
 pub use graph::{Graph, GraphError};
 pub use param::{NodeId, Param};
-pub use signal::{AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal};
+pub use signal::{AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
 
 /// Deux fois pi — la conversion tours → radians (§17 : la phase est en tours).
 pub const TAU: f32 = std::f32::consts::TAU;

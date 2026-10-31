@@ -1,48 +1,9 @@
 //! Le contrat des couches — §6, §22 de `docs/ARCHITECTURE.md`.
 
 use crate::gpu::Gpu;
-use frogenx_core::{Ctx, Graph, Param};
+use frogenx_core::{Ctx, Graph};
+use frogenx_shape::BlendParams;
 use glam::UVec2;
-
-/// Comment une couche se mélange à ce qu'il y a dessous (§22).
-///
-/// L'indice de chaque variante est celui que lit le shader du compositeur :
-/// ne pas réordonner sans mettre à jour `composite.wgsl`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlendMode {
-    Normal = 0,
-    Add = 1,
-    Multiply = 2,
-    Screen = 3,
-    Difference = 4,
-}
-
-impl BlendMode {
-    pub const ALL: [BlendMode; 5] = [
-        BlendMode::Normal,
-        BlendMode::Add,
-        BlendMode::Multiply,
-        BlendMode::Screen,
-        BlendMode::Difference,
-    ];
-}
-
-/// La seule donnée que le compositeur lit pour mélanger une couche (§22).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BlendParams {
-    /// Modulable — c'est par ce `Param` que le `CrossFader` agit (§3bis.4).
-    pub opacity: Param,
-    pub mode: BlendMode,
-}
-
-impl Default for BlendParams {
-    fn default() -> Self {
-        Self {
-            opacity: Param::fixed(1.0),
-            mode: BlendMode::Normal,
-        }
-    }
-}
 
 /// Un objet qui produit une texture — §22.
 ///
@@ -80,23 +41,4 @@ pub struct RenderDiagnostics {
     pub msaa_fallback: bool,
     /// Échecs de tessellation sur la dernière frame (forme ignorée).
     pub tessellation_failures: u32,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn les_indices_des_modes_sont_ceux_du_shader() {
-        // composite.wgsl compare `mode` à ces entiers.
-        let indices: Vec<u32> = BlendMode::ALL.iter().map(|m| *m as u32).collect();
-        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn le_melange_par_defaut_est_normal_et_opaque() {
-        let b = BlendParams::default();
-        assert_eq!(b.mode, BlendMode::Normal);
-        assert_eq!(b.opacity, Param::fixed(1.0));
-    }
 }

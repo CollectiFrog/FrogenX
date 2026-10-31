@@ -38,6 +38,37 @@ impl PositionSignal {
     }
 }
 
+/// Une fréquence calée sur le tempo : `bpm / 60 / beats`, en Hz (§3bis.3).
+///
+/// Branché sur la `freq` d'un `Lfo`, un cycle tous les `beats` battements ;
+/// sur la `speed` d'une [`PositionSignal`], une position en battements.
+/// **Se déclare en dépendance** (`add_with_deps`) : sans quoi le consommateur
+/// peut lire la valeur de la frame précédente.
+pub struct BeatRate {
+    pub beats: Param,
+}
+
+impl BeatRate {
+    pub fn new(beats: f32) -> Self {
+        Self {
+            beats: Param::fixed(beats),
+        }
+    }
+}
+
+impl Signal for BeatRate {
+    fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
+        let beats = self.beats.eval(ctx);
+        // Saturé chez le consommateur (§18.4) : pas de cycle plus court que
+        // rien, et une durée nulle ou non finie arrête simplement le signal.
+        if beats.is_finite() && beats > 0.0 {
+            ctx.bpm / 60.0 / beats
+        } else {
+            0.0
+        }
+    }
+}
+
 impl Signal for PositionSignal {
     // slots[0] = position accumulée
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
@@ -55,6 +86,28 @@ impl Signal for PositionSignal {
 mod tests {
     use super::*;
     use frogenx_core::{AudioFeatures, Graph};
+
+    fn valeur(rate: BeatRate, bpm: f32) -> f32 {
+        let mut g = Graph::new();
+        let n = g.add(Box::new(rate));
+        g.set_bpm(bpm);
+        g.eval_frame(0.0, 1.0 / 60.0);
+        g.value(n)
+    }
+
+    #[test]
+    fn beat_rate_suit_le_tempo() {
+        assert!((valeur(BeatRate::new(1.0), 120.0) - 2.0).abs() < 1e-6);
+        assert!((valeur(BeatRate::new(4.0), 120.0) - 0.5).abs() < 1e-6);
+        assert!((valeur(BeatRate::new(4.0), 60.0) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn beat_rate_sans_duree_utilisable_s_arrete_sans_paniquer() {
+        assert_eq!(valeur(BeatRate::new(0.0), 120.0), 0.0);
+        assert_eq!(valeur(BeatRate::new(-1.0), 120.0), 0.0);
+        assert_eq!(valeur(BeatRate::new(f32::NAN), 120.0), 0.0);
+    }
 
     #[test]
     fn avance_deterministement_a_vitesse_fixe() {

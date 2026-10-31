@@ -8,13 +8,12 @@ description: Produce a video POC from FrogenX — deterministic offline render, 
 Vérifié : 240 frames en 1280×720, deux rendus identiques à l'octet près.
 
 ```bash
-cargo run --release -p frogenx-app --example sequence -- target/sequence 240
+cargo run --release -p frogenx-app --example sequence -- target/sequence 240 0
 ffmpeg -framerate 60 -i target/sequence/frame_%06d.png \
        -c:v libx264 -pix_fmt yuv420p -crf 15 target/sequence.mp4
 ```
 
-La scène vit dans `crates/app/examples/sequence.rs` (un `SceneGroup`, préfigurant un
-clip). `PngSequenceSink` écrit `frame_000000.png`, `frame_000001.png`, etc. ; penser à
+Le dernier argument choisit la colonne de la grille de `crates/app/src/demo.rs`. `PngSequenceSink` écrit `frame_000000.png`, `frame_000001.png`, etc. ; penser à
 `Engine::finish`, sans quoi les dernières frames restent en file.
 
 Vider le dossier avant de rendre moins de frames : `ffmpeg` prendrait aussi celles

@@ -1,6 +1,20 @@
 //! `Transport` et `TempoController` — §3bis.3 de `docs/ARCHITECTURE.md`.
 
-use frogenx_core::{NodeId, Param};
+use crate::position::{BeatRate, PositionSignal};
+use frogenx_core::{Graph, NodeId, Param};
+
+/// Bornes du tempo, appliquées à la lecture (§18.4).
+pub const MIN_BPM: f32 = 20.0;
+pub const MAX_BPM: f32 = 400.0;
+
+/// Un tempo utilisable : saturé, et le défaut s'il n'est pas fini.
+pub fn sanitize_bpm(bpm: f32) -> f32 {
+    if bpm.is_finite() {
+        bpm.clamp(MIN_BPM, MAX_BPM)
+    } else {
+        frogenx_core::DEFAULT_BPM
+    }
+}
 
 /// Comment un `Clip` avance dans le temps.
 ///
@@ -28,6 +42,25 @@ pub enum Transport {
     },
 }
 
+impl Transport {
+    /// Une lecture calée sur le tempo : ajoute à `graph` une position qui
+    /// avance en battements, et rend le transport qui la désigne.
+    pub fn bpm_sync(graph: &mut Graph, duration_beats: Param, play_mode: PlayMode) -> Self {
+        let rate = graph.add(Box::new(BeatRate::new(1.0)));
+        let speed = Param::modulated(0.0, 1.0, rate);
+        let position = graph
+            .add_with_deps(Box::new(PositionSignal::new(speed)), vec![rate])
+            .expect("`rate` vient d'être créé");
+        Self::BpmSync {
+            position,
+            duration_beats,
+            play_mode,
+        }
+    }
+}
+
+/// N'a pas encore d'effet : une forme procédurale n'a pas de fin naturelle
+/// (§3bis.3). Prendra son sens avec les clips vidéo (étape 12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayMode {
     Loop,

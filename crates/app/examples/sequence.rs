@@ -1,15 +1,17 @@
 //! Une séquence PNG déterministe — le premier clip de FrogenX (§8.2, §12).
 //!
-//! La scène de `demo` : son LFO à 0.25 Hz boucle en 4 s, soit 240 frames à
-//! 60 fps — d'où la valeur par défaut, qui raccorde sans saut.
+//! La première colonne de la grille de `demo` : à 120 BPM, ses LFO bouclent en
+//! 8 battements, soit 4 s ou 240 frames à 60 fps — d'où la valeur par défaut,
+//! qui raccorde sans saut.
 //!
 //! ```bash
-//! cargo run --release -p frogenx-app --example sequence -- [dossier] [frames]
+//! cargo run --release -p frogenx-app --example sequence -- [dossier] [frames] [colonne]
 //! ffmpeg -framerate 60 -i target/sequence/frame_%06d.png \
 //!        -c:v libx264 -pix_fmt yuv420p -crf 15 target/sequence.mp4
 //! ```
 
 use frogenx_app::{demo, Engine};
+use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::Gpu;
 use frogenx_output::{OutputSink, PngSequenceSink};
@@ -29,6 +31,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/sequence"));
     let frames = args.next().and_then(|f| f.parse().ok()).unwrap_or(FRAMES);
+    let colonne: usize = args.next().and_then(|c| c.parse().ok()).unwrap_or(0);
 
     let Some(gpu) = Gpu::headless() else {
         eprintln!("Aucun adaptateur GPU disponible : impossible de rendre la séquence.");
@@ -42,8 +45,16 @@ fn main() {
         }
     };
 
-    let groupe = demo::scene(&gpu, SIZE);
-    let mut moteur = Engine::new(gpu, Clock::fixed(FPS), SIZE, vec![groupe]);
+    let grille = demo::grid();
+    let Some(column) = grille.columns.get(colonne).copied() else {
+        eprintln!(
+            "Colonne {colonne} inexistante : la grille en a {}.",
+            grille.columns.len()
+        );
+        std::process::exit(1);
+    };
+    let mut moteur = Engine::new(gpu, Clock::fixed(FPS), SIZE, grille.composition);
+    moteur.push(Command::TriggerColumn { column });
     if let Err(e) = moteur.add_output(OutputSink::Cpu(Box::new(sortie))) {
         eprintln!("{e}");
         std::process::exit(1);

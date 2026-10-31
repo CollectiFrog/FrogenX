@@ -11,6 +11,14 @@
 
 use crate::clip::Clip;
 use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId};
+use crate::transport::{sanitize_bpm, TempoController};
+use frogenx_core::{Graph, Param, DEFAULT_BPM};
+use frogenx_shape::BlendParams;
+
+/// Instants de tap conservés : au-delà, on suit le tempo qui vient de changer.
+const TAP_MEMORY: usize = 8;
+/// Après ce silence, en secondes, une nouvelle série de taps commence.
+const TAP_TIMEOUT: f64 = 2.0;
 
 /// Un jeu complet de layers, interchangeable à chaud (§3bis.1) — un VJ
 /// change de répertoire entier de visuels sans interrompre la diffusion.
@@ -25,6 +33,9 @@ pub struct LayerGroup {
 
 /// Piste verticale : une suite de `Clip` déclenchables, un à la fois actif.
 pub struct Layer {
+    /// Ses `Param` se résolvent dans le graphe de composition : ils survivent
+    /// aux changements de clip (§3bis.1).
+    pub blend: BlendParams,
     clips: Vec<ClipId>,
     active: Option<ClipId>,
 }
@@ -32,6 +43,7 @@ pub struct Layer {
 impl Layer {
     fn new() -> Self {
         Self {
+            blend: BlendParams::default(),
             clips: Vec::new(),
             active: None,
         }
@@ -63,6 +75,11 @@ pub struct Composition {
     layers: Arena<Layer>,
     columns: Arena<Column>,
     clips: Arena<Clip>,
+    /// Module ce qui appartient à la régie, pas à un clip (§3).
+    graph: Graph,
+    pub tempo: TempoController,
+    taps: Vec<f64>,
+    active_deck: Option<DeckId>,
 }
 
 impl Default for Composition {
@@ -79,15 +96,77 @@ impl Composition {
             layers: Arena::new(),
             columns: Arena::new(),
             clips: Arena::new(),
+            graph: Graph::new(),
+            tempo: TempoController::new(DEFAULT_BPM),
+            taps: Vec::new(),
+            active_deck: None,
         }
     }
 
+    /// Le graphe de composition (§3).
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
+    pub fn graph_mut(&mut self) -> &mut Graph {
+        &mut self.graph
+    }
+
+    /// Le tempo de la frame, à lire **après** `eval_frame` du graphe de
+    /// composition. Saturé ici, chez le consommateur (§18.4).
+    pub fn bpm(&self) -> f32 {
+        sanitize_bpm(self.tempo.tempo.get(&self.graph))
+    }
+
+    /// Un tap à l'instant `t` : deux taps suffisent à fixer le tempo.
+    pub fn tap(&mut self, t: f64) {
+        if self.taps.last().is_some_and(|last| t - last > TAP_TIMEOUT) {
+            self.taps.clear();
+        }
+        self.taps.push(t);
+        if self.taps.len() > TAP_MEMORY {
+            self.taps.remove(0);
+        }
+        if let Some(bpm) = TempoController::bpm_from_taps(&self.taps) {
+            self.tempo.tempo = Param::fixed(bpm);
+        }
+    }
+
+    /// Le premier deck ajouté devient le deck actif.
     pub fn add_deck(&mut self, name: impl Into<String>) -> DeckId {
         let (i, g) = self.decks.insert(Deck {
             name: name.into(),
             layer_groups: Vec::new(),
         });
-        DeckId::new(i, g)
+        let id = DeckId::new(i, g);
+        self.active_deck.get_or_insert(id);
+        id
+    }
+
+    pub fn active_deck(&self) -> Option<DeckId> {
+        self.active_deck
+    }
+
+    pub fn set_active_deck(&mut self, id: DeckId) -> bool {
+        let existe = self.deck(id).is_some();
+        if existe {
+            self.active_deck = Some(id);
+        }
+        existe
+    }
+
+    /// Les pistes du deck actif, de bas en haut : l'ordre de composition.
+    /// Écrit dans `out` pour ne pas allouer à chaque frame.
+    pub fn layers_in_order(&self, out: &mut Vec<LayerId>) {
+        out.clear();
+        let Some(deck) = self.active_deck.and_then(|id| self.deck(id)) else {
+            return;
+        };
+        for id in &deck.layer_groups {
+            if let Some(groupe) = self.layer_groups.get(id.index(), id.generation()) {
+                out.extend_from_slice(&groupe.layers);
+            }
+        }
     }
 
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {
@@ -95,6 +174,9 @@ impl Composition {
     }
 
     pub fn remove_deck(&mut self, id: DeckId) -> bool {
+        if self.active_deck == Some(id) {
+            self.active_deck = None;
+        }
         self.decks.remove(id.index(), id.generation()).is_some()
     }
 
@@ -128,6 +210,10 @@ impl Composition {
         self.layers.get(id.index(), id.generation())
     }
 
+    pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
+        self.layers.get_mut(id.index(), id.generation())
+    }
+
     /// Ajoute un `Clip` à `layer`, sans le rendre actif.
     pub fn add_clip(&mut self, layer: LayerId, clip: Clip) -> Option<ClipId> {
         self.layers.get(layer.index(), layer.generation())?;
@@ -145,8 +231,13 @@ impl Composition {
         self.clips.get(id.index(), id.generation())
     }
 
-    /// Rend `clip` actif sur `layer` — le déclenchement d'une cellule de la
-    /// grille (§3bis.1). Refusé si `clip` n'appartient pas à `layer`.
+    pub fn clip_mut(&mut self, id: ClipId) -> Option<&mut Clip> {
+        self.clips.get_mut(id.index(), id.generation())
+    }
+
+    /// Rend `clip` actif sur `layer` et le fait repartir de zéro, même s'il
+    /// l'était déjà — le déclenchement d'une cellule de la grille (§3bis.1,
+    /// §3bis.2). Refusé si `clip` n'appartient pas à `layer`.
     pub fn trigger(&mut self, layer: LayerId, clip: ClipId) -> bool {
         let Some(l) = self.layers.get_mut(layer.index(), layer.generation()) else {
             return false;
@@ -155,6 +246,18 @@ impl Composition {
             return false;
         }
         l.active = Some(clip);
+        if let Some(c) = self.clip_mut(clip) {
+            c.graph_mut().reset_state();
+        }
+        true
+    }
+
+    /// Vide `layer` : elle ne contribue plus à l'image.
+    pub fn clear_layer(&mut self, layer: LayerId) -> bool {
+        let Some(l) = self.layer_mut(layer) else {
+            return false;
+        };
+        l.active = None;
         true
     }
 

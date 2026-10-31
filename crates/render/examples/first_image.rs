@@ -108,10 +108,7 @@ fn main() {
     let mut compositeur = Compositor::new(&gpu, SIZE);
     let mut entrees: Vec<LayerInput> = couches
         .iter_mut()
-        .map(|c| LayerInput {
-            layer: c,
-            graph: &graph,
-        })
+        .map(|c| LayerInput::new(c, &graph))
         .collect();
     compositeur.render(&gpu, clock.t(), &ctx, &mut entrees);
 

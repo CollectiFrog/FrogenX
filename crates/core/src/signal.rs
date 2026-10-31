@@ -21,6 +21,9 @@ pub struct AudioFeatures {
     pub onset: bool,
 }
 
+/// Tempo tant qu'aucune composition n'en a fixé un.
+pub const DEFAULT_BPM: f32 = 120.0;
+
 /// Contexte de frame — construit **une fois par frame**, passé en lecture seule.
 ///
 /// Ne contient jamais l'horloge système : `t` est un paramètre séparé de `eval`,
@@ -36,6 +39,9 @@ pub struct Ctx<'a> {
     pub sample_rate: f64,
     /// Features audio de la frame.
     pub audio: &'a AudioFeatures,
+    /// Tempo de la composition, en BPM (§3bis.3). Source unique : aucun clip
+    /// n'y est câblé un par un.
+    pub bpm: f32,
     /// Cache d'évaluation de la frame, indexé par `NodeId::index()`.
     ///
     /// **Pourquoi le cache et non `&Graph` :** pendant `eval_frame`, le graphe
@@ -56,6 +62,7 @@ impl<'a> Ctx<'a> {
             frame,
             sample_rate: 48_000.0,
             audio,
+            bpm: DEFAULT_BPM,
             cache: &[],
         }
     }
@@ -67,8 +74,14 @@ impl<'a> Ctx<'a> {
             frame,
             sample_rate: 48_000.0,
             audio,
+            bpm: DEFAULT_BPM,
             cache,
         }
+    }
+
+    pub fn with_bpm(mut self, bpm: f32) -> Self {
+        self.bpm = bpm;
+        self
     }
 }
 

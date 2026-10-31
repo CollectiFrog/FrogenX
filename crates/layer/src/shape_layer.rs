@@ -1,13 +1,14 @@
 //! `ShapeLayer` — une forme rasterisée dans sa propre texture, §6, §22 de
 //! `docs/ARCHITECTURE.md`.
 
-use crate::color::ColorParam;
 use crate::gpu::{Gpu, LAYER_FORMAT};
-use crate::render_layer::{BlendParams, RenderDiagnostics, RenderLayer};
+use crate::render_layer::{RenderDiagnostics, RenderLayer};
 use crate::space::normalized_to_ndc;
 use crate::tessellate::{Mesh, Tessellator};
 use frogenx_core::{Ctx, Graph, Param};
-use frogenx_shape::{Path, ShapeGenerator};
+use frogenx_shape::{
+    BlendParams, ColorParam, Path, ShapeGenerator, ShapeOp, ShapeStyle, StrokeStyle,
+};
 use glam::{UVec2, Vec2};
 
 /// Sommet envoyé au GPU : position déjà en NDC, couleur déjà en linéaire
@@ -26,13 +27,6 @@ const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
 /// puissances de deux, jamais ne rétrécissent : une forme qui pulse ne
 /// réalloue pas à chaque frame.
 const BUFFER_INITIAL: u64 = 64 * 1024;
-
-/// Le trait d'une forme : largeur en unités de l'espace normalisé (§17).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StrokeStyle {
-    pub width: Param,
-    pub color: ColorParam,
-}
 
 /// Les textures de rendu d'une couche, recréées par `resize`.
 struct Targets {
@@ -84,13 +78,23 @@ impl Targets {
     }
 }
 
-/// Une forme procédurale rasterisée : générateur, remplissage, trait.
-pub struct ShapeLayer {
-    pub generator: Box<dyn ShapeGenerator>,
-    pub fill: Option<ColorParam>,
-    pub stroke: Option<StrokeStyle>,
-    pub blend: BlendParams,
+/// Le contenu d'une frame : ce qu'il faut dessiner, emprunté à qui le possède.
+///
+/// Un clip de la grille n'a pas de textures : il prête ceci au renderer de sa
+/// piste, le temps d'une frame (§3bis.2).
+pub struct ShapeContent<'a> {
+    pub generator: &'a dyn ShapeGenerator,
+    /// Appliqués dans l'ordre au `Path` produit par le générateur (§16.3 bis).
+    pub effects: &'a [Box<dyn ShapeOp>],
+    pub style: ShapeStyle,
+}
 
+/// Ce qui coûte : textures, pipeline, buffers, mémoire réutilisée (§22.1).
+///
+/// Un renderer ne garde rien de son contenu d'une frame à l'autre : il dessine
+/// n'importe quel clip sans rien réallouer. C'est ce qui permet d'en avoir un
+/// par piste, et non un par clip.
+pub struct ShapeRenderer {
     // Mémoire CPU réutilisée d'une frame à l'autre (§16.3).
     path: Path,
     tess: Tessellator,
@@ -110,17 +114,11 @@ pub struct ShapeLayer {
     diagnostics: RenderDiagnostics,
 }
 
-impl ShapeLayer {
-    /// Une couche sans remplissage ni trait : à compléter par `with_fill` /
-    /// `with_stroke`.
-    pub fn new(gpu: &Gpu, size: UVec2, generator: Box<dyn ShapeGenerator>) -> Self {
+impl ShapeRenderer {
+    pub fn new(gpu: &Gpu, size: UVec2) -> Self {
         let samples = gpu.msaa_samples(LAYER_FORMAT);
         let pipeline = create_pipeline(gpu, samples);
         Self {
-            generator,
-            fill: None,
-            stroke: None,
-            blend: BlendParams::default(),
             path: Path::new(),
             tess: Tessellator::new(),
             fill_mesh: Mesh::new(),
@@ -139,21 +137,6 @@ impl ShapeLayer {
                 tessellation_failures: 0,
             },
         }
-    }
-
-    pub fn with_fill(mut self, color: ColorParam) -> Self {
-        self.fill = Some(color);
-        self
-    }
-
-    pub fn with_stroke(mut self, width: Param, color: ColorParam) -> Self {
-        self.stroke = Some(StrokeStyle { width, color });
-        self
-    }
-
-    pub fn with_blend(mut self, blend: BlendParams) -> Self {
-        self.blend = blend;
-        self
     }
 
     pub fn size(&self) -> UVec2 {
@@ -184,25 +167,22 @@ impl ShapeLayer {
         }));
         self.indices.extend(mesh.indices.iter().map(|i| i + base));
     }
-}
 
-#[derive(Clone, Copy)]
-enum MeshKind {
-    Fill,
-    Stroke,
-}
-
-impl RenderLayer for ShapeLayer {
-    fn prepare(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu) {
+    /// Travail CPU de la frame : voir [`RenderLayer::prepare`].
+    pub fn prepare(&mut self, content: &ShapeContent<'_>, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu) {
         self.diagnostics.tessellation_failures = 0;
-        self.generator.generate(t, ctx, g, &mut self.path);
+        content.generator.generate(t, ctx, g, &mut self.path);
+        for op in content.effects {
+            op.apply(t, ctx, g, &mut self.path);
+        }
 
+        let ShapeStyle { fill, stroke } = content.style;
         self.fill_mesh.clear();
         self.stroke_mesh.clear();
-        if self.fill.is_some() && !self.tess.fill(&self.path, &mut self.fill_mesh) {
+        if fill.is_some() && !self.tess.fill(&self.path, &mut self.fill_mesh) {
             self.diagnostics.tessellation_failures += 1;
         }
-        if let Some(stroke) = self.stroke {
+        if let Some(stroke) = stroke {
             let width = stroke.width.get(g);
             if !self.tess.stroke(&self.path, width, &mut self.stroke_mesh) {
                 self.diagnostics.tessellation_failures += 1;
@@ -213,10 +193,10 @@ impl RenderLayer for ShapeLayer {
         let scale = normalized_to_ndc(self.size);
         self.vertices.clear();
         self.indices.clear();
-        if let Some(fill) = self.fill {
+        if let Some(fill) = fill {
             self.push_mesh(MeshKind::Fill, fill.resolve(g), scale);
         }
-        if let Some(stroke) = self.stroke {
+        if let Some(stroke) = stroke {
             self.push_mesh(MeshKind::Stroke, stroke.color.resolve(g), scale);
         }
 
@@ -242,7 +222,8 @@ impl RenderLayer for ShapeLayer {
         gpu.queue.write_buffer(&self.index_buffer, 0, ibytes);
     }
 
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+    /// Voir [`RenderLayer::encode`].
+    pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
         let (view, resolve_target, store) = match &self.targets.msaa_view {
             // L'image multiéchantillonnée n'est utile que le temps de la
             // résolution : inutile de la conserver.
@@ -279,8 +260,97 @@ impl RenderLayer for ShapeLayer {
         }
     }
 
-    fn output(&self) -> &wgpu::TextureView {
+    pub fn output(&self) -> &wgpu::TextureView {
         &self.targets.output_view
+    }
+
+    /// Voir [`RenderLayer::resize`].
+    pub fn resize(&mut self, size: UVec2, gpu: &Gpu) {
+        if size != self.size {
+            self.size = size;
+            self.targets = Targets::new(gpu, size, self.samples);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MeshKind {
+    Fill,
+    Stroke,
+}
+
+/// Une forme procédurale rasterisée, qui possède son contenu : générateur,
+/// remplissage, trait. Pour un clip de la grille, voir [`ShapeRenderer`].
+pub struct ShapeLayer {
+    pub generator: Box<dyn ShapeGenerator>,
+    pub fill: Option<ColorParam>,
+    pub stroke: Option<StrokeStyle>,
+    pub blend: BlendParams,
+    renderer: ShapeRenderer,
+}
+
+impl ShapeLayer {
+    /// Une couche sans remplissage ni trait : à compléter par `with_fill` /
+    /// `with_stroke`.
+    pub fn new(gpu: &Gpu, size: UVec2, generator: Box<dyn ShapeGenerator>) -> Self {
+        Self {
+            generator,
+            fill: None,
+            stroke: None,
+            blend: BlendParams::default(),
+            renderer: ShapeRenderer::new(gpu, size),
+        }
+    }
+
+    pub fn with_fill(mut self, color: ColorParam) -> Self {
+        self.fill = Some(color);
+        self
+    }
+
+    pub fn with_stroke(mut self, width: Param, color: ColorParam) -> Self {
+        self.stroke = Some(StrokeStyle { width, color });
+        self
+    }
+
+    pub fn with_blend(mut self, blend: BlendParams) -> Self {
+        self.blend = blend;
+        self
+    }
+
+    pub fn size(&self) -> UVec2 {
+        self.renderer.size()
+    }
+
+    /// La texture de sortie — pour une relecture (§8.2), là où `output`
+    /// ne prête qu'une vue.
+    pub fn output_texture(&self) -> &wgpu::Texture {
+        self.renderer.output_texture()
+    }
+
+    pub fn diagnostics(&self) -> RenderDiagnostics {
+        self.renderer.diagnostics()
+    }
+}
+
+impl RenderLayer for ShapeLayer {
+    fn prepare(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu) {
+        let content = ShapeContent {
+            generator: self.generator.as_ref(),
+            effects: &[],
+            style: ShapeStyle {
+                fill: self.fill,
+                stroke: self.stroke,
+            },
+        };
+        self.renderer.prepare(&content, t, ctx, g, gpu);
+    }
+
+    fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.renderer.encode(encoder);
+    }
+
+    fn output(&self) -> &wgpu::TextureView {
+        self.renderer.output()
     }
 
     fn blend(&self) -> BlendParams {
@@ -288,10 +358,7 @@ impl RenderLayer for ShapeLayer {
     }
 
     fn resize(&mut self, size: UVec2, gpu: &Gpu) {
-        if size != self.size {
-            self.size = size;
-            self.targets = Targets::new(gpu, size, self.samples);
-        }
+        self.renderer.resize(size, gpu);
     }
 }
 

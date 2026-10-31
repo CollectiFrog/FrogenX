@@ -4,33 +4,25 @@
 //! du §20.1 de `docs/ARCHITECTURE.md`.
 //!
 //! `Engine` ne connaît pas de fenêtre (§8.3) : c'est ce qui le rend testable
-//! et utilisable pour un rendu offline. Le binaire `winit` l'appellera ; il
-//! lui fournira alors `wall_dt`, et c'est tout ce qu'`Engine` saura du temps
-//! réel (§4).
+//! et utilisable pour un rendu offline. Le binaire `frogenx` lui fournit
+//! `wall_dt`, et c'est tout ce qu'`Engine` sait du temps réel (§4).
 //!
 //! ## Une frame
 //!
 //! ```text
-//! Clock::tick ─▶ eval_frame sur chaque graphe ─▶ Compositor::render ─▶ Outputs::submit
+//! commandes ─▶ Clock::tick ─▶ graphe de composition ─▶ tempo
+//!           ─▶ graphe de chaque clip actif ─▶ Compositor::render ─▶ Outputs::submit
 //! ```
 
 pub mod demo;
 
+use frogenx_composition::{ClipSource, Command, Composition, LayerId};
 use frogenx_core::{AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
-use frogenx_layer::{Gpu, RenderLayer};
+use frogenx_layer::{BlendParams, Gpu, RenderLayer, ShapeContent, ShapeRenderer};
 use frogenx_output::{DropPolicy, OutputError, OutputSink, Outputs, SinkStatus};
 use frogenx_render::{Compositor, LayerInput};
 use glam::UVec2;
 use std::time::{Duration, Instant};
-
-/// Un graphe et les couches qu'il pilote.
-///
-/// **Provisoire** : préfigure un clip (§3, §22.1). L'étape 7 remplacera la
-/// liste de groupes par la grille de `composition`.
-pub struct SceneGroup {
-    pub graph: Graph,
-    pub layers: Vec<Box<dyn RenderLayer>>,
-}
 
 /// La politique de perte suit l'horloge (§8.0) : `Realtime` perd et compte,
 /// `Fixed` attend.
@@ -54,25 +46,75 @@ pub fn next_deadline(deadline: Instant, now: Instant, period: Duration) -> Insta
     }
 }
 
-/// Une frame complète, de l'horloge aux sorties.
+/// Le renderer d'une piste : un seul, quel que soit son nombre de clips
+/// (§3bis.2).
+struct Track {
+    layer: LayerId,
+    renderer: ShapeRenderer,
+}
+
+/// Le clip actif d'une piste, vu par le compositeur le temps d'une frame.
+struct ClipLayer<'a> {
+    renderer: &'a mut ShapeRenderer,
+    content: ShapeContent<'a>,
+    blend: BlendParams,
+}
+
+impl RenderLayer for ClipLayer<'_> {
+    fn prepare(&mut self, t: f64, ctx: &Ctx, g: &Graph, gpu: &Gpu) {
+        self.renderer.prepare(&self.content, t, ctx, g, gpu);
+    }
+
+    fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.renderer.encode(encoder);
+    }
+
+    fn output(&self) -> &wgpu::TextureView {
+        self.renderer.output()
+    }
+
+    fn blend(&self) -> BlendParams {
+        self.blend
+    }
+
+    fn resize(&mut self, size: UVec2, gpu: &Gpu) {
+        self.renderer.resize(size, gpu);
+    }
+}
+
+/// Une frame complète, de la grille aux sorties.
 pub struct Engine {
     gpu: Gpu,
     clock: Clock,
     compositor: Compositor,
     outputs: Outputs,
-    scene: Vec<SceneGroup>,
+    composition: Composition,
+    size: UVec2,
+    tracks: Vec<Track>,
+    /// Les pistes du deck actif, réécrites à chaque frame sans allouer.
+    order: Vec<LayerId>,
+    commands: Vec<Command>,
+    refused_commands: u32,
+    bpm: f32,
 }
 
 impl Engine {
-    pub fn new(gpu: Gpu, clock: Clock, size: UVec2, scene: Vec<SceneGroup>) -> Self {
+    pub fn new(gpu: Gpu, clock: Clock, size: UVec2, composition: Composition) -> Self {
         let compositor = Compositor::new(&gpu, size);
         let outputs = Outputs::new(&gpu, drop_policy(clock.mode()));
+        let bpm = composition.bpm();
         Self {
             gpu,
             clock,
             compositor,
             outputs,
-            scene,
+            composition,
+            size,
+            tracks: Vec::new(),
+            order: Vec::new(),
+            commands: Vec::new(),
+            refused_commands: 0,
+            bpm,
         }
     }
 
@@ -81,32 +123,103 @@ impl Engine {
         self.outputs.add(sink)
     }
 
+    /// Met une commande en file. Elle s'applique au début de la frame suivante,
+    /// jamais pendant l'évaluation (§23).
+    pub fn push(&mut self, command: Command) {
+        self.commands.push(command);
+    }
+
     /// Une frame. `wall_dt` n'a d'effet qu'en `Realtime` (§4).
     pub fn frame(&mut self, wall_dt: f64) {
+        let instant = self.clock.t();
+        for command in self.commands.drain(..) {
+            if !self.composition.apply(command, instant) {
+                self.refused_commands = self.refused_commands.saturating_add(1);
+            }
+        }
+
         self.clock.tick(wall_dt);
         let (t, dt) = (self.clock.t(), self.clock.dt());
 
-        // Le graphe est entièrement évalué avant que la moindre couche ne
-        // lise un `Param` (§20.1).
-        for group in &mut self.scene {
-            group.graph.eval_frame(t, dt);
-        }
-
-        let audio = AudioFeatures::default();
-        let ctx = Ctx::new(dt, self.clock.frame(), &audio);
-        let mut inputs: Vec<LayerInput> = Vec::new();
-        for group in &mut self.scene {
-            let graph = &group.graph;
-            for layer in &mut group.layers {
-                inputs.push(LayerInput {
-                    layer: layer.as_mut(),
-                    graph,
-                });
+        // Les graphes sont entièrement évalués avant que la moindre couche ne
+        // lise un `Param` (§20.1). Celui de la composition d'abord : il donne
+        // le tempo que voient les clips.
+        self.composition.graph_mut().eval_frame(t, dt);
+        self.bpm = self.composition.bpm();
+        self.composition.layers_in_order(&mut self.order);
+        for layer in &self.order {
+            let actif = self.composition.layer(*layer).and_then(|l| l.active_clip());
+            if let Some(clip) = actif.and_then(|id| self.composition.clip_mut(id)) {
+                let graph = clip.graph_mut();
+                graph.set_bpm(self.bpm);
+                graph.eval_frame(t, dt);
             }
         }
+        self.sync_tracks();
+
+        let audio = AudioFeatures::default();
+        let ctx = Ctx::new(dt, self.clock.frame(), &audio).with_bpm(self.bpm);
+        let composition = &self.composition;
+        let mut couches: Vec<(ClipLayer, &Graph)> = Vec::with_capacity(self.tracks.len());
+        for track in &mut self.tracks {
+            let Some(piste) = composition.layer(track.layer) else {
+                continue;
+            };
+            let Some(clip) = piste.active_clip().and_then(|id| composition.clip(id)) else {
+                continue;
+            };
+            let ClipSource::Shape {
+                graph,
+                generator,
+                style,
+            } = &clip.source;
+            let content = ShapeContent {
+                generator: generator.as_ref(),
+                effects: &clip.effects,
+                style: *style,
+            };
+            let couche = ClipLayer {
+                renderer: &mut track.renderer,
+                content,
+                blend: piste.blend,
+            };
+            couches.push((couche, graph));
+        }
+        let mut inputs: Vec<LayerInput> = couches
+            .iter_mut()
+            .map(|(layer, graph)| LayerInput {
+                layer,
+                graph,
+                blend_graph: composition.graph(),
+            })
+            .collect();
         self.compositor.render(&self.gpu, t, &ctx, &mut inputs);
+        drop(inputs);
+        drop(couches);
+
         self.outputs
             .submit(&self.gpu, self.compositor.output_texture(), t);
+    }
+
+    /// Un renderer par piste du deck actif, dans le même ordre. Un changement
+    /// de deck réutilise ceux qui existent déjà.
+    fn sync_tracks(&mut self) {
+        for (i, layer) in self.order.iter().enumerate() {
+            if self.tracks.get(i).is_some_and(|t| t.layer == *layer) {
+                continue;
+            }
+            match self.tracks.iter().position(|t| t.layer == *layer) {
+                Some(j) => self.tracks.swap(i, j),
+                None => self.tracks.insert(
+                    i,
+                    Track {
+                        layer: *layer,
+                        renderer: ShapeRenderer::new(&self.gpu, self.size),
+                    },
+                ),
+            }
+        }
+        self.tracks.truncate(self.order.len());
     }
 
     /// Attend que les sorties aient fini : à la fin d'un rendu offline, toutes
@@ -123,9 +236,31 @@ impl Engine {
         &self.clock
     }
 
-    /// Les diagnostics de chaque graphe, pour la dernière frame (§18.1).
+    pub fn composition(&self) -> &Composition {
+        &self.composition
+    }
+
+    /// Le tempo de la dernière frame.
+    pub fn bpm(&self) -> f32 {
+        self.bpm
+    }
+
+    /// Commandes refusées depuis le début : un identifiant périmé ne panique
+    /// pas, mais il se voit (§18.1).
+    pub fn refused_commands(&self) -> u32 {
+        self.refused_commands
+    }
+
+    /// Les diagnostics de la dernière frame : le graphe de composition, puis
+    /// chaque clip actif (§18.1).
     pub fn diagnostics(&self) -> Vec<Diagnostics> {
-        self.scene.iter().map(|g| g.graph.diagnostics()).collect()
+        let actifs = self.order.iter().filter_map(|layer| {
+            let id = self.composition.layer(*layer)?.active_clip()?;
+            Some(self.composition.clip(id)?.graph().diagnostics())
+        });
+        std::iter::once(self.composition.graph().diagnostics())
+            .chain(actifs)
+            .collect()
     }
 
     pub fn output_statuses(&self) -> Vec<SinkStatus> {
