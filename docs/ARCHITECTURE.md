@@ -689,8 +689,10 @@ Le thread audio **ne fait que copier des échantillons**. L'analyse tourne à c�
 
 ### L'élégance du système
 
+Le mécanisme concret, écrit à l'étape 8, est au §7.1.
+
 ```rust
-struct AudioFeature { feature: FeatureKind, smoothing: f32 }
+struct AudioFeature { feature: FeatureKind, attack: Param, release: Param }
 impl Signal for AudioFeature { /* lit ctx.audio */ }
 ```
 
@@ -710,7 +712,7 @@ une synchro parfaite.
 **Décidé pour la première version :** l'audio capturé sert aussi à **calculer le BPM**,
 qui alimente le `TempoController` (§3bis.3) en plus du tap tempo, et à **déclencher des
 effets vidéo** à partir des transitoires. Le modèle de déclenchement est tranché : c'est
-le **trig** (§3bis.6). L'algorithme de détection du BPM le sera avec la fin de l'étape 8.
+le **trig** (§3bis.6). Le BPM est détaillé au §7.1.
 
 **Le spectre.** `AudioFeatures::spectrum` : 128 bandes de 20 Hz à 20 kHz, chacune dans
 `[0, 1]`. Le type vit dans `core` (§16.2), de taille fixe : il voyage dans le triple buffer
@@ -763,6 +765,54 @@ silence, pas le dernier spectre : figé, il tiendrait une zone ouverte indéfini
 
 **Seul `spectrum` est calculé.** `rms`, `bands`, `centroid` et `onset` restent à zéro
 jusqu'à la fin de l'étape 8.
+
+### 7.1 Les features et le BPM (étape 8)
+
+> Tranché pour l'étape 8. Raisons au §13.
+
+**Une analyse à part, fixe.** `FeatureAnalyzer` a sa propre FFT, sans aucun lien avec
+`AudioAnalysis` : le réglage du spectre sert à lire et à poser des zones, et le changer ne
+doit déplacer ni le tempo ni une modulation.
+
+| Champ de `AudioFeatures` | Mesure | Plage |
+|---|---|---|
+| `rms` | niveau global, de -60 à 0 dB | `[0, 1]` |
+| `bands` | graves (< 250 Hz), médiums, aigus (> 4 kHz), en dB | `[0, 1]` |
+| `centroid` | la brillance : centre du spectre sur l'axe logarithmique | `[0, 1]` |
+| `onset` | `1` au transitoire, puis retombe en 120 ms | `[0, 1]` |
+| `chroma` | l'énergie de chaque note, do en tête, la plus forte à `1` | `[0, 1]` |
+| `bpm`, `bpm_confidence` | le tempo détecté (`0` : aucun), et sa fiabilité | BPM, `[0, 1]` |
+
+**`onset` est une valeur qui retombe, pas un booléen.** Le thread d'analyse tourne plus vite
+que les frames : un drapeau levé entre deux lectures du triple buffer serait perdu. Une
+impulsion qui retombe survit à une lecture manquée, et reste une feature comme les autres.
+
+**Une feature est un `Signal` : `AudioFeature`, dans `osc`.** Elle lit `ctx.audio` et lisse
+par une attaque et un relâchement, deux `Param`. Son état tient dans `slots[0]`.
+
+**Moduler sans éditeur de nœuds.** Chaque potentiomètre d'un clip propose une source audio
+dans son menu de clic droit. `Command::SetAudioModulation` ajoute un nœud `AudioFeature` au
+graphe du clip et y branche le `Param`, avec une amplitude de départ d'une demi-plage ;
+`None` le rend fixe à sa base. Une modulation existante, un LFO par exemple, est remplacée.
+Le nœud se sauvegarde comme les autres (§19.1).
+
+**Le BPM.** `TempoTracker` garde 12 s de la force des transitoires, et réestime chaque
+seconde : une autocorrélation, puis un peigne qui additionne ses valeurs à une, deux, trois
+et quatre périodes, sur une grille de 70 à 180 BPM au demi-BPM. Le peigne donne la précision
+qu'un seul retard n'a pas : à 86 analyses par seconde, un retard vaut 3 BPM autour de 120. Un
+tempo double ou moitié se distingue mal : une courbe en cloche autour de 120 BPM tranche, et
+la détection peut donc rendre 87 pour un morceau à 174. Elle attend 4 s de son, n'accepte un
+saut de tempo que confirmé deux fois de suite, et rend `0` sans signal rythmique.
+
+**Suivre le tempo.** `Composition::tempo_follow`, désactivé par défaut. Actif, chaque frame
+écrit le BPM détecté dans le `Param` du tempo, si sa fiabilité dépasse 0,3 : le tempo garde
+sa source unique (§3bis.3), et le dernier reste en place dans un silence. Taper ou fixer le
+tempo coupe le suivi : un geste explicite gagne. Ce mouvement n'est pas une modification du
+fichier (§23.8), seul le choix de suivre en est une. Le tempo se cale, pas la phase : le
+battement détecté ne recale pas la position des clips.
+
+**Déterminisme.** Rien de tout cela ne lit l'horloge : un rendu offline écrit ses propres
+`AudioFeatures`, BPM compris, et obtient la même image (§20.3).
 
 ---
 
@@ -1502,6 +1552,11 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
 | **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **Les features ont leur propre analyse, fixe** (§7.1) | régler le spectre pour poser une zone ne doit déplacer ni le tempo ni une modulation |
+| **`onset` est une impulsion qui retombe, pas un booléen** (§7.1) | l'analyse tourne plus vite que les frames : un drapeau serait perdu entre deux lectures du triple buffer |
+| **BPM par autocorrélation et peigne, avec une préférence autour de 120** (§7.1) | sans dépendance, et testé sur des boucles de synthèse ; un seul retard ne donne que 3 BPM de précision ; un tempo double ou moitié reste ambigu sans préférence |
+| **Suivre le tempo est un choix, désactivé par défaut** (§7.1) | une détection fausse ne doit pas déformer un set ; taper ou fixer le tempo reprend la main |
+| **Une source audio se choisit sur chaque potentiomètre, sans éditeur de nœuds** (§7.1) | sans cela, la première version n'offrirait la modulation audio qu'en code |
 | **Le tempo est dans `Ctx`, d'une source unique** (§3bis.3, §16.2) | tap et BPM audio écrivent au même endroit, tous les clips lisent au même endroit ; câbler chaque clip serait à refaire pour tout nouveau clip |
 | **Un graphe de composition, en plus du graphe de chaque clip** (§3) | l'opacité d'une piste et le tempo survivent aux changements de clip ; les mettre dans un clip les ferait sauter |
 | **`ui` ne connaît ni wgpu ni `winit`** : elle lit la grille et rend des `Command` (§10, §23.5) | testable par clics simulés, sans GPU ni écran ; `egui-wgpu` et `egui-winit` restent dans `app` |
@@ -2099,8 +2154,8 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
 }
 ```
 
-Le format réel commence à la version 1 : aucune migration n'existe encore. Le croquis
-initial décrivait une v2 et une migration depuis une v1 qui n'a jamais été écrite.
+Le format réel commence à la version 1. La version 2 ajoute `tempo_follow` (§7.1) : un
+fichier v1 se migre en le mettant à `false`, ce qu'il faisait déjà sans le dire.
 
 Migrations **en chaîne**, une fonction par saut de version. Un patch v1 traverse
 `1→2→3` — on n'écrit jamais de migration directe `1→3`, qui doublerait le travail à
