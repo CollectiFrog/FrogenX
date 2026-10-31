@@ -1,6 +1,6 @@
 //! Une séquence PNG déterministe — le premier clip de FrogenX (§8.2, §12).
 //!
-//! La première colonne de la grille de `demo` : à 120 BPM, ses LFO bouclent en
+//! La première colonne de la grille de départ : à 120 BPM, ses LFO bouclent en
 //! 8 battements, soit 4 s ou 240 frames à 60 fps — d'où la valeur par défaut,
 //! qui raccorde sans saut.
 //!
@@ -10,7 +10,7 @@
 //!        -c:v libx264 -pix_fmt yuv420p -crf 15 target/sequence.mp4
 //! ```
 
-use frogenx_app::{demo, Engine};
+use frogenx_app::Engine;
 use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::Gpu;
@@ -45,15 +45,15 @@ fn main() {
         }
     };
 
-    let grille = demo::grid();
-    let Some(column) = grille.columns.get(colonne).copied() else {
+    let grille = frogenx_library::starter();
+    let Some(column) = grille.columns().get(colonne).copied() else {
         eprintln!(
             "Colonne {colonne} inexistante : la grille en a {}.",
-            grille.columns.len()
+            grille.columns().len()
         );
         std::process::exit(1);
     };
-    let mut moteur = Engine::new(gpu, Clock::fixed(FPS), SIZE, grille.composition);
+    let mut moteur = Engine::new(gpu, Clock::fixed(FPS), SIZE, grille);
     moteur.push(Command::TriggerColumn { column });
     if let Err(e) = moteur.add_output(OutputSink::Cpu(Box::new(sortie))) {
         eprintln!("{e}");

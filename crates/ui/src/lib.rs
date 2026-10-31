@@ -3,16 +3,34 @@
 //! L'interface : une fonction de l'état — §23.5 de `docs/ARCHITECTURE.md`.
 //!
 //! [`draw`] lit la grille, dessine avec egui et remplit une liste de `Command`
-//! qu'`Engine` applique entre deux frames (§23). Elle ne mute rien d'autre que
-//! son [`UiState`].
+//! qu'`Engine` applique entre deux frames (§23), et une liste de [`Placement`]
+//! pour les clips glissés depuis la bibliothèque (§23.6). Elle ne mute rien
+//! d'autre que son [`UiState`].
 //!
 //! **Ne connaît ni wgpu ni `winit` :** `egui-wgpu` et `egui-winit` restent dans
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
 
 pub mod theme;
 
-use egui::{Button, Color32, RichText, Slider, Ui};
-use frogenx_composition::{ClipId, ClipParam, Command, Composition, LayerId};
+use egui::{Button, Color32, Label, Response, RichText, Sense, Slider, SliderClamping, Stroke, Ui};
+use frogenx_composition::{
+    ClipId, ClipParam, ColumnId, Command, Composition, LayerId, MAX_CLIP_SPEED,
+};
+use frogenx_library::{presets, Family, PresetId};
+
+/// Ce qu'affiche une case vide, pour la retrouver et la viser.
+const EMPTY_CELL: &str = "·";
+/// La taille d'une case de la grille.
+const CELL_SIZE: egui::Vec2 = egui::vec2(110.0, 34.0);
+
+/// Un clip du catalogue à poser dans une case. `Command` ne peut pas porter de
+/// `Clip` : `app` le construit entre deux frames (§23.6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    pub layer: LayerId,
+    pub column: ColumnId,
+    pub preset: PresetId,
+}
 
 /// Ce que l'interface se rappelle d'une frame à l'autre.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,6 +40,7 @@ pub struct UiState {
     pub show_grid: bool,
     pub show_monitor: bool,
     pub show_settings: bool,
+    pub show_library: bool,
 }
 
 impl Default for UiState {
@@ -31,6 +50,7 @@ impl Default for UiState {
             show_grid: true,
             show_monitor: true,
             show_settings: true,
+            show_library: true,
         }
     }
 }
@@ -52,16 +72,30 @@ pub struct FrameView<'a> {
     pub monitor: Option<Monitor>,
 }
 
-/// Dessine toute l'interface et remplit `commands`.
-pub fn draw(ui: &mut Ui, state: &mut UiState, view: &FrameView<'_>, commands: &mut Vec<Command>) {
+/// Dessine toute l'interface et remplit `commands` et `placements`.
+pub fn draw(
+    ui: &mut Ui,
+    state: &mut UiState,
+    view: &FrameView<'_>,
+    commands: &mut Vec<Command>,
+    placements: &mut Vec<Placement>,
+) {
     egui::Panel::top("menu").show(ui, |ui| menu(ui, state));
     if state.show_grid {
         egui::Panel::top("grille")
             .resizable(true)
-            .default_size(190.0)
-            .show(ui, |ui| grid(ui, state, view.composition, commands));
+            .default_size(240.0)
+            .show(ui, |ui| {
+                grid(ui, state, view.composition, commands, placements)
+            });
     }
     egui::Panel::top("barre").show(ui, |ui| toolbar(ui, view, commands));
+    if state.show_library {
+        egui::Panel::right("bibliotheque")
+            .resizable(true)
+            .default_size(170.0)
+            .show(ui, library);
+    }
     if state.show_monitor {
         egui::Panel::left("monitor")
             .resizable(true)
@@ -79,12 +113,13 @@ fn menu(ui: &mut Ui, state: &mut UiState) {
             ui.checkbox(&mut state.show_grid, "Grille");
             ui.checkbox(&mut state.show_monitor, "Monitor");
             ui.checkbox(&mut state.show_settings, "Réglages");
+            ui.checkbox(&mut state.show_library, "Bibliothèque");
         });
     });
 }
 
 /// Une cellule : l'accent n'y désigne que le clip actif (§23.1).
-fn cell(ui: &mut Ui, name: &str, active: bool) -> bool {
+fn cell(ui: &mut Ui, name: &str, active: bool) -> Response {
     let (fond, texte) = if active {
         (theme::ACCENT, theme::ON_ACCENT)
     } else {
@@ -92,21 +127,66 @@ fn cell(ui: &mut Ui, name: &str, active: bool) -> bool {
     };
     let bouton = Button::new(RichText::new(name).color(texte))
         .fill(fond)
-        .min_size(egui::vec2(110.0, 34.0));
-    ui.add(bouton).clicked()
+        .min_size(CELL_SIZE);
+    ui.add(bouton)
 }
 
-/// Les pistes, la plus haute en haut, comme dans la pile de composition.
-fn grid(ui: &mut Ui, state: &mut UiState, c: &Composition, commands: &mut Vec<Command>) {
+/// Une case vide : elle ne déclenche rien, elle reçoit.
+fn empty_cell(ui: &mut Ui) -> Response {
+    let bouton = Button::new(RichText::new(EMPTY_CELL).color(theme::TEXT_DIM))
+        .fill(theme::HEADER)
+        .min_size(CELL_SIZE);
+    ui.add(bouton)
+}
+
+/// Une case reçoit un clip glissé depuis la bibliothèque : le contour blanc
+/// indique où il tombera, l'accent restant réservé au clip actif.
+fn drop_target(ui: &Ui, reponse: &Response) -> Option<PresetId> {
+    if reponse.dnd_hover_payload::<PresetId>().is_some() {
+        ui.painter().rect_stroke(
+            reponse.rect,
+            2.0,
+            Stroke::new(2.0, theme::TEXT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    reponse.dnd_release_payload::<PresetId>().map(|id| *id)
+}
+
+/// Retirer passe par un menu : sur scène, un clic raté ne supprime rien (§23.6).
+fn remove_menu(reponse: &Response, libelle: &str, command: Command, commands: &mut Vec<Command>) {
+    reponse.context_menu(|ui| {
+        if ui.button(libelle).clicked() {
+            commands.push(command);
+            ui.close();
+        }
+    });
+}
+
+/// Les pistes, la plus haute en haut, comme dans la pile de composition. Une
+/// case par colonne : un clip reste sous son en-tête (§3bis.1).
+fn grid(
+    ui: &mut Ui,
+    state: &mut UiState,
+    c: &Composition,
+    commands: &mut Vec<Command>,
+    placements: &mut Vec<Placement>,
+) {
     let mut pistes = Vec::new();
     c.layers_in_order(&mut pistes);
     egui::ScrollArea::both().show(ui, |ui| {
         egui::Grid::new("grille_clips").show(ui, |ui| {
             ui.label("");
             for (i, column) in c.columns().iter().enumerate() {
-                if ui.button(format!("Colonne {}", i + 1)).clicked() {
+                let entete = ui.button(format!("Colonne {}", i + 1));
+                if entete.clicked() {
                     commands.push(Command::TriggerColumn { column: *column });
                 }
+                let retire = Command::RemoveColumn { column: *column };
+                remove_menu(&entete, "Retirer la colonne", retire, commands);
+            }
+            if ui.button("+ colonne").clicked() {
+                commands.push(Command::AddColumn);
             }
             ui.end_row();
 
@@ -114,20 +194,64 @@ fn grid(ui: &mut Ui, state: &mut UiState, c: &Composition, commands: &mut Vec<Co
                 let Some(piste) = c.layer(*layer) else {
                     continue;
                 };
-                ui.label(RichText::new(&piste.name).color(theme::TEXT_DIM));
-                for id in piste.clips() {
-                    let Some(clip) = c.clip(*id) else { continue };
-                    if cell(ui, &clip.name, piste.active_clip() == Some(*id)) {
-                        commands.push(Command::TriggerClip {
+                let nom = Label::new(RichText::new(&piste.name).color(theme::TEXT_DIM))
+                    .selectable(false)
+                    .sense(Sense::click());
+                let retire = Command::RemoveLayer { layer: *layer };
+                remove_menu(&ui.add(nom), "Retirer la piste", retire, commands);
+
+                for (i, column) in c.columns().iter().enumerate() {
+                    let clip = piste.cell(i).and_then(|id| Some((id, c.clip(id)?)));
+                    let reponse = match clip {
+                        Some((id, clip)) => {
+                            let reponse = cell(ui, &clip.name, piste.active_clip() == Some(id));
+                            if reponse.clicked() {
+                                commands.push(Command::TriggerClip {
+                                    layer: *layer,
+                                    clip: id,
+                                });
+                                state.selected = Some((*layer, id));
+                            }
+                            let retire = Command::RemoveClip {
+                                layer: *layer,
+                                column: *column,
+                            };
+                            remove_menu(&reponse, "Retirer le clip", retire, commands);
+                            reponse
+                        }
+                        None => empty_cell(ui),
+                    };
+                    if let Some(preset) = drop_target(ui, &reponse) {
+                        placements.push(Placement {
                             layer: *layer,
-                            clip: *id,
+                            column: *column,
+                            preset,
                         });
-                        state.selected = Some((*layer, *id));
                     }
                 }
                 ui.end_row();
             }
+            if ui.button("+ piste").clicked() {
+                commands.push(Command::AddLayer);
+            }
+            ui.end_row();
         });
+    });
+}
+
+/// Le catalogue, par famille. Une entrée se glisse sur une case.
+fn library(ui: &mut Ui) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.label(RichText::new("Glisse un clip sur une case.").color(theme::TEXT_DIM));
+        for family in Family::ALL {
+            ui.add_space(6.0);
+            ui.label(RichText::new(family.label()).color(section_color()));
+            for (id, preset) in presets().filter(|(_, p)| p.family == family) {
+                ui.dnd_drag_source(ui.scope_id().with(preset.name), id, |ui| {
+                    ui.add(Label::new(preset.name).selectable(false));
+                });
+            }
+        }
     });
 }
 
@@ -181,14 +305,39 @@ fn param_slider(ui: &mut Ui, clip: ClipId, param: &ClipParam, commands: &mut Vec
         // Modulé : le curseur règle la base, la modulation continue.
         nom = nom.color(theme::ACCENT);
     }
-    let curseur = Slider::new(&mut value, desc.min..=desc.max).text(nom);
-    if ui.add(curseur).changed() {
+    if ui
+        .add(slider(&mut value, desc.min, desc.max).text(nom))
+        .changed()
+    {
         commands.push(Command::SetParam {
             clip,
             slot: param.slot,
             value,
         });
     }
+
+    // Le mouvement d'un clip se règle ici, tant que son graphe n'est pas exposé.
+    if let Some(mut value) = desc.value.depth() {
+        let etendue = desc.max - desc.min;
+        let nom = format!("{} : modulation", desc.name);
+        if ui
+            .add(slider(&mut value, -etendue, etendue).text(nom))
+            .changed()
+        {
+            commands.push(Command::SetDepth {
+                clip,
+                slot: param.slot,
+                value,
+            });
+        }
+    }
+}
+
+/// Un curseur qui ne réécrit jamais une valeur hors de sa plage : la plage borne
+/// le geste, pas le paramètre (§16.3 ter). Sans cela, afficher un réglage
+/// émettrait une commande à chaque frame.
+fn slider(value: &mut f32, min: f32, max: f32) -> Slider<'_> {
+    Slider::new(value, min..=max).clamping(SliderClamping::Never)
 }
 
 fn settings(ui: &mut Ui, state: &UiState, view: &FrameView<'_>, commands: &mut Vec<Command>) {
@@ -203,6 +352,15 @@ fn settings(ui: &mut Ui, state: &UiState, view: &FrameView<'_>, commands: &mut V
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         ui.heading(&clip.name);
+        let mut vitesse = clip.speed.base();
+        let curseur = slider(&mut vitesse, 0.0, MAX_CLIP_SPEED).text("vitesse");
+        if ui.add(curseur).changed() {
+            commands.push(Command::SetClipSpeed {
+                clip: id,
+                value: vitesse,
+            });
+        }
+
         for groupe in clip.params() {
             ui.add_space(6.0);
             ui.label(RichText::new(&groupe.label).color(section_color()));
@@ -216,7 +374,7 @@ fn settings(ui: &mut Ui, state: &UiState, view: &FrameView<'_>, commands: &mut V
         ui.label(RichText::new(&piste.name).color(section_color()));
         let mut opacity = piste.blend.opacity;
         let mut valeur = opacity.base();
-        let curseur = Slider::new(&mut valeur, 0.0..=1.0).text("opacité de la piste");
+        let curseur = slider(&mut valeur, 0.0, 1.0).text("opacité de la piste");
         if ui.add(curseur).changed() {
             opacity.set_base(valeur);
             commands.push(Command::SetLayerOpacity { layer, opacity });
@@ -233,17 +391,19 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
     use egui_kittest::Harness;
-    use frogenx_composition::{Clip, ColumnId, ParamSlot, PlayMode, Transport};
-    use frogenx_core::{Graph, Param};
+    use frogenx_composition::{Clip, ParamSlot, PlayMode, Transport};
+    use frogenx_core::{Constant, Graph, Param};
+    use frogenx_library::find;
     use frogenx_shape::{ColorParam, Ellipse, ShapeStyle};
 
     struct Grille {
         composition: Composition,
         piste: LayerId,
         clips: [ClipId; 2],
-        colonne: ColumnId,
+        colonnes: [ColumnId; 3],
     }
 
+    /// Une piste : Alpha, Beta, puis une case vide.
     fn grille() -> Grille {
         let mut c = Composition::new();
         let deck = c.add_deck("test");
@@ -258,19 +418,20 @@ mod tests {
             c.add_clip(piste, clip).unwrap()
         };
         let (a, b) = (clip(&mut c, "Alpha"), clip(&mut c, "Beta"));
-        let colonne = c.add_column();
-        c.set_column_slot(colonne, 0, Some(a));
+        c.add_column();
+        let colonnes = [c.columns()[0], c.columns()[1], c.columns()[2]];
         Grille {
             composition: c,
             piste,
             clips: [a, b],
-            colonne,
+            colonnes,
         }
     }
 
     struct Etat {
         ui: UiState,
         commands: Vec<Command>,
+        placements: Vec<Placement>,
     }
 
     /// Une interface sans écran, qui garde les commandes émises.
@@ -278,6 +439,7 @@ mod tests {
         let etat = Etat {
             ui: UiState::default(),
             commands: Vec::new(),
+            placements: Vec::new(),
         };
         Harness::builder()
             .with_size(egui::vec2(1400.0, 900.0))
@@ -290,7 +452,13 @@ mod tests {
                         outputs: "Monitor : actif",
                         monitor: None,
                     };
-                    draw(ui, &mut etat.ui, &view, &mut etat.commands);
+                    draw(
+                        ui,
+                        &mut etat.ui,
+                        &view,
+                        &mut etat.commands,
+                        &mut etat.placements,
+                    );
                 },
                 etat,
             )
@@ -327,7 +495,9 @@ mod tests {
         h.run();
         assert_eq!(
             h.state().commands,
-            vec![Command::TriggerColumn { column: g.colonne }]
+            vec![Command::TriggerColumn {
+                column: g.colonnes[0]
+            }]
         );
         assert_eq!(
             h.state().ui.selected,
@@ -416,6 +586,250 @@ mod tests {
         h.state_mut().ui.selected = Some((g.piste, intrus));
         h.run();
         assert!(h.query_by_label("Clique un clip pour le régler.").is_some());
+    }
+
+    /// Le centre d'un élément de l'interface.
+    fn centre(h: &Harness<'_, Etat>, nom: &str) -> egui::Pos2 {
+        h.get_by_label(nom).rect().center()
+    }
+
+    /// Glisse depuis `depuis` jusqu'à `vers`, en trois gestes distincts.
+    fn glisse(h: &mut Harness<'_, Etat>, depuis: egui::Pos2, vers: egui::Pos2) {
+        h.drag_at(depuis);
+        h.run();
+        h.hover_at(depuis + egui::vec2(4.0, 4.0));
+        h.run();
+        h.hover_at(vers);
+        h.run();
+        h.drop_at(vers);
+        h.run();
+    }
+
+    #[test]
+    fn une_cellule_reste_sous_l_en_tete_de_sa_colonne() {
+        let g = grille();
+        let mut c = g.composition;
+        // Une case vide avant le clip : c'était le défaut d'avant les cases.
+        let troisieme = c.columns()[2];
+        c.place_clip(
+            g.piste,
+            troisieme,
+            Clip::shape(
+                Graph::new(),
+                Box::new(Ellipse::circle(0.5)),
+                Transport::bpm_sync(&mut Graph::new(), Param::fixed(4.0), PlayMode::Loop),
+            )
+            .with_name("Gamma"),
+        )
+        .unwrap();
+        c.remove_clip(g.piste, c.columns()[1]);
+
+        let h = harness(&c);
+        let (entete, clip) = (centre(&h, "Colonne 3"), centre(&h, "Gamma"));
+        assert!((entete.x - clip.x).abs() < 30.0, "{entete:?} / {clip:?}");
+        assert!(h.query_by_label("Beta").is_none());
+    }
+
+    #[test]
+    fn un_clic_sur_une_case_vide_ne_fait_rien() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label(EMPTY_CELL).click();
+        h.run();
+        assert!(h.state().commands.is_empty());
+        assert_eq!(h.state().ui.selected, None);
+    }
+
+    #[test]
+    fn glisser_un_clip_sur_une_case_vide_le_pose() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        let (depuis, vers) = (centre(&h, "Aurore"), centre(&h, EMPTY_CELL));
+        glisse(&mut h, depuis, vers);
+        assert_eq!(
+            h.state().placements,
+            vec![Placement {
+                layer: g.piste,
+                column: g.colonnes[2],
+                preset: find("Aurore").unwrap()
+            }]
+        );
+        assert!(h.state().commands.is_empty(), "rien n'est déclenché");
+    }
+
+    #[test]
+    fn glisser_un_clip_sur_une_case_occupee_le_remplace() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        let (depuis, vers) = (centre(&h, "Mandala"), centre(&h, "Beta"));
+        glisse(&mut h, depuis, vers);
+        assert_eq!(
+            h.state().placements,
+            vec![Placement {
+                layer: g.piste,
+                column: g.colonnes[1],
+                preset: find("Mandala").unwrap()
+            }]
+        );
+    }
+
+    #[test]
+    fn relacher_hors_de_la_grille_ne_pose_rien() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        let (depuis, vers) = (centre(&h, "Aurore"), centre(&h, "Tap"));
+        glisse(&mut h, depuis, vers);
+        assert!(h.state().placements.is_empty());
+    }
+
+    /// Ouvre le menu d'un élément par clic droit, et choisit `action`.
+    fn menu_de(h: &mut Harness<'_, Etat>, nom: &str, action: &str) {
+        h.get_by_label(nom).click_secondary();
+        h.run();
+        h.get_by_label(action).click();
+        h.run();
+    }
+
+    #[test]
+    fn un_clic_droit_retire_un_clip() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        menu_de(&mut h, "Beta", "Retirer le clip");
+        assert_eq!(
+            h.state().commands,
+            vec![Command::RemoveClip {
+                layer: g.piste,
+                column: g.colonnes[1]
+            }]
+        );
+    }
+
+    #[test]
+    fn un_clic_droit_retire_une_colonne_sans_la_declencher() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        menu_de(&mut h, "Colonne 2", "Retirer la colonne");
+        assert_eq!(
+            h.state().commands,
+            vec![Command::RemoveColumn {
+                column: g.colonnes[1]
+            }]
+        );
+    }
+
+    #[test]
+    fn un_clic_droit_retire_une_piste() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        menu_de(&mut h, "Piste 1", "Retirer la piste");
+        assert_eq!(
+            h.state().commands,
+            vec![Command::RemoveLayer { layer: g.piste }]
+        );
+    }
+
+    #[test]
+    fn les_boutons_ajoutent_une_colonne_et_une_piste() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("+ colonne").click();
+        h.run();
+        h.get_by_label("+ piste").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::AddColumn, Command::AddLayer]
+        );
+    }
+
+    #[test]
+    fn le_curseur_de_vitesse_regle_le_clip() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+
+        champ(&h, "vitesse").set_value_accesskit(2.0);
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetClipSpeed {
+                clip: g.clips[0],
+                value: 2.0
+            }]
+        );
+    }
+
+    /// Une grille dont le rayon du premier clip est modulé.
+    fn grille_modulee() -> Grille {
+        let mut g = grille();
+        let clip = g.composition.clip_mut(g.clips[0]).unwrap();
+        let source = clip.graph_mut().add(Box::new(Constant(0.5)));
+        let frogenx_composition::ClipSource::Shape { generator, .. } = &mut clip.source;
+        *generator.param_mut(0).unwrap() = Param::modulated(0.5, 0.25, source);
+        g
+    }
+
+    #[test]
+    fn un_parametre_module_a_un_curseur_d_amplitude() {
+        let g = grille_modulee();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+
+        champ(&h, "rayon : modulation").set_value_accesskit(0.1);
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetDepth {
+                clip: g.clips[0],
+                slot: ParamSlot::Generator(0),
+                value: 0.1
+            }]
+        );
+    }
+
+    #[test]
+    fn un_parametre_fixe_n_a_pas_de_curseur_d_amplitude() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        assert!(h.query_by_label_contains("modulation").is_none());
+    }
+
+    #[test]
+    fn afficher_un_clip_du_catalogue_n_emet_aucune_commande() {
+        // Une valeur hors de la plage d'un curseur ne doit pas être réécrite :
+        // la plage borne le geste, pas le paramètre (§16.3 ter).
+        let mut c = Composition::new();
+        let deck = c.add_deck("test");
+        let groupe = c.add_layer_group(deck).unwrap();
+        let piste = c.add_layer(groupe).unwrap();
+        let clips: Vec<ClipId> = frogenx_library::catalog()
+            .iter()
+            .map(|p| c.add_clip(piste, p.build()).unwrap())
+            .collect();
+
+        let mut h = harness(&c);
+        for clip in clips {
+            h.state_mut().ui.selected = Some((piste, clip));
+            h.run();
+            assert_eq!(h.state().commands, vec![], "clip {clip:?}");
+        }
+    }
+
+    #[test]
+    fn la_bibliotheque_liste_le_catalogue_et_se_masque() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        assert!(h.query_by_label("Motifs").is_some());
+        assert!(h.query_by_label("Kaléidoscope").is_some());
+        h.state_mut().ui.show_library = false;
+        h.run();
+        assert!(h.query_by_label("Kaléidoscope").is_none());
     }
 
     #[test]

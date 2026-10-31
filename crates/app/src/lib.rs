@@ -14,9 +14,9 @@
 //!           ─▶ graphe de chaque clip actif ─▶ Compositor::render ─▶ Outputs::submit
 //! ```
 
-pub mod demo;
-
-use frogenx_composition::{ClipSource, Command, Composition, LayerId};
+use frogenx_composition::{
+    sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, LayerId,
+};
 use frogenx_core::{AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
 use frogenx_layer::{BlendParams, Gpu, RenderLayer, ShapeContent, ShapeRenderer};
 use frogenx_output::{DropPolicy, OutputError, OutputSink, Outputs, SinkStatus};
@@ -163,6 +163,8 @@ pub struct Engine {
     /// Les pistes du deck actif, réécrites à chaque frame sans allouer.
     order: Vec<LayerId>,
     commands: Vec<Command>,
+    /// Les clips à poser : un `Clip` n'est pas une `Command` (§23.6).
+    placements: Vec<(LayerId, ColumnId, Clip)>,
     refused_commands: u32,
     bpm: f32,
 }
@@ -182,6 +184,7 @@ impl Engine {
             tracks: Vec::new(),
             order: Vec::new(),
             commands: Vec::new(),
+            placements: Vec::new(),
             refused_commands: 0,
             bpm,
         }
@@ -198,11 +201,22 @@ impl Engine {
         self.commands.push(command);
     }
 
+    /// Pose un clip dans une case au début de la frame suivante, après les
+    /// commandes (§23.6). Un refus se compte comme une commande refusée.
+    pub fn place(&mut self, layer: LayerId, column: ColumnId, clip: Clip) {
+        self.placements.push((layer, column, clip));
+    }
+
     /// Une frame. `wall_dt` n'a d'effet qu'en `Realtime` (§4).
     pub fn frame(&mut self, wall_dt: f64) {
         let instant = self.clock.t();
         for command in self.commands.drain(..) {
             if !self.composition.apply(command, instant) {
+                self.refused_commands = self.refused_commands.saturating_add(1);
+            }
+        }
+        for (layer, column, clip) in self.placements.drain(..) {
+            if self.composition.place_clip(layer, column, clip).is_none() {
                 self.refused_commands = self.refused_commands.saturating_add(1);
             }
         }
@@ -218,10 +232,15 @@ impl Engine {
         self.composition.layers_in_order(&mut self.order);
         for layer in &self.order {
             let actif = self.composition.layer(*layer).and_then(|l| l.active_clip());
-            if let Some(clip) = actif.and_then(|id| self.composition.clip_mut(id)) {
+            let Some(id) = actif else { continue };
+            // Lue dans le graphe de composition, déjà évalué (§3bis.2).
+            let vitesse = self.composition.clip(id).map_or(1.0, |clip| {
+                sanitize_speed(clip.speed.get(self.composition.graph()))
+            });
+            if let Some(clip) = self.composition.clip_mut(id) {
                 let graph = clip.graph_mut();
                 graph.set_bpm(self.bpm);
-                graph.eval_frame(t, dt);
+                graph.eval_frame(t, dt * vitesse as f64);
             }
         }
         self.sync_tracks();

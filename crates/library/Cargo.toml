@@ -1,0 +1,15 @@
+[package]
+name = "frogenx-library"
+description = "Clips prédéfinis et grille de départ (§23.6)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Du contenu, pas de la mécanique (§10) : assemble des LFO et des formes dans des
+# clips. Ni GPU ni carte son : tout le catalogue se teste en CI.
+[dependencies]
+frogenx-core.workspace = true
+frogenx-osc.workspace = true
+frogenx-shape.workspace = true
+frogenx-composition.workspace = true

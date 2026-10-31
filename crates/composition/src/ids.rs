@@ -97,6 +97,11 @@ impl<T> Arena<T> {
         }
         taken
     }
+
+    /// Les valeurs présentes, dans l'ordre des emplacements.
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.slots.iter_mut().flatten()
+    }
 }
 
 #[cfg(test)]

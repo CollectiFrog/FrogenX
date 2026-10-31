@@ -32,7 +32,7 @@ Détail dans la skill `modular-design`, contrats complets en partie II de l'arch
 
 ## Règle de dépendance des crates
 
-`core` → `osc` → `shape` → `composition` → `audio` → `layer` → `render` → `output` →
+`core` → `osc` → `shape` → `composition` → `audio` → `library` → `layer` → `render` → `output` →
 `ui` → `app`, les flèches vers le haut. `core` ne dépend de rien ; `shape` et `composition` ne
 connaissent ni wgpu ni l'audio.
 
@@ -55,11 +55,13 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 7b faites.** `cargo run` ouvre l'application : une interface egui sur une
-grille de démonstration provisoire, à 60 fps. On y déclenche des clips, on règle leurs
-paramètres et le tempo ; au clavier, 1 à 4 pour les colonnes et Espace pour taper. Rendus sans fenêtre : `cargo run -p frogenx-render
+**Étapes 1 à 7c faites.** `cargo run` ouvre l'application : une interface egui sur la
+grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
+bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
+les colonnes et Espace pour taper. Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
-sequence` (un clip déterministe, skill `poc-video`). Les tests GPU se sautent proprement
+sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p frogenx-app
+--example catalogue` (une planche du catalogue). Les tests GPU se sautent proprement
 sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 
 - `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
@@ -76,6 +78,8 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
   `Clip`, `CrossFader`, `TempoController`, `PositionSignal`, `BeatRate`, `Command`, graphe
   de composition. Dépend de `core` et `shape`. Seul `Cut` s'applique, et `PlayMode` n'a
   pas encore d'effet (§3bis.3).
+- `crates/library` : les 24 clips prédéfinis et la grille de départ (§23.6), en code
+  jusqu'au format de l'étape 7e. Sans GPU ni carte son.
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
   `ShapeRenderer` (un par piste, le clip lui prête son `ShapeContent`), `ShapeLayer`,
   tessellation lyon (module sans wgpu).
@@ -85,15 +89,14 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
   passe de conversion 8 bits sRGB, `PresentSurface`, `Preview`, `MonitorSink`,
   `PngSequenceSink`. `fanout` (files bornées, politique
   de perte) ne connaît pas wgpu. `output` ne connaît pas `winit`.
-- `crates/ui` : l'interface, fonction de l'état. Lit la grille, rend des `Command`. Ne
+- `crates/ui` : l'interface, fonction de l'état. Lit la grille, rend des `Command` et des
+  `Placement` pour les clips glissés depuis la bibliothèque. Ne
   connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
-  fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`. La grille de `demo` est
-  provisoire : la bibliothèque de clips la remplacera.
+  fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
 
-**Prochaine étape : 7c, les clips prédéfinis.** Première version visée, §12 : 7c clips
-prédéfinis, 7d sortie plein écran, 7e sauvegarde, 8 audio (capture, BPM calculé,
-déclenchements, §7).
+**Prochaine étape : 7d, la sortie plein écran.** Première version visée, §12 : 7d sortie
+plein écran, 7e sauvegarde, 8 audio (capture, BPM calculé, déclenchements, §7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

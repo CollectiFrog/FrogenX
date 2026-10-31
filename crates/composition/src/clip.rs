@@ -1,7 +1,7 @@
 //! Le `Clip` — point de jonction avec le graphe modulaire, §3bis.2 de
 //! `docs/ARCHITECTURE.md`.
 
-use frogenx_core::Graph;
+use frogenx_core::{Graph, Param};
 use frogenx_shape::{ColorParam, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle, COLOR_CHANNELS};
 
 use crate::crossfader::FadeCurve;
@@ -98,6 +98,18 @@ fn color_descs(color: ColorParam) -> impl Iterator<Item = ParamDesc> {
         })
 }
 
+/// La vitesse maximale d'un clip, appliquée à la lecture (§18.4).
+pub const MAX_CLIP_SPEED: f32 = 4.0;
+
+/// Une vitesse utilisable : saturée, et 1 si elle n'est pas finie.
+pub fn sanitize_speed(speed: f32) -> f32 {
+    if speed.is_finite() {
+        speed.clamp(0.0, MAX_CLIP_SPEED)
+    } else {
+        1.0
+    }
+}
+
 /// Source + effets + transport, pilotable par son propre `Graph` — §3bis.2.
 ///
 /// **Pas de `Serialize` ici.** `effects` et `source` portent des trait
@@ -111,6 +123,9 @@ pub struct Clip {
     pub effects: Vec<Box<dyn ShapeOp>>,
     pub transport: Transport,
     pub transition: ClipTransition,
+    /// Multiplie le `dt` de son graphe (§3bis.2). Se résout dans le graphe de
+    /// composition : on doit la connaître avant d'évaluer celui du clip.
+    pub speed: Param,
 }
 
 impl Clip {
@@ -127,6 +142,7 @@ impl Clip {
             effects: Vec::new(),
             transport,
             transition: ClipTransition::Cut,
+            speed: Param::fixed(1.0),
         }
     }
 
@@ -193,10 +209,27 @@ impl Clip {
         if !value.is_finite() {
             return false;
         }
+        match self.param_mut(slot) {
+            Some(p) => {
+                p.set_base(value);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Règle l'amplitude d'un paramètre modulé. Rend `false` si `slot` ne
+    /// désigne rien, si le paramètre n'est pas modulé ou si `value` n'est pas
+    /// fini.
+    pub fn set_depth(&mut self, slot: ParamSlot, value: f32) -> bool {
+        value.is_finite() && self.param_mut(slot).is_some_and(|p| p.set_depth(value))
+    }
+
+    fn param_mut(&mut self, slot: ParamSlot) -> Option<&mut Param> {
         let ClipSource::Shape {
             generator, style, ..
         } = &mut self.source;
-        let param = match slot {
+        match slot {
             ParamSlot::Generator(i) => generator.param_mut(i),
             ParamSlot::Effect { effect, param } => self
                 .effects
@@ -208,13 +241,6 @@ impl Clip {
                 .stroke
                 .as_mut()
                 .and_then(|s| s.color.channel_mut(i - 1)),
-        };
-        match param {
-            Some(p) => {
-                p.set_base(value);
-                true
-            }
-            None => false,
         }
     }
 
@@ -382,6 +408,31 @@ mod tests {
             Param::modulated(0.8, 0.5, source),
             "la base change, le câble reste"
         );
+    }
+
+    #[test]
+    fn l_amplitude_se_regle_sur_un_parametre_module_seulement() {
+        let mut clip = clip_complet();
+        let source = dummy_position();
+        let ClipSource::Shape { style, .. } = &mut clip.source;
+        style.fill.as_mut().unwrap().r = Param::modulated(0.1, 0.5, source);
+
+        assert!(clip.set_depth(ParamSlot::Fill(0), 0.2));
+        let ClipSource::Shape { style, .. } = &clip.source;
+        assert_eq!(style.fill.unwrap().r, Param::modulated(0.1, 0.2, source));
+
+        assert!(!clip.set_depth(ParamSlot::Fill(1), 0.2), "pas de câble");
+        assert!(!clip.set_depth(ParamSlot::Fill(0), f32::NAN));
+        assert!(!clip.set_depth(ParamSlot::Generator(99), 0.2));
+    }
+
+    #[test]
+    fn la_vitesse_est_saturee_a_la_lecture() {
+        assert_eq!(sanitize_speed(2.0), 2.0);
+        assert_eq!(sanitize_speed(-1.0), 0.0);
+        assert_eq!(sanitize_speed(99.0), MAX_CLIP_SPEED);
+        assert_eq!(sanitize_speed(f32::NAN), 1.0);
+        assert_eq!(sanitize_speed(f32::INFINITY), 1.0);
     }
 
     #[test]

@@ -92,17 +92,25 @@ impl Gui {
             monitor: Some(self.monitor),
         };
         let mut commands = Vec::new();
+        let mut placements = Vec::new();
         let state = &mut self.state;
         let output = self.ctx.run_ui(input, |ui| {
             // egui peut rejouer une passe : seule la dernière compte, sinon
             // un clic se déclencherait deux fois.
             commands.clear();
-            frogenx_ui::draw(ui, state, &view, &mut commands);
+            placements.clear();
+            frogenx_ui::draw(ui, state, &view, &mut commands, &mut placements);
         });
         self.winit
             .handle_platform_output(window, output.platform_output);
         for command in commands {
             engine.push(command);
+        }
+        // L'interface désigne, `app` construit (§23.6).
+        for p in placements {
+            if let Some(preset) = frogenx_library::preset(p.preset) {
+                engine.place(p.layer, p.column, preset.build());
+            }
         }
 
         let gpu = engine.gpu();

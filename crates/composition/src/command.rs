@@ -33,6 +33,31 @@ pub enum Command {
         slot: ParamSlot,
         value: f32,
     },
+    /// Règle l'amplitude d'un paramètre modulé.
+    SetDepth {
+        clip: ClipId,
+        slot: ParamSlot,
+        value: f32,
+    },
+    /// Règle la vitesse d'un clip, sans couper sa modulation.
+    SetClipSpeed {
+        clip: ClipId,
+        value: f32,
+    },
+    AddColumn,
+    RemoveColumn {
+        column: ColumnId,
+    },
+    /// Ajoute une piste au deck actif.
+    AddLayer,
+    RemoveLayer {
+        layer: LayerId,
+    },
+    /// Vide une case et libère son clip.
+    RemoveClip {
+        layer: LayerId,
+        column: ColumnId,
+    },
     SetActiveDeck(DeckId),
     SetBpm(f32),
     /// Un tap, à l'instant où la commande s'applique.
@@ -63,6 +88,24 @@ impl Composition {
             Command::SetParam { clip, slot, value } => self
                 .clip_mut(clip)
                 .is_some_and(|c| c.set_param(slot, value)),
+            Command::SetDepth { clip, slot, value } => self
+                .clip_mut(clip)
+                .is_some_and(|c| c.set_depth(slot, value)),
+            Command::SetClipSpeed { clip, value } => match self.clip_mut(clip) {
+                Some(c) if value.is_finite() => {
+                    c.speed.set_base(value);
+                    true
+                }
+                _ => false,
+            },
+            Command::AddColumn => {
+                self.add_column();
+                true
+            }
+            Command::RemoveColumn { column } => self.remove_column(column),
+            Command::AddLayer => self.add_layer_to_active_deck().is_some(),
+            Command::RemoveLayer { layer } => self.remove_layer(layer),
+            Command::RemoveClip { layer, column } => self.remove_clip(layer, column),
             Command::SetActiveDeck(deck) => self.set_active_deck(deck),
             Command::SetBpm(bpm) => {
                 if bpm.is_finite() {
@@ -81,7 +124,7 @@ impl Composition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clip::Clip;
+    use crate::clip::{Clip, ClipSource};
     use crate::position::PositionSignal;
     use crate::transport::{PlayMode, Transport};
     use frogenx_core::{Graph, NodeId};
@@ -193,13 +236,76 @@ mod tests {
             .unwrap()
         };
         let (a, b) = (clip(&mut c, p0), clip(&mut c, p1));
-        let colonne = c.add_column();
-        c.set_column_slot(colonne, 0, Some(a));
-        c.set_column_slot(colonne, 1, Some(b));
+        let colonne = c.columns()[0];
 
         assert!(c.apply(Command::TriggerColumn { column: colonne }, 0.0));
         assert_eq!(c.layer(p0).unwrap().active_clip(), Some(a));
         assert_eq!(c.layer(p1).unwrap().active_clip(), Some(b));
+    }
+
+    #[test]
+    fn la_vitesse_d_un_clip_se_regle_sans_couper_sa_modulation() {
+        let (mut c, _, [a, _], _) = grille();
+        let source = c.graph_mut().add(Box::new(frogenx_core::Constant(0.5)));
+        c.clip_mut(a).unwrap().speed = Param::modulated(1.0, 0.5, source);
+
+        let regle = Command::SetClipSpeed {
+            clip: a,
+            value: 2.0,
+        };
+        assert!(c.apply(regle, 0.0));
+        assert_eq!(c.clip(a).unwrap().speed, Param::modulated(2.0, 0.5, source));
+
+        let invalide = Command::SetClipSpeed {
+            clip: a,
+            value: f32::NAN,
+        };
+        assert!(!c.apply(invalide, 0.0));
+        assert_eq!(c.clip(a).unwrap().speed.base(), 2.0);
+    }
+
+    #[test]
+    fn l_amplitude_passe_par_une_commande() {
+        let (mut c, _, [a, _], p) = grille();
+        let slot = ParamSlot::Generator(0);
+        let clip = c.clip_mut(a).unwrap();
+        let ClipSource::Shape { generator, .. } = &mut clip.source;
+        *generator.param_mut(0).unwrap() = Param::modulated(0.5, 0.1, p);
+
+        let regle = Command::SetDepth {
+            clip: a,
+            slot,
+            value: 0.3,
+        };
+        assert!(c.apply(regle, 0.0));
+        let ClipSource::Shape { generator, .. } = &c.clip(a).unwrap().source;
+        assert_eq!(generator.params()[0].value.depth(), Some(0.3));
+    }
+
+    #[test]
+    fn la_structure_de_la_grille_se_modifie_par_commandes() {
+        let (mut c, piste, [a, b], _) = grille();
+        let [colonne_a, colonne_b] = [c.columns()[0], c.columns()[1]];
+
+        assert!(c.apply(Command::AddColumn, 0.0));
+        assert_eq!(c.columns().len(), 3);
+        assert!(c.apply(Command::AddLayer, 0.0));
+        let mut pistes = Vec::new();
+        c.layers_in_order(&mut pistes);
+        assert_eq!(pistes.len(), 2);
+
+        let vide_a = Command::RemoveClip {
+            layer: piste,
+            column: colonne_a,
+        };
+        assert!(c.apply(vide_a, 0.0));
+        assert!(c.clip(a).is_none());
+        assert!(!c.apply(vide_a, 0.0), "la case est déjà vide");
+
+        assert!(c.apply(Command::RemoveColumn { column: colonne_b }, 0.0));
+        assert!(c.clip(b).is_none());
+        assert!(c.apply(Command::RemoveLayer { layer: pistes[1] }, 0.0));
+        assert!(!c.apply(Command::RemoveLayer { layer: pistes[1] }, 0.0));
     }
 
     #[test]
@@ -247,8 +353,9 @@ mod tests {
     #[test]
     fn la_grille_garde_l_ordre_de_ses_colonnes_et_nomme_ses_pistes() {
         let (mut c, piste, ..) = grille();
+        let avant = c.columns().len();
         let (a, b) = (c.add_column(), c.add_column());
-        assert_eq!(c.columns(), [a, b]);
+        assert_eq!(c.columns()[avant..], [a, b]);
         assert_eq!(c.layer(piste).unwrap().name, "Piste 1");
     }
 

@@ -135,6 +135,26 @@ impl Param {
             Param::Modulated { source, .. } => Some(source),
         }
     }
+
+    /// L'amplitude de la modulation, si ce paramètre est modulé.
+    pub fn depth(&self) -> Option<f32> {
+        match *self {
+            Param::Fixed(_) => None,
+            Param::Modulated { depth, .. } => Some(depth),
+        }
+    }
+
+    /// Règle l'amplitude d'une modulation. Rend `false` sur un `Fixed` : sans
+    /// câble, il n'y a pas d'amplitude (§16.3 ter).
+    pub fn set_depth(&mut self, value: f32) -> bool {
+        match self {
+            Param::Fixed(_) => false,
+            Param::Modulated { depth, .. } => {
+                *depth = value;
+                true
+            }
+        }
+    }
 }
 
 impl From<f32> for Param {
@@ -168,6 +188,23 @@ mod tests {
         p.set_base(0.25);
         assert_eq!(p, Param::modulated(0.25, 0.5, source));
         assert_eq!(p.base(), 0.25);
+    }
+
+    #[test]
+    fn set_depth_garde_la_base_et_la_source() {
+        let source = NodeId::new(3, 1);
+        let mut p = Param::modulated(1.0, 0.5, source);
+        assert!(p.set_depth(0.2));
+        assert_eq!(p, Param::modulated(1.0, 0.2, source));
+        assert_eq!(p.depth(), Some(0.2));
+    }
+
+    #[test]
+    fn set_depth_refuse_un_parametre_fixe() {
+        let mut p = Param::fixed(1.0);
+        assert!(!p.set_depth(0.2));
+        assert_eq!(p, Param::fixed(1.0));
+        assert_eq!(p.depth(), None);
     }
     use crate::graph::Graph;
     use crate::signal::Constant;

@@ -10,13 +10,13 @@
 //! cargo run -- --frames 120  # 120 frames, un bilan, puis quitte
 //! ```
 //!
-//! Au clavier, en plus de l'interface : les touches 1 à 4 déclenchent les
+//! Au clavier, en plus de l'interface : les touches 1 à 8 déclenchent les
 //! colonnes de la grille, Espace tape le tempo.
 
 mod gui;
 
-use frogenx_app::{demo, next_deadline, Engine, FrameRate};
-use frogenx_composition::{ColumnId, Command};
+use frogenx_app::{next_deadline, Engine, FrameRate};
+use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
 use frogenx_output::{MonitorSink, OutputSink};
@@ -76,6 +76,10 @@ fn key_action(key: KeyCode) -> Option<Action> {
         KeyCode::Digit2 | KeyCode::Numpad2 => Some(Action::Column(1)),
         KeyCode::Digit3 | KeyCode::Numpad3 => Some(Action::Column(2)),
         KeyCode::Digit4 | KeyCode::Numpad4 => Some(Action::Column(3)),
+        KeyCode::Digit5 | KeyCode::Numpad5 => Some(Action::Column(4)),
+        KeyCode::Digit6 | KeyCode::Numpad6 => Some(Action::Column(5)),
+        KeyCode::Digit7 | KeyCode::Numpad7 => Some(Action::Column(6)),
+        KeyCode::Digit8 | KeyCode::Numpad8 => Some(Action::Column(7)),
         KeyCode::Space => Some(Action::Tap),
         _ => None,
     }
@@ -86,7 +90,6 @@ struct Running {
     window: Arc<Window>,
     engine: Engine,
     gui: Gui,
-    columns: Vec<ColumnId>,
     rate: FrameRate,
     started: Instant,
     last: Instant,
@@ -119,21 +122,21 @@ impl Running {
         let monitor = MonitorSink::new(&gpu, MONITOR_SIZE.x, MONITOR_SIZE.y);
         let aspect = MONITOR_SIZE.x as f32 / MONITOR_SIZE.y as f32;
         let gui = Gui::new(&window, &gpu, surface, &monitor.view(), aspect)?;
-        let grille = demo::grid();
-        let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, grille.composition);
+        let grille = frogenx_library::starter();
+        let premiere = grille.columns().first().copied();
+        let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, grille);
         engine
             .add_output(OutputSink::Gpu(Box::new(monitor)))
             .map_err(|e| e.to_string())?;
-        engine.push(Command::TriggerColumn {
-            column: grille.columns[0],
-        });
+        if let Some(column) = premiere {
+            engine.push(Command::TriggerColumn { column });
+        }
 
         let maintenant = Instant::now();
         Ok(Self {
             window,
             engine,
             gui,
-            columns: grille.columns,
             rate: FrameRate::new(FRAME_PERIOD),
             started: maintenant,
             last: maintenant,
@@ -157,7 +160,7 @@ impl Running {
     fn on_key(&mut self, key: KeyCode) {
         match key_action(key) {
             Some(Action::Column(i)) => {
-                if let Some(column) = self.columns.get(i).copied() {
+                if let Some(column) = self.engine.composition().columns().get(i).copied() {
                     self.engine.push(Command::TriggerColumn { column });
                 }
             }
@@ -303,6 +306,9 @@ mod tests {
     fn les_chiffres_declenchent_les_colonnes_et_espace_tape() {
         assert_eq!(key_action(KeyCode::Digit1), Some(Action::Column(0)));
         assert_eq!(key_action(KeyCode::Numpad4), Some(Action::Column(3)));
+        assert_eq!(key_action(KeyCode::Digit8), Some(Action::Column(7)));
+        assert_eq!(key_action(KeyCode::Numpad5), Some(Action::Column(4)));
+        assert_eq!(key_action(KeyCode::Digit9), None);
         assert_eq!(key_action(KeyCode::Space), Some(Action::Tap));
         assert_eq!(key_action(KeyCode::KeyA), None);
     }

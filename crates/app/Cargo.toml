@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 frogenx-core.workspace = true
 frogenx-composition.workspace = true
+frogenx-library.workspace = true
 frogenx-layer.workspace = true
 frogenx-render.workspace = true
 frogenx-output.workspace = true

@@ -1118,7 +1118,7 @@ couches complètes empilées.
 | 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
 | 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
 | 7b | ✅ Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** — *fait* : `cargo run` |
-| 7c | Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | une grille qu'on remplit soi-même |
+| 7c | ✅ Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | **une grille qu'on remplit soi-même** — *fait* : `cargo run`, glisser un clip sur une case |
 | 7d | Sortie plein écran sur un second écran (`Preview`) | usage sur scène |
 | 7e | Sauvegarde des patchs (§19) | retrouver son travail |
 | 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) | **visuel audio-réactif** |
@@ -1530,7 +1530,9 @@ liste, ce qui garantit que `param_mut(i)` désigne le `i`-ème de `params()`.
 
 **La plage n'est pas une saturation.** `min` et `max` bornent le geste de l'utilisateur.
 La saturation reste chez le consommateur (§18.4) : une modulation peut sortir de la
-plage.
+plage. L'interface règle donc ses curseurs en `SliderClamping::Never` : le défaut d'egui
+réécrit toute valeur hors plage et signale un changement à chaque frame, si bien
+qu'afficher un clip l'aurait modifié.
 
 **`Param::set_base` règle un paramètre sans le débrancher.** Sur un `Fixed`, il remplace
 la valeur ; sur un `Modulated`, il remplace `base` et garde `depth` et `source`. Un
@@ -2397,7 +2399,8 @@ moyenne correcte peut cacher des saccades.
 premier texte panique. `TexturesDelta` vérifie, à sa destruction en build debug, qu'il a
 été **vidé**, y compris sur une frame sautée : le parcourir avec `drain()`. Un curseur
 expose deux nœuds de même nom : en test, viser le champ numérique par son rôle
-(`SpinButton`), le seul qui accepte une valeur simulée.
+(`SpinButton`), le seul qui accepte une valeur simulée. Une entrée glissable porte un
+`Label` en `selectable(false)` : sinon la sélection de texte capte le geste.
 
 **Le clavier** reste actif, sauf quand egui veut la saisie : Espace dans un champ ne doit
 pas taper le tempo.
@@ -2444,14 +2447,16 @@ le clip entre deux frames avant de le remettre à `Engine::place`. Un refus se c
 une commande refusée.
 
 **Démarrage.** `library::starter` construit trois pistes et huit colonnes : le fond, les
-formes, les traits. Elle remplace la grille de démonstration de `app`, et sert aussi à
-l'exemple `sequence` et aux tests d'`Engine`. Sans sauvegarde, c'est ce qu'on retrouve à
-chaque lancement jusqu'à l'étape 7e.
+formes, les traits. Elle sert aussi à l'exemple `sequence` et aux tests d'`Engine`. Sans
+sauvegarde, c'est ce qu'on retrouve à chaque lancement jusqu'à l'étape 7e.
 
 **Ce qui vérifie le catalogue.** Un test parcourt chaque entrée sans GPU : le clip se
 construit, porte le nom du catalogue, dessine quelque chose et produit un `Path` valide et
-fini sur 240 frames, avec des `Diagnostics` nuls. L'exemple `catalogue` rend une planche
-de toutes les entrées, pour les regarder : un test ne dit pas si une forme est belle.
+fini sur 240 frames, avec des `Diagnostics` nuls. Un test d'`Engine` rend chaque entrée
+sur le GPU. Un test d'interface vérifie qu'afficher chaque clip n'émet aucune commande.
+L'exemple `catalogue` rend une planche de toutes les entrées, pour les regarder : un test
+ne dit pas si une forme est belle. C'est elle qui a montré qu'un premier `Engrenage` à
+dents trop larges ne dessinait qu'un anneau.
 
 ---
 

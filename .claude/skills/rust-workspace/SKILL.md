@@ -24,7 +24,8 @@ crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← cor
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
                      à venir : NDI / Spout / Syphon / recorder
-crates/ui/           egui : grille, tempo, monitor, réglages ; rend des Command ← core, composition, egui ✅
+crates/library/      clips prédéfinis, grille de départ        ← core, osc, shape, composition ✅
+crates/ui/           egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ← core, composition, library, egui ✅
 crates/app/          Engine (sans fenêtre) + binaire `frogenx` (`cargo run`) ← tout le reste, winit, egui-wgpu ✅
 ```
 

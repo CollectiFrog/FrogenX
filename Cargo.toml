@@ -5,6 +5,7 @@ members = [
     "crates/osc",
     "crates/shape",
     "crates/composition",
+    "crates/library",
     "crates/layer",
     "crates/render",
     "crates/output",
@@ -21,6 +22,7 @@ frogenx-core = { path = "crates/core" }
 frogenx-osc = { path = "crates/osc" }
 frogenx-shape = { path = "crates/shape" }
 frogenx-composition = { path = "crates/composition" }
+frogenx-library = { path = "crates/library" }
 frogenx-layer = { path = "crates/layer" }
 frogenx-render = { path = "crates/render" }
 frogenx-output = { path = "crates/output" }

@@ -764,6 +764,7 @@ dependencies = [
  "frogenx-composition",
  "frogenx-core",
  "frogenx-layer",
+ "frogenx-library",
  "frogenx-osc",
  "frogenx-output",
  "frogenx-render",
@@ -798,6 +799,16 @@ dependencies = [
  "lyon_tessellation",
  "pollster",
  "wgpu",
+]
+
+[[package]]
+name = "frogenx-library"
+version = "0.1.0"
+dependencies = [
+ "frogenx-composition",
+ "frogenx-core",
+ "frogenx-osc",
+ "frogenx-shape",
 ]
 
 [[package]]
@@ -849,6 +860,7 @@ dependencies = [
  "egui_kittest",
  "frogenx-composition",
  "frogenx-core",
+ "frogenx-library",
  "frogenx-shape",
 ]
 

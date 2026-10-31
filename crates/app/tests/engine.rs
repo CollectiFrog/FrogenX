@@ -3,7 +3,7 @@
 //!
 //! Sans adaptateur, chaque test s'arrête **avec succès** et le dit (§24.3).
 
-use frogenx_app::{demo, Engine};
+use frogenx_app::Engine;
 use frogenx_composition::{Clip, ClipId, Command, Composition, LayerId, PlayMode, Transport};
 use frogenx_core::{Clock, Constant, Ctx, Graph, NodeState, Param, Signal};
 use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
@@ -287,21 +287,22 @@ fn une_commande_refusee_se_compte_sans_paniquer() {
 }
 
 #[test]
-fn une_colonne_de_la_demo_change_l_image_et_la_demo_est_reproductible() {
+fn une_colonne_de_la_grille_de_depart_change_l_image_et_reste_reproductible() {
     let Some(a) = gpu() else { return };
     let Some(b) = gpu() else { return };
 
     let rendre = |gpu: Gpu| {
-        let grille = demo::grid();
-        let (mut moteur, recu) = moteur(gpu, grille.composition);
+        let grille = frogenx_library::starter();
+        let colonnes = grille.columns().to_vec();
+        let (mut moteur, recu) = moteur(gpu, grille);
         moteur.push(Command::TriggerColumn {
-            column: grille.columns[0],
+            column: colonnes[0],
         });
         for _ in 0..6 {
             moteur.frame(0.0);
         }
         moteur.push(Command::TriggerColumn {
-            column: grille.columns[1],
+            column: colonnes[1],
         });
         for _ in 0..6 {
             moteur.frame(0.0);
@@ -330,6 +331,163 @@ fn une_colonne_de_la_demo_change_l_image_et_la_demo_est_reproductible() {
         premier[5].pixels, premier[6].pixels,
         "la colonne n'a rien changé"
     );
+}
+
+/// La position du clip, en battements, après `frames` frames à 120 BPM.
+fn battements(clip: &Clip) -> f32 {
+    let Transport::BpmSync { position, .. } = clip.transport else {
+        panic!("attendu BpmSync");
+    };
+    clip.graph().value(position)
+}
+
+#[test]
+fn la_vitesse_d_un_clip_accelere_son_graphe_seulement() {
+    let Some(gpu) = gpu() else { return };
+    let (c, layer, clip, _) = une_piste();
+    let (mut moteur, _recu) = moteur(gpu, c);
+    moteur.push(Command::TriggerClip { layer, clip });
+    moteur.push(Command::SetClipSpeed { clip, value: 2.0 });
+
+    for _ in 0..30 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+
+    // 0.5 s à 120 BPM font 1 battement ; le double à vitesse 2.
+    let position = battements(moteur.composition().clip(clip).unwrap());
+    assert!((position - 2.0).abs() < 1e-3, "got {position}");
+    assert!(
+        (moteur.clock().t() - 0.5).abs() < 1e-9,
+        "l'horloge reste la même"
+    );
+}
+
+#[test]
+fn une_vitesse_nulle_fige_le_clip_sans_l_eteindre() {
+    let Some(gpu) = gpu() else { return };
+    let (c, layer, clip, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, c);
+    moteur.push(Command::TriggerClip { layer, clip });
+    moteur.push(Command::SetClipSpeed { clip, value: 0.0 });
+
+    for _ in 0..5 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+
+    assert_eq!(battements(moteur.composition().clip(clip).unwrap()), 0.0);
+    assert_eq!(recu.dernier_pixel(16, 16), ROUGE);
+}
+
+#[test]
+fn une_vitesse_modulee_vient_du_graphe_de_composition() {
+    let Some(gpu) = gpu() else { return };
+    let (mut c, layer, clip, _) = une_piste();
+    let triple = c.graph_mut().add(Box::new(Constant(3.0)));
+    c.clip_mut(clip).unwrap().speed = Param::modulated(0.0, 1.0, triple);
+    let (mut moteur, _recu) = moteur(gpu, c);
+    moteur.push(Command::TriggerClip { layer, clip });
+
+    for _ in 0..30 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+
+    let position = battements(moteur.composition().clip(clip).unwrap());
+    assert!((position - 3.0).abs() < 1e-3, "got {position}");
+}
+
+#[test]
+fn poser_un_clip_sur_la_case_qui_joue_change_l_image_a_la_frame_suivante() {
+    let Some(gpu) = gpu() else { return };
+    let (c, layer, rouge, _) = une_piste();
+    let colonne = c.columns()[0];
+    let (mut moteur, recu) = moteur(gpu, c);
+
+    moteur.push(Command::TriggerClip { layer, clip: rouge });
+    moteur.frame(0.0);
+    moteur.place(layer, colonne, carre(Graph::new(), 0.0, 1.0));
+    moteur.frame(0.0);
+    moteur.finish();
+
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(pixel(&frames[0], 16, 16), ROUGE);
+    assert_eq!(pixel(&frames[1], 16, 16), BLEU);
+    assert_eq!(moteur.refused_commands(), 0);
+}
+
+#[test]
+fn poser_sur_une_colonne_retiree_se_compte_comme_un_refus() {
+    let Some(gpu) = gpu() else { return };
+    let (c, layer, ..) = une_piste();
+    let colonne = c.columns()[0];
+    let (mut moteur, _recu) = moteur(gpu, c);
+
+    moteur.push(Command::RemoveColumn { column: colonne });
+    moteur.place(layer, colonne, carre(Graph::new(), 0.0, 1.0));
+    moteur.frame(0.0);
+    moteur.finish();
+    assert_eq!(moteur.refused_commands(), 1);
+}
+
+#[test]
+fn retirer_la_piste_qui_joue_la_sort_de_l_image_et_du_moteur() {
+    let Some(gpu) = gpu() else { return };
+    let (c, layer, clip, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, c);
+
+    moteur.push(Command::TriggerClip { layer, clip });
+    moteur.frame(0.0);
+    moteur.push(Command::RemoveLayer { layer });
+    moteur.frame(0.0);
+    moteur.push(Command::AddLayer);
+    moteur.frame(0.0);
+    moteur.finish();
+
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(pixel(&frames[0], 16, 16), ROUGE);
+    assert_eq!(pixel(&frames[1], 16, 16), VIDE);
+    assert_eq!(pixel(&frames[2], 16, 16), VIDE);
+    assert_eq!(moteur.refused_commands(), 0);
+}
+
+#[test]
+fn chaque_clip_du_catalogue_se_rend_sur_une_piste() {
+    let Some(gpu) = gpu() else { return };
+    let mut c = Composition::new();
+    let deck = c.add_deck("test");
+    let groupe = c.add_layer_group(deck).unwrap();
+    let layer = c.add_layer(groupe).unwrap();
+    let (mut moteur, recu) = moteur(gpu, {
+        for preset in frogenx_library::catalog() {
+            c.add_clip(layer, preset.build()).unwrap();
+        }
+        c
+    });
+    let colonnes = moteur.composition().columns().to_vec();
+    assert_eq!(colonnes.len(), frogenx_library::catalog().len());
+
+    for column in &colonnes {
+        moteur.push(Command::TriggerColumn { column: *column });
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+
+    assert!(
+        moteur.diagnostics().iter().all(|d| d.is_clean()),
+        "got {:?}",
+        moteur.diagnostics()
+    );
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(frames.len(), colonnes.len());
+    for (frame, preset) in frames.iter().zip(frogenx_library::catalog()) {
+        assert!(
+            frame.pixels.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
+            "{} n'a rien dessiné",
+            preset.name
+        );
+    }
 }
 
 #[test]
