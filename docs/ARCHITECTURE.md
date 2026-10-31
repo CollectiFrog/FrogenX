@@ -423,7 +423,7 @@ moment de l'implémenter — pas une refonte du mécanisme de versionnage lui-m�
 **`serde` dès le premier commit de `composition`, pas ajouté après coup.** Les cinq
 identifiants arena du §3bis.1 et la forme de `ClipTransition` (§3bis.2) doivent avoir
 un schéma de sérialisation stable avant que quoi que ce soit ne s'appuie dessus —
-exactement le format v2 déjà esquissé en §19.1 (`"id": 0, "gen": 0` par nœud). Ajouter
+celui du §19.1. Ajouter
 `#[derive(Serialize, Deserialize)]` après coup, une fois la structure interne figée
 par du code qui en dépend, coûterait une migration de schéma (§19.2) immédiate — un
 coût strictement supérieur à celui de le faire dès le début, pour un `derive` qui ne
@@ -440,8 +440,7 @@ de `#[derive(Serialize, Deserialize)]` sur ces types eux-mêmes. Ce n'est pas un
 régression par rapport à la décision ci-dessus — les cinq identifiants *arena*
 (`DeckId`…) restent sérialisables directement, c'est seulement ce qui référence un
 `Param`/`NodeId` de `core` qui doit passer par le format de patch. La traduction
-`Transport`/`Clip` ↔ JSON du patch est le travail de l'étape où §19.1 s'étend pour
-porter la grille (§3bis.5), pas de ce commit.
+`Transport`/`Clip` ↔ JSON vit dans la crate `patch` (§19.1).
 
 ### 3bis.6 Le trig
 
@@ -1160,6 +1159,7 @@ frogenx/
 ├── audio/     # cpal, FFT, spectre → AudioFeatures ✅ (core, cpal, rustfft, rtrb, triple_buffer)
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Trig, Command ✅ (core, osc, shape)
 ├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
+├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre (core, osc, shape, composition, serde_json)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
@@ -1264,7 +1264,8 @@ maintenable à mesure qu'il grossit.
 | Audio | `cpal` 0.18 ✅ | capture multiplateforme, dans `audio` seulement |
 | FFT | `rustfft` 6 ✅ | analyse spectrale |
 | Lock-free | `rtrb` 0.4, `triple_buffer` 9 ✅ | passage audio → rendu |
-| Sérialisation | `serde` ✅ | sauvegarde de patchs |
+| Sérialisation | `serde`, `serde_json` | sauvegarde de patchs, dans `patch` seulement pour le JSON (§19) |
+| Dialogues | `rfd` | boîtes de fichiers du système, dans `app` seulement (§23.8) |
 | Encodage | binaire `ffmpeg` (pipe) | enregistrement, décodage de clips (§9.3) |
 | Éclairage | `artnet` ou équivalent | sortie Art-Net / DMX (§3bis, §8) |
 | Scripting | `mlua` | logique de composition personnalisée (§23.4) |
@@ -1453,6 +1454,16 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Pas d'erreur en évaluation**, seulement en édition (§18.1) | un logiciel de scène ne panique pas ; les compteurs de diagnostic rendent les incohérences visibles sans interrompre |
 | **Vérification du non-fini au cache**, un seul point (§18.3) | un `NaN` fait disparaître une forme sans message — le pire défaut : muet |
 | **Saturation chez le consommateur**, jamais dans le `Signal` (§18.4) | saturer à la source détruirait la modulation pour tous les autres consommateurs |
+| **Un `Signal` se décrit par une `Spec` de `core`, méthode obligatoire** (§19.1) | `core` reste sans dépendance, contrairement à `typetag` ; sans implémentation par défaut, un `Signal` ne peut pas rester insauvegardable sans qu'on le voie |
+| **Le fichier décrit le clip, pas son entrée de catalogue** (§19.1, §23.6) | un clip réglé n'est plus celui du catalogue ; modifier le catalogue ne doit pas changer d'anciens fichiers, et l'éditeur de nœuds produira des clips sans entrée |
+| **Le graphe s'écrit en ordre topologique, avec des positions** (§19.1) | index et génération racontent l'histoire de l'arena, pas le patch ; refuser une référence en avant garantit qu'un fichier ne crée aucun cycle |
+| **Les clips actifs se sauvegardent, pas les phases** (§19.1) | la composition revient et joue, sans figer le format sur l'état interne de chaque `Signal` |
+| **Un fichier se charge en entier ou pas du tout** (§19.1) | une `Composition` neuve se construit à côté : un fichier refusé ne touche pas à la grille qui joue |
+| **Écriture par fichier temporaire puis renommage** (§19.1) | un plantage pendant l'écriture laisse l'ancienne version intacte |
+| **Dialogues et disque hors du thread du moteur** (§23.8) | une boîte bloquante figerait l'image sur la sortie tant qu'elle reste ouverte |
+| **`FileFlow` sans `rfd` ni `winit`** (§23.8) | enregistrer, renoncer et quitter forment un parcours à risque de perte : il se teste sans fenêtre |
+| **Déclencher n'est pas modifier** (`Command::is_edit`, §23.8) | sinon toute session de jeu demanderait d'enregistrer ; le `match` exhaustif oblige à trancher pour chaque nouvelle commande |
+| **Rouvrir le dernier fichier, avec repli sur la grille de départ** (§23.8) | on retrouve son travail sans geste, et un fichier disparu ne doit pas empêcher un lancement sur scène |
 | **Patchs versionnés avec migrations en chaîne** (§19) | un patch sauvegardé aujourd'hui s'ouvre dans six mois ; fixtures jamais régénérées |
 | **JSON pour les patchs**, pas de binaire | se diffe dans git et se corrige à la main quand le chargement échoue |
 | **`f64` pour `t`, `f32` ailleurs** (§17) | `t` accumule : en `f32`, les oscillateurs bégaient après ~1 h de session |
@@ -1563,6 +1574,9 @@ pub trait Signal {
 
     /// Combien de f32 de mémoire ce nœud réclame. 0 = sans état.
     fn state_size(&self) -> usize { 0 }
+
+    /// Sa description, pour le format de patch (§19.1).
+    fn spec(&self) -> Spec;
 }
 ```
 
@@ -1720,6 +1734,7 @@ pub struct ParamDesc {
 fn kind(&self) -> &'static str;                            // « Ellipse », « Deform »
 fn params(&self) -> Vec<ParamDesc>;
 fn param_mut(&mut self, index: usize) -> Option<&mut Param>;
+fn spec(&self) -> Spec { /* déduite de kind et params */ }  // §19.1
 ```
 
 Un clip tient ses formes dans des `Box<dyn ...>` : sans ceci, ses `Param` sont
@@ -1899,66 +1914,123 @@ s'ouvrir dans six mois.
 
 ### 19.1 Forme
 
+> Tranché avant l'étape 7e (choix A1, B2, C1, D2, E1). Raisons au §13. Geste et fichier au
+> §23.8.
+
 ```jsonc
 {
-  "version": 2,
-  "meta": { "name": "...", "created": "2026-09-10T...", "app": "0.1.0" },
-  "decks": [
-    { "id": 0, "name": "Set principal",
-      "layers": [
-        { "id": 10, "clips": [
-          { "id": 100, "source": "shape",
-            "nodes": [
-              { "id": 0, "gen": 0, "kind": "osc",
-                "params": { "waveform": "sine",
-                            "freq":  { "fixed": 0.5 },
-                            "amp":   { "modulated": { "base": 1.0, "depth": 0.3, "source": 4 } } } }
-            ],
-            "effects": [ /* ... */ ]
-          }
-        ] }
-      ]
-    }
+  "version": 1,
+  "meta": { "app": "0.1.0" },
+  "tempo": { "fixed": 120.0 },
+  "columns": 8,
+  "active_deck": 0,
+  "graph": [ /* le graphe de composition, trigs compris */ ],
+  "trigs": [
+    { "name": "Trig 1", "target": { "column": 2 }, "gate": 0, "pulse": 1, "flash": 2 }
   ],
-  "columns": [ /* ... */ ],
-  "tempo": { "bpm": 120.0 },
+  "decks": [
+    { "name": "Set principal", "groups": [ { "layers": [
+      { "name": "Formes",
+        "blend": { "opacity": { "fixed": 1.0 }, "mode": "normal" },
+        "active": 0,                 // indice de colonne, null si rien ne joue
+        "cells": [
+          { "name": "Blob",
+            "speed": { "fixed": 1.0 },
+            "graph": [
+              { "kind": "BeatRate", "deps": [], "fields": { "beats": { "fixed": 8.0 } } },
+              { "kind": "Lfo", "deps": [0], "fields": {
+                  "waveform": "sine", "unipolar": false,
+                  "freq": { "modulated": { "base": 0.0, "depth": 1.0, "source": 0 } } } }
+            ],
+            "generator": { "kind": "Ellipse", "fields": { "rayon": { "fixed": 0.5 } } },
+            "effects": [ { "kind": "Deform", "fields": { } } ],
+            "style": { "fill": { }, "stroke": null },
+            "transport": { "bpm_sync": { "position": 2, "duration_beats": { "fixed": 8.0 },
+                                         "play_mode": "loop" } },
+            "transition": "cut" },
+          null                       // une case vide
+        ] }
+    ] } ] }
+  ],
   "state": null
 }
 ```
 
-**Chaque clip porte son propre tableau `nodes`** (§3) — pas un graphe global partagé.
-Un clip copié-collé d'un deck à l'autre emporte son graphe avec lui, sans résoudre de
-dépendances externes.
+**Chaque clip porte son propre tableau `graph`** (§3), pas un graphe global partagé. Un
+clip emporte son graphe avec lui, sans résoudre de dépendances externes. Le fichier décrit
+le clip lui-même, jamais son entrée de catalogue (§23.6).
+
+**Un nœud s'écrit par son `kind` et ses champs.** Le tableau suit l'ordre topologique, et
+`source`, `deps` et `position` y désignent une **position** : le fichier ne connaît ni
+index d'arena ni génération. Au chargement, chaque nœud s'ajoute après ses dépendances, et
+`Graph::add_with_deps` refuse toute référence en avant. Un `Param` dont la source a été
+retirée vaut sa base à la lecture : il s'écrit donc `fixed`.
+
+**`core` reste sans dépendance.** Un `Signal` se décrit par une `Spec`, une valeur neutre
+de `core` qui ne sait rien de JSON ; `patch` la traduit.
+
+```rust
+pub enum SpecValue {
+    Param(Param), Params(Vec<Param>), Number(f32), Int(u32), Bool(bool),
+    Word(String), Specs(Vec<Spec>),
+}
+pub struct Spec { pub kind: String, pub fields: Vec<(String, SpecValue)> }
+
+pub trait Signal {
+    fn spec(&self) -> Spec;   // obligatoire : un Signal oublié ne compile pas
+}
+```
+
+Sans implémentation par défaut, un nouveau `Signal` ne peut pas rester insauvegardable sans
+qu'on le voie. Les formes et les effets ont déjà `kind` et `params` (§16.3 ter) : leur
+`spec` se déduit par défaut, et seuls `NoiseDisplace` (sa graine) et `Chain` la
+surchargent. `shape::generator_from_spec` et `op_from_spec` reconstruisent une forme en
+réglant ses `Param` par nom ; `patch` tient la table équivalente des `Signal`.
+
+**`kind` et les noms de paramètres deviennent un contrat.** Les renommer casse les fichiers
+existants, donc passe par une migration. La fixture du §19.2 le vérifie.
 
 **JSON, pas un format binaire.** Un patch se relit, se diffe dans git, se corrige à la
 main quand le logiciel refuse de l'ouvrir. La taille et la vitesse de chargement sont
 sans enjeu ici.
 
-**Migration v1 → v2 :** le format v1 (un seul graphe global, `layers` plat) se migre en
-enveloppant le patch dans un deck unique et en rattachant le graphe existant au premier
-clip — voir §19.2. La fixture `tests/fixtures/patch_v1.json` n'est jamais régénérée.
+**Ce qui est sauvegardé.** La grille, chaque clip, l'opacité et le mode des pistes, le
+tempo, les trigs, et le clip actif de chaque piste : la composition revient et joue tout de
+suite, avec des phases reparties de zéro. `"state": null` demeure : un patch décrit une
+*configuration*, pas un instant. Ni la disposition des panneaux ni l'écran de sortie ne
+sont sauvegardés : les écrans changent d'une salle à l'autre (§8.4).
 
-**L'état n'est pas sauvegardé par défaut** (`"state": null`). Un patch décrit une
-*configuration*, pas un instant. Le sauvegarder est optionnel et explicite — utile pour
-reprendre une performance exactement où elle s'est arrêtée.
+**Un fichier se charge en entier ou pas du tout.** `patch` construit une `Composition`
+neuve. Toute erreur (JSON, version, `kind` inconnu, champ manquant, référence invalide)
+rend un `Result` avec un message, et la grille en cours ne change pas (§18.1). Un fichier
+trop volumineux pour une grille plausible est refusé avant d'allouer.
+
+**Un fichier ne s'abîme pas en écrivant.** L'écriture passe par un fichier temporaire
+synchronisé sur le disque, puis un renommage : un plantage laisse l'ancienne version
+intacte. Une valeur non finie est refusée à l'enregistrement : JSON ne l'exprime pas, et le
+fichier ne se rouvrirait plus.
 
 ### 19.2 Migrations
 
 ```rust
-fn migrate(raw: Value) -> Result<Patch, Error> {
-    let mut v = raw["version"].as_u64().ok_or(Error::NoVersion)?;
-    let mut data = raw;
-    while v < CURRENT_VERSION {
-        data = match v {
-            1 => migrate_1_to_2(data)?,
-            2 => migrate_2_to_3(data)?,
-            _ => return Err(Error::UnknownVersion(v)),
-        };
-        v += 1;
+fn migrate(mut data: Value) -> Result<Value, PatchError> {
+    let mut version = data["version"].as_u64().ok_or(PatchError::NoVersion)?;
+    if version == 0 || version > CURRENT_VERSION {
+        return Err(PatchError::UnknownVersion(version));
     }
-    serde_json::from_value(data).map_err(Into::into)
+    while version < CURRENT_VERSION {
+        data = match version {
+            // 1 => migrate_1_to_2(data)?,
+            _ => return Err(PatchError::UnknownVersion(version)),
+        };
+        version += 1;
+    }
+    Ok(data)
 }
 ```
+
+Le format réel commence à la version 1 : aucune migration n'existe encore. Le croquis
+initial décrivait une v2 et une migration depuis une v1 qui n'a jamais été écrite.
 
 Migrations **en chaîne**, une fonction par saut de version. Un patch v1 traverse
 `1→2→3` — on n'écrit jamais de migration directe `1→3`, qui doublerait le travail à
@@ -1966,7 +2038,7 @@ chaque nouvelle version.
 
 **Règle absolue :** tout changement du format incrémente `CURRENT_VERSION` **et**
 ajoute sa fonction de migration **et** un test qui charge un patch de l'ancienne
-version depuis `tests/fixtures/`. Les fixtures ne sont **jamais** régénérées — leur
+version depuis `crates/patch/tests/fixtures/`. Les fixtures ne sont **jamais** régénérées — leur
 valeur est précisément d'être anciennes.
 
 Une version **supérieure** à `CURRENT_VERSION` est refusée avec un message clair : un
@@ -2570,7 +2642,7 @@ appartient (`UiState`).
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Menu : Affichage (masquer un panneau), Sortie (§8.4)     │
+│ Menu : Fichier (§23.8), Affichage, Sortie (§8.4)         │
 ├──────────────────────────────────────────────────────────┤
 │ Grille : pistes × colonnes                               │
 ├──────────────────────────────────────────────────────────┤
@@ -2692,6 +2764,43 @@ sur une capture de la vraie fenêtre, avec un spectre simulé. **Pas encore essa
 trig sur de la vraie musique, et le glissé à la vraie souris. L'interface entière, panneau
 compris, a coûté 3,8 ms par frame en debug ; le coût du seul panneau n'a pas été isolé.
 
+### 23.8 Le fichier (étape 7e)
+
+**Le menu `Fichier`.** `Nouveau`, `Ouvrir…`, `Enregistrer` (Ctrl+S) et `Enregistrer sous…`.
+La barre montre le nom du fichier, suivi de `*` s'il reste des modifications. `Nouveau`
+revient à la grille de départ.
+
+**La boîte de dialogue ne bloque pas le moteur.** `rfd` l'ouvre hors du thread du moteur :
+une boîte bloquante figerait l'image sur la sortie tant qu'elle reste ouverte. Lecture et
+écriture du fichier se font sur un thread à part. L'encodage et le décodage restent
+synchrones : seul le disque peut être lent, et le remplacement de la grille a lieu entre
+deux frames.
+
+**Le parcours se teste sans fenêtre.** `FileFlow`, dans la bibliothèque d'`app`, est une
+machine à états sans `rfd` ni `winit` : elle reçoit les demandes et les réponses, et rend
+l'effet à produire. Le binaire se contente de produire ces effets.
+
+**Modifications non enregistrées.** Avant `Nouveau`, `Ouvrir…` ou de quitter, une fenêtre
+egui propose `Enregistrer`, `Ne pas enregistrer` et `Annuler`. Si `Enregistrer` échoue ou si
+l'utilisateur renonce, l'action prévue est abandonnée : rien ne se perd en silence. Quitter
+passe donc par `FileFlow`, plus directement par `event_loop.exit()`.
+
+**Ce qui compte comme une modification.** `Command::is_edit`, un `match` exhaustif sans cas
+par défaut : une nouvelle commande oblige à trancher. Déclencher un clip n'en est pas une :
+c'est jouer, et un trig en déclenche des centaines. Régler, poser, retirer et changer de
+tempo en sont. Le clip actif n'est donc enregistré qu'avec une vraie sauvegarde.
+
+**Au lancement.** Priorité à `--patch fichier`, puis au dernier fichier ouvert ou
+enregistré, puis à la grille de départ. Le chemin du dernier fichier se garde dans le
+dossier de configuration du système, sans nouvelle dépendance. S'il a disparu ou se refuse,
+l'application démarre sur la grille de départ et le dit dans la barre : un lancement ne doit
+jamais échouer à cause d'un fichier.
+
+**Remplacer la grille.** `Engine::replace_composition`, entre deux frames, vide les
+commandes et les poses en attente, qui visaient l'ancienne grille. Les identifiants de la
+nouvelle grille peuvent coïncider avec les anciens : l'interface oublie sa sélection. La
+sortie plein écran reste ouverte et montre la nouvelle image.
+
 ---
 
 ## 24. Stratégie de test
@@ -2749,6 +2858,6 @@ défaut n'apparaît pas sur quelques exécutions.
 
 ### 24.4 Fixtures de patchs
 
-`tests/fixtures/` contient un patch par version de format (§19.2). **Jamais
+`crates/patch/tests/fixtures/` contient un patch par version de format (§19.2). **Jamais
 régénérées** — un fichier v1 écrit aujourd'hui doit rester tel quel pour prouver dans
 deux ans que la migration fonctionne encore.
