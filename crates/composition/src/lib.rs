@@ -56,4 +56,4 @@ pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup};
 pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 pub use position::{BeatRate, PositionSignal};
 pub use transport::{sanitize_bpm, PlayMode, TempoController, Transport, MAX_BPM, MIN_BPM};
-pub use trig::{Trig, TrigSlot, TrigTarget};
+pub use trig::{RestoredTrig, Trig, TrigSlot, TrigTarget};

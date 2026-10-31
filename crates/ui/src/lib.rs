@@ -5,8 +5,8 @@
 //! [`draw`] lit la grille, dessine avec egui et remplit une liste de `Command`
 //! qu'`Engine` applique entre deux frames (§23), une liste de [`Placement`] pour
 //! les clips glissés depuis la bibliothèque (§23.6), et au plus un
-//! [`OutputRequest`] pour la sortie plein écran (§8.4). Elle ne mute rien d'autre
-//! que son [`UiState`].
+//! [`OutputRequest`] pour la sortie plein écran (§8.4) et un [`FileRequest`] pour
+//! le fichier (§23.8). Elle ne mute rien d'autre que son [`UiState`].
 //!
 //! **Ne connaît ni wgpu ni `winit` :** `egui-wgpu` et `egui-winit` restent dans
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
@@ -65,6 +65,41 @@ pub enum OutputRequest {
     Close,
 }
 
+/// L'état du fichier, déjà mis en mots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileView<'a> {
+    /// Le nom du fichier, suivi de `*` s'il reste des modifications.
+    pub title: &'a str,
+    /// Ce qui vient de se passer : un enregistrement, un refus.
+    pub status: &'a str,
+    /// Il reste des modifications : la question attend sa réponse.
+    pub confirming: bool,
+}
+
+/// La réponse à la question des modifications non enregistrées.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirmation {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// Ce que l'interface demande au fichier. Le parcours est décidé par `app`
+/// (§23.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileRequest {
+    New,
+    Open,
+    Save,
+    SaveAs,
+    Confirm(Confirmation),
+}
+
+/// Enregistrer : le seul raccourci du fichier. Ouvrir et remplacer la grille
+/// restent dans le menu : sur scène, une touche ne doit pas changer l'image.
+const SAVE_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+
 /// Ce que l'interface se rappelle d'une frame à l'autre.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiState {
@@ -85,6 +120,17 @@ pub struct UiState {
     pub known_trigs: Option<usize>,
     /// La courbe de crêtes du spectre.
     pub peak_hold: [f32; SPECTRUM_BANDS],
+}
+
+impl UiState {
+    /// La grille a été remplacée : ses identifiants visaient l'ancienne, et
+    /// pourraient coïncider avec ceux de la nouvelle (§23.8).
+    pub fn forget_grid(&mut self) {
+        self.selected = None;
+        self.selected_trig = None;
+        self.zone_gesture = None;
+        self.known_trigs = None;
+    }
 }
 
 impl Default for UiState {
@@ -124,9 +170,11 @@ pub struct FrameView<'a> {
     /// L'état de l'entrée audio, déjà mis en mots.
     pub audio_status: &'a str,
     pub output: OutputView<'a>,
+    pub file: FileView<'a>,
 }
 
-/// Dessine toute l'interface et remplit `commands`, `placements` et `output`.
+/// Dessine toute l'interface et remplit `commands`, `placements`, `output` et
+/// `file`.
 pub fn draw(
     ui: &mut Ui,
     state: &mut UiState,
@@ -134,8 +182,14 @@ pub fn draw(
     commands: &mut Vec<Command>,
     placements: &mut Vec<Placement>,
     output: &mut Option<OutputRequest>,
+    file: &mut Option<FileRequest>,
 ) {
-    egui::Panel::top("menu").show(ui, |ui| menu(ui, state, &view.output, output));
+    if view.file.confirming {
+        confirmation(ui, view.file.title, file);
+    } else if ui.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT)) {
+        *file = Some(FileRequest::Save);
+    }
+    egui::Panel::top("menu").show(ui, |ui| menu(ui, state, &view.output, output, file));
     if state.show_grid {
         egui::Panel::top("grille")
             .resizable(true)
@@ -173,8 +227,10 @@ fn menu(
     state: &mut UiState,
     view: &OutputView<'_>,
     output: &mut Option<OutputRequest>,
+    file: &mut Option<FileRequest>,
 ) {
     egui::MenuBar::new().ui(ui, |ui| {
+        ui.menu_button("Fichier", |ui| file_menu(ui, file));
         ui.menu_button("Affichage", |ui| {
             ui.checkbox(&mut state.show_grid, "Grille");
             ui.checkbox(&mut state.show_monitor, "Monitor");
@@ -183,6 +239,45 @@ fn menu(
             ui.checkbox(&mut state.show_library, "Bibliothèque");
         });
         ui.menu_button("Sortie", |ui| output_menu(ui, view, output));
+    });
+}
+
+fn file_menu(ui: &mut Ui, file: &mut Option<FileRequest>) {
+    let items = [
+        ("Nouveau", FileRequest::New),
+        ("Ouvrir…", FileRequest::Open),
+        ("Enregistrer", FileRequest::Save),
+        ("Enregistrer sous…", FileRequest::SaveAs),
+    ];
+    for (libelle, demande) in items {
+        if ui.button(libelle).clicked() {
+            *file = Some(demande);
+            ui.close();
+        }
+    }
+}
+
+/// Avant de perdre des modifications. Modale : rien d'autre ne se clique, et
+/// un clic à côté ne vaut pas réponse.
+fn confirmation(ui: &Ui, title: &str, file: &mut Option<FileRequest>) {
+    egui::Modal::new(ui.scope_id().with("confirmation")).show(ui.ctx(), |ui| {
+        ui.label(format!(
+            "« {} » a des modifications non enregistrées.",
+            title.trim_end_matches(" *")
+        ));
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let choix = [
+                ("Enregistrer", Confirmation::Save),
+                ("Ne pas enregistrer", Confirmation::Discard),
+                ("Annuler", Confirmation::Cancel),
+            ];
+            for (libelle, reponse) in choix {
+                if ui.button(libelle).clicked() {
+                    *file = Some(FileRequest::Confirm(reponse));
+                }
+            }
+        });
     });
 }
 
@@ -370,6 +465,11 @@ fn toolbar(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
         ui.label(RichText::new(view.outputs).color(theme::TEXT_DIM));
         ui.separator();
         ui.label(RichText::new(view.output.status).color(theme::TEXT_DIM));
+        ui.separator();
+        ui.label(RichText::new(view.file.title).color(theme::TEXT_DIM));
+        if !view.file.status.is_empty() {
+            ui.label(RichText::new(view.file.status).color(theme::TEXT_DIM));
+        }
     });
 }
 
@@ -531,11 +631,17 @@ mod tests {
         commands: Vec<Command>,
         placements: Vec<Placement>,
         output: Option<OutputRequest>,
+        file: Option<FileRequest>,
     }
 
     /// Une interface sans écran, qui garde les commandes émises.
     fn harness(composition: &Composition) -> Harness<'_, Etat> {
         harness_sortie(composition, Vec::new(), None, "Sortie fermée")
+    }
+
+    /// Le même, la question des modifications posée ou non.
+    fn harness_fichier(composition: &Composition, confirming: bool) -> Harness<'_, Etat> {
+        harness_complet(composition, Vec::new(), None, "Sortie fermée", confirming)
     }
 
     /// Le même, avec un état de la sortie.
@@ -545,11 +651,22 @@ mod tests {
         ouverte: Option<usize>,
         statut: &'a str,
     ) -> Harness<'a, Etat> {
+        harness_complet(composition, ecrans, ouverte, statut, false)
+    }
+
+    fn harness_complet<'a>(
+        composition: &'a Composition,
+        ecrans: Vec<Screen>,
+        ouverte: Option<usize>,
+        statut: &'a str,
+        confirming: bool,
+    ) -> Harness<'a, Etat> {
         let etat = Etat {
             ui: UiState::default(),
             commands: Vec::new(),
             placements: Vec::new(),
             output: None,
+            file: None,
         };
         let spectre = Spectrum::default();
         Harness::builder()
@@ -569,6 +686,11 @@ mod tests {
                             open: ouverte,
                             status: statut,
                         },
+                        file: FileView {
+                            title: "concert.frogenx *",
+                            status: "Enregistré : concert.frogenx",
+                            confirming,
+                        },
                     };
                     draw(
                         ui,
@@ -577,6 +699,7 @@ mod tests {
                         &mut etat.commands,
                         &mut etat.placements,
                         &mut etat.output,
+                        &mut etat.file,
                     );
                 },
                 etat,
@@ -765,6 +888,99 @@ mod tests {
         let statut = "Sortie fermée : écran débranché";
         let h = harness_sortie(&g.composition, deux_ecrans(), None, statut);
         assert!(h.query_by_label(statut).is_some());
+    }
+
+    fn clique_fichier(libelle: &str) -> Option<FileRequest> {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Fichier").click();
+        h.run();
+        h.get_by_label(libelle).click();
+        h.run();
+        assert!(h.state().commands.is_empty(), "la grille n'en sait rien");
+        h.state().file
+    }
+
+    #[test]
+    fn le_menu_fichier_emet_chaque_demande() {
+        assert_eq!(clique_fichier("Nouveau"), Some(FileRequest::New));
+        assert_eq!(clique_fichier("Ouvrir…"), Some(FileRequest::Open));
+        assert_eq!(clique_fichier("Enregistrer"), Some(FileRequest::Save));
+        assert_eq!(
+            clique_fichier("Enregistrer sous…"),
+            Some(FileRequest::SaveAs)
+        );
+    }
+
+    #[test]
+    fn ctrl_s_enregistre() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+        h.run();
+        assert_eq!(h.state().file, Some(FileRequest::Save));
+    }
+
+    #[test]
+    fn la_barre_dit_le_fichier_et_ce_qui_vient_de_se_passer() {
+        let g = grille();
+        let h = harness(&g.composition);
+        assert!(h.query_by_label("concert.frogenx *").is_some());
+        assert!(h.query_by_label("Enregistré : concert.frogenx").is_some());
+    }
+
+    #[test]
+    fn sans_question_la_fenetre_n_apparait_pas() {
+        let g = grille();
+        let h = harness_fichier(&g.composition, false);
+        assert!(h.query_by_label("Ne pas enregistrer").is_none());
+    }
+
+    #[test]
+    fn la_question_nomme_le_fichier_et_emet_la_reponse() {
+        for (libelle, reponse) in [
+            ("Enregistrer", Confirmation::Save),
+            ("Ne pas enregistrer", Confirmation::Discard),
+            ("Annuler", Confirmation::Cancel),
+        ] {
+            let g = grille();
+            let mut h = harness_fichier(&g.composition, true);
+            h.run();
+            assert!(h
+                .query_by_label("« concert.frogenx » a des modifications non enregistrées.")
+                .is_some());
+            h.get_by_label(libelle).click();
+            h.run();
+            assert_eq!(h.state().file, Some(FileRequest::Confirm(reponse)));
+        }
+    }
+
+    #[test]
+    fn la_question_empeche_de_cliquer_la_grille() {
+        let g = grille();
+        let mut h = harness_fichier(&g.composition, true);
+        h.run();
+        h.get_by_label("Alpha").click();
+        h.run();
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn oublier_la_grille_oublie_la_selection() {
+        let g = grille();
+        let mut etat = UiState {
+            selected: Some((g.piste, g.clips[0])),
+            zone_gesture: Some(ZoneGesture::Draw {
+                from: (0.1, 0.5),
+                to: (0.2, 0.6),
+            }),
+            known_trigs: Some(3),
+            ..UiState::default()
+        };
+        etat.forget_grid();
+        assert_eq!(etat.selected, None);
+        assert_eq!(etat.zone_gesture, None);
+        assert_eq!(etat.known_trigs, None);
     }
 
     #[test]
@@ -1318,39 +1534,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn le_panneau_dit_d_ou_vient_le_son_et_se_masque() {
-        let g = grille();
-        let mut h = harness(&g.composition);
-        assert!(h.query_by_label("Micro — 48000 Hz").is_some());
-        h.state_mut().ui.show_audio = false;
-        h.run();
-        assert!(h.query_by_label("Spectre").is_none());
-    }
-
-    #[test]
-    fn un_trig_retire_ne_reste_pas_selectionne() {
-        let (mut g, a) = grille_avec_zone();
-        let b = g.composition.add_default_trig().unwrap();
-        g.composition.remove_trig(b);
-        let mut h = harness(&g.composition);
-        h.state_mut().ui.selected_trig = Some(b);
-        h.run();
-        assert!(
-            h.query_by_label("Recaler").is_none(),
-            "{a:?} n'est pas choisi"
-        );
-    }
-
-    #[test]
-    fn le_monitor_garde_ses_proportions() {
-        assert_eq!(
-            fit(egui::vec2(1600.0, 400.0), 2.0),
-            egui::vec2(800.0, 400.0)
-        );
-        assert_eq!(fit(egui::vec2(400.0, 900.0), 2.0), egui::vec2(400.0, 200.0));
-    }
-
     /// Ouvre une liste de la barre d'analyse et y choisit une valeur.
     fn choisis(h: &mut Harness<'_, Etat>, liste: &str, valeur: &str) {
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, liste)
@@ -1396,6 +1579,39 @@ mod tests {
         champ(&h, "Fenêtre").set_value_accesskit(250.0);
         h.run();
         assert_eq!(h.state().commands, vec![Command::SetAnalysisWindow(0.25)]);
+    }
+
+    #[test]
+    fn le_panneau_dit_d_ou_vient_le_son_et_se_masque() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        assert!(h.query_by_label("Micro — 48000 Hz").is_some());
+        h.state_mut().ui.show_audio = false;
+        h.run();
+        assert!(h.query_by_label("Spectre").is_none());
+    }
+
+    #[test]
+    fn un_trig_retire_ne_reste_pas_selectionne() {
+        let (mut g, a) = grille_avec_zone();
+        let b = g.composition.add_default_trig().unwrap();
+        g.composition.remove_trig(b);
+        let mut h = harness(&g.composition);
+        h.state_mut().ui.selected_trig = Some(b);
+        h.run();
+        assert!(
+            h.query_by_label("Recaler").is_none(),
+            "{a:?} n'est pas choisi"
+        );
+    }
+
+    #[test]
+    fn le_monitor_garde_ses_proportions() {
+        assert_eq!(
+            fit(egui::vec2(1600.0, 400.0), 2.0),
+            egui::vec2(800.0, 400.0)
+        );
+        assert_eq!(fit(egui::vec2(400.0, 900.0), 2.0), egui::vec2(400.0, 200.0));
     }
 
     #[test]

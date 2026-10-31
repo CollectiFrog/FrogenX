@@ -29,8 +29,22 @@ pub struct Deck {
     layer_groups: Vec<LayerGroupId>,
 }
 
+impl Deck {
+    /// Ses groupes, de bas en haut.
+    pub fn groups(&self) -> &[LayerGroupId] {
+        &self.layer_groups
+    }
+}
+
 pub struct LayerGroup {
     layers: Vec<LayerId>,
+}
+
+impl LayerGroup {
+    /// Ses pistes, de bas en haut.
+    pub fn layers(&self) -> &[LayerId] {
+        &self.layers
+    }
 }
 
 /// Piste verticale : une case par colonne, un clip à la fois actif.
@@ -183,6 +197,13 @@ impl Composition {
         self.active_deck
     }
 
+    /// Aucun deck n'est plus actif, s'il s'agissait de `id`.
+    pub fn remove_active_deck(&mut self, id: DeckId) {
+        if self.active_deck == Some(id) {
+            self.active_deck = None;
+        }
+    }
+
     pub fn set_active_deck(&mut self, id: DeckId) -> bool {
         let existe = self.deck(id).is_some();
         if existe {
@@ -203,6 +224,19 @@ impl Composition {
                 out.extend_from_slice(&groupe.layers);
             }
         }
+    }
+
+    /// Les decks, dans l'ordre de leurs emplacements.
+    pub fn decks(&self) -> Vec<DeckId> {
+        self.decks
+            .ids()
+            .into_iter()
+            .map(|(i, g)| DeckId::new(i, g))
+            .collect()
+    }
+
+    pub fn layer_group(&self, id: LayerGroupId) -> Option<&LayerGroup> {
+        self.layer_groups.get(id.index(), id.generation())
     }
 
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {

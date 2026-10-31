@@ -10,7 +10,9 @@
 //! [`Divider`] compte les fronts de n'importe quelle porte : il ne sait pas
 //! que la sienne vient de l'audio.
 
-use frogenx_core::{Ctx, NodeState, Param, Signal, SPECTRUM_MAX_HZ, SPECTRUM_MIN_HZ};
+use frogenx_core::{
+    Ctx, NodeState, Param, Signal, Spec, SpecError, SPECTRUM_MAX_HZ, SPECTRUM_MIN_HZ,
+};
 
 /// Plus grand diviseur accepté. Saturé chez le consommateur (§18.4).
 pub const MAX_DIVISION: f32 = 1024.0;
@@ -76,7 +78,28 @@ impl SpectrumZone {
     }
 }
 
+impl SpectrumZone {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            freq_min: spec.param("freq_min")?,
+            freq_max: spec.param("freq_max")?,
+            level_min: spec.param("level_min")?,
+            level_max: spec.param("level_max")?,
+            hysteresis: spec.param("hysteresis")?,
+        })
+    }
+}
+
 impl Signal for SpectrumZone {
+    fn spec(&self) -> Spec {
+        Spec::new("SpectrumZone")
+            .with("freq_min", self.freq_min)
+            .with("freq_max", self.freq_max)
+            .with("level_min", self.level_min)
+            .with("level_max", self.level_max)
+            .with("hysteresis", self.hysteresis)
+    }
+
     // slots[0] = ZoneState, en f32 : 0 sous la zone, 1 ouverte, 2 passée dessus
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let f = |p: Param| p.eval(ctx).clamp(SPECTRUM_MIN_HZ, SPECTRUM_MAX_HZ);
@@ -141,7 +164,22 @@ impl Divider {
     }
 }
 
+impl Divider {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            input: spec.param("input")?,
+            every: spec.param("every")?,
+        })
+    }
+}
+
 impl Signal for Divider {
+    fn spec(&self) -> Spec {
+        Spec::new("Divider")
+            .with("input", self.input)
+            .with("every", self.every)
+    }
+
     // slots[0] = 1.0 si l'entrée était haute à la frame précédente
     // slots[1] = fronts comptés depuis le dernier passage, dans [0, every)
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {

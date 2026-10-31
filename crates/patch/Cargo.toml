@@ -1,0 +1,20 @@
+[package]
+name = "frogenx-patch"
+description = "Format de fichier : Composition ↔ JSON, version, écriture sûre (§19)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Ni GPU ni carte son : un fichier se lit et s'écrit en CI. Seule crate à connaître
+# le JSON, pour que `core` reste sans dépendance (§19.1).
+[dependencies]
+frogenx-core.workspace = true
+frogenx-osc.workspace = true
+frogenx-shape.workspace = true
+frogenx-composition.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+frogenx-library.workspace = true

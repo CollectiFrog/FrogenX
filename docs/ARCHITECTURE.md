@@ -1203,7 +1203,7 @@ place en dernier.
 ## 10. Structure des crates
 
 Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
-`composition`, `audio`, `library`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+`composition`, `audio`, `library`, `patch`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -1215,7 +1215,7 @@ frogenx/
 ├── audio/     # cpal, FFT, spectre → AudioFeatures ✅ (core, cpal, rustfft, rtrb, triple_buffer)
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Trig, Command ✅ (core, osc, shape)
 ├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
-├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre (core, osc, shape, composition, serde_json)
+├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre ✅ (core, osc, shape, composition, serde_json)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
@@ -1320,8 +1320,8 @@ maintenable à mesure qu'il grossit.
 | Audio | `cpal` 0.18 ✅ | capture multiplateforme, dans `audio` seulement |
 | FFT | `rustfft` 6 ✅ | analyse spectrale |
 | Lock-free | `rtrb` 0.4, `triple_buffer` 9 ✅ | passage audio → rendu |
-| Sérialisation | `serde`, `serde_json` | sauvegarde de patchs, dans `patch` seulement pour le JSON (§19) |
-| Dialogues | `rfd` | boîtes de fichiers du système, dans `app` seulement (§23.8) |
+| Sérialisation | `serde`, `serde_json` ✅ | sauvegarde de patchs, dans `patch` seulement pour le JSON (§19) |
+| Dialogues | `rfd` ✅ | boîtes de fichiers du système, dans `app` seulement (§23.8) |
 | Encodage | binaire `ffmpeg` (pipe) | enregistrement, décodage de clips (§9.3) |
 | Éclairage | `artnet` ou équivalent | sortie Art-Net / DMX (§3bis, §8) |
 | Scripting | `mlua` | logique de composition personnalisée (§23.4) |
@@ -1362,7 +1362,7 @@ couches complètes empilées.
 | 7b | ✅ Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** — *fait* : `cargo run` |
 | 7c | ✅ Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | **une grille qu'on remplit soi-même** — *fait* : `cargo run`, glisser un clip sur une case |
 | 7d | ✅ Sortie plein écran sur un second écran (`Preview`, §8.4) | **usage sur scène** — *fait* : `cargo run`, menu `Sortie` |
-| 7e | Sauvegarde des patchs (§19) | retrouver son travail |
+| 7e | ✅ Sauvegarde des patchs (§19, §23.8) | **retrouver son travail** — *fait* : `cargo run`, menu `Fichier` |
 | 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) — *capture, spectre et trig faits, avant 7d et 7e à la demande de l'utilisateur (§3bis.6) ; restent le BPM calculé et les autres features* | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
@@ -2900,10 +2900,33 @@ dossier de configuration du système, sans nouvelle dépendance. S'il a disparu 
 l'application démarre sur la grille de départ et le dit dans la barre : un lancement ne doit
 jamais échouer à cause d'un fichier.
 
+**L'ordre d'un graphe est stable.** Le tri topologique prend le plus petit index d'abord :
+un graphe relu d'un fichier, déjà trié, garde son ordre. Sans cela, réenregistrer un fichier
+inchangé réordonnait ses nœuds, et git aurait vu un fichier différent. Un test l'a révélé.
+
 **Remplacer la grille.** `Engine::replace_composition`, entre deux frames, vide les
 commandes et les poses en attente, qui visaient l'ancienne grille. Les identifiants de la
 nouvelle grille peuvent coïncider avec les anciens : l'interface oublie sa sélection. La
 sortie plein écran reste ouverte et montre la nouvelle image.
+
+**Ce qui est vérifié, et comment.** `FileFlow` couvre le parcours sans fenêtre, y compris
+les cas de perte : une écriture ratée ou un nom refusé ne quitte pas. Les 24 clips du
+catalogue relus donnent la même forme, point par point, sur 240 frames ; une grille relue
+donne les mêmes pixels. Les fichiers abîmés sont refusés un par un, sans toucher à la grille.
+Une fixture de la version 1, jamais régénérée, doit se relire et se réécrire à l'identique :
+un format changé sans nouvelle version fait échouer ce test.
+
+Sur la vraie fenêtre (Windows, Vulkan), un binaire temporaire a enregistré sur le disque,
+ouvert la boîte `Enregistrer sous`, y a renoncé, puis a demandé à quitter avec des
+modifications. **La boîte ouverte ne ralentit pas le moteur** : 60 fps, intervalles de 15,9
+à 17,5 ms sur tout l'essai. Enregistrer ne s'y voit pas non plus. La question a été regardée
+sur une capture. Le lancement a été essayé avec le dernier fichier, `--patch`, puis avec un
+fichier disparu, abîmé ou d'une version future : l'application démarre et le dit.
+
+**Pas encore essayés :** le menu `Fichier` et la question à la vraie souris (un clic posté
+n'atteint pas egui, §23.5), une ouverture réelle par la boîte `Ouvrir…`, Ctrl+S dans la vraie
+fenêtre (couvert par un clic simulé), et Linux et macOS, où `rfd` a ses propres contraintes
+de thread.
 
 ---
 

@@ -92,6 +92,40 @@ pub enum Command {
     SetAnalysisWindow(f32),
 }
 
+impl Command {
+    /// Change-t-elle ce qu'un fichier enregistre (§23.8) ? Déclencher est jouer,
+    /// pas modifier. Sans cas par défaut : une nouvelle commande oblige à trancher.
+    pub fn is_edit(&self) -> bool {
+        match self {
+            Self::TriggerClip { .. }
+            | Self::TriggerColumn { .. }
+            | Self::ClearLayer { .. }
+            | Self::ResetTrigCount(_) => false,
+            Self::SetLayerOpacity { .. }
+            | Self::SetParam { .. }
+            | Self::SetDepth { .. }
+            | Self::SetClipSpeed { .. }
+            | Self::AddColumn
+            | Self::RemoveColumn { .. }
+            | Self::AddLayer
+            | Self::RemoveLayer { .. }
+            | Self::RemoveClip { .. }
+            | Self::SetActiveDeck(_)
+            | Self::SetBpm(_)
+            | Self::TapTempo
+            | Self::AddTrig
+            | Self::AddTrigAt { .. }
+            | Self::RemoveTrig(_)
+            | Self::SetTrigParam { .. }
+            | Self::SetTrigTarget { .. }
+            | Self::SetAnalysisMethod(_)
+            | Self::SetFreqScale(_)
+            | Self::SetAmpScale(_)
+            | Self::SetAnalysisWindow(_) => true,
+        }
+    }
+}
+
 impl Composition {
     /// Applique une commande. Rend `false` si elle est refusée — identifiant
     /// périmé, tempo non fini : jamais de panique (§18.1).
@@ -542,6 +576,17 @@ mod tests {
         assert_eq!(reglage.freq_scale, FreqScale::Linear);
         assert_eq!(reglage.amp_scale, AmpScale::Linear);
         assert_eq!(reglage.window, 0.25);
+    }
+
+    #[test]
+    fn regler_l_analyse_est_une_modification_du_fichier() {
+        assert!(Command::SetAnalysisWindow(0.1).is_edit());
+        assert!(Command::SetFreqScale(FreqScale::Mel).is_edit());
+        let trace = Command::AddTrigAt {
+            freq: (20.0, 40.0),
+            level: (0.1, 0.2),
+        };
+        assert!(trace.is_edit());
     }
 
     #[test]

@@ -25,7 +25,8 @@ crates/render/       compositeur, readback, PNG                      ← core, l
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
                      à venir : NDI / Spout / Syphon / recorder
 crates/library/      clips prédéfinis, grille de départ        ← core, osc, shape, composition ✅
-crates/ui/           egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ← core, composition, library, egui ✅
+crates/patch/        format de fichier, Composition ↔ JSON     ← core, osc, shape, composition, serde_json ✅
+crates/ui/           egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ← core, osc, composition, library, egui ✅
 crates/app/          Engine (sans fenêtre) + binaire `frogenx` (`cargo run`) ← tout le reste, winit, egui-wgpu ✅
 ```
 
@@ -65,7 +66,8 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 | Domaine | Crate | Statut |
 |---|---|---|
 | Maths | `glam` | ✅ (shape) |
-| Sérialisation | `serde` | ✅ (composition) |
+| Sérialisation | `serde`, `serde_json` | ✅ (composition ; le JSON dans `patch` seulement) |
+| Dialogues | `rfd` | ✅ (`app`) |
 | Rendu | `wgpu` **30** | ✅ (layer, render) — majeure épinglée |
 | Tessellation | `lyon_tessellation` | ✅ (layer) |
 | GPU, utilitaires | `bytemuck`, `pollster` | ✅ (layer, render) |

@@ -41,12 +41,14 @@ pub mod clock;
 pub mod graph;
 pub mod param;
 pub mod signal;
+pub mod spec;
 pub mod spectrum;
 
 pub use clock::{Clock, ClockMode};
-pub use graph::{Graph, GraphError};
+pub use graph::{Graph, GraphError, NodeView};
 pub use param::{NodeId, Param};
 pub use signal::{AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
+pub use spec::{Spec, SpecError, SpecValue};
 pub use spectrum::{
     sanitize_window, AmpScale, AnalysisMethod, AnalysisSettings, FreqScale, Spectrum,
     DEFAULT_WINDOW, FLOOR_DB, MAX_WINDOW, MIN_WINDOW, SPECTRUM_BANDS, SPECTRUM_MAX_HZ,

@@ -6,11 +6,20 @@
 use frogenx_app::{describe_outputs, Engine};
 use frogenx_layer::Gpu;
 use frogenx_output::{FormatPreference, PresentSurface};
-use frogenx_ui::{theme, FrameView, Monitor, OutputRequest, OutputView, UiState};
+use frogenx_ui::{
+    theme, FileRequest, FileView, FrameView, Monitor, OutputRequest, OutputView, UiState,
+};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event::WindowEvent;
 use winit::window::Window;
+
+/// Ce que l'interface demande aux fenêtres et au fichier, cette frame.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Requests {
+    pub output: Option<OutputRequest>,
+    pub file: Option<FileRequest>,
+}
 
 pub struct Gui {
     ctx: egui::Context,
@@ -88,7 +97,8 @@ impl Gui {
         fps: f32,
         audio_status: &str,
         sortie: OutputView<'_>,
-    ) -> Option<OutputRequest> {
+        fichier: FileView<'_>,
+    ) -> Requests {
         let debut = Instant::now();
         let input = self.winit.take_egui_input(window);
         let sorties = describe_outputs(&engine.output_statuses());
@@ -101,24 +111,26 @@ impl Gui {
             spectrum: &engine.audio().spectrum,
             audio_status,
             output: sortie,
+            file: fichier,
         };
         let mut commands = Vec::new();
         let mut placements = Vec::new();
-        let mut demande = None;
+        let mut demandes = Requests::default();
         let state = &mut self.state;
         let output = self.ctx.run_ui(input, |ui| {
             // egui peut rejouer une passe : seule la dernière compte, sinon
             // un clic se déclencherait deux fois.
             commands.clear();
             placements.clear();
-            demande = None;
+            demandes = Requests::default();
             frogenx_ui::draw(
                 ui,
                 state,
                 &view,
                 &mut commands,
                 &mut placements,
-                &mut demande,
+                &mut demandes.output,
+                &mut demandes.file,
             );
         });
         self.winit
@@ -191,7 +203,12 @@ impl Gui {
             self.renderer.free_texture(&id);
         }
         self.spent += debut.elapsed();
-        demande
+        demandes
+    }
+
+    /// La grille a été remplacée.
+    pub fn forget_grid(&mut self) {
+        self.state.forget_grid();
     }
 
     /// Seul `app` a la fenêtre : c'est donc lui qui recrée une surface perdue.

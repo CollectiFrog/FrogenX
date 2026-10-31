@@ -23,9 +23,9 @@
 //! d'un contour, et un contour ouvert n'a pas de voisin au-delà de ses
 //! extrémités (§16.3).
 
-use crate::generator::{params, ParamDesc, ShapeGenerator, MAX_POINTS};
+use crate::generator::{describe, params, ParamDesc, ShapeGenerator, MAX_POINTS};
 use crate::path::Path;
-use frogenx_core::{Ctx, Graph, Param};
+use frogenx_core::{Ctx, Graph, Param, Spec};
 use frogenx_osc::value_noise_1d;
 use glam::Vec2;
 use std::f32::consts::TAU;
@@ -46,6 +46,11 @@ pub trait ShapeOp {
 
     /// Le `index`-ième paramètre de [`Self::params`], en écriture.
     fn param_mut(&mut self, index: usize) -> Option<&mut Param>;
+
+    /// Sa description pour le format de patch (§19.1), déduite de ses `Param`.
+    fn spec(&self) -> Spec {
+        describe(self.kind(), self.params())
+    }
 }
 
 /// Un générateur suivi d'une chaîne d'opérateurs.
@@ -81,6 +86,15 @@ impl ShapeGenerator for Chain {
 
     fn kind(&self) -> &'static str {
         "Chaîne"
+    }
+
+    fn spec(&self) -> Spec {
+        Spec::new(self.kind())
+            .with("source", vec![self.source.spec()])
+            .with(
+                "ops",
+                self.ops.iter().map(|op| op.spec()).collect::<Vec<_>>(),
+            )
     }
 
     /// Ceux de la source, puis ceux de chaque opérateur, dans l'ordre.
@@ -253,6 +267,11 @@ impl NoiseDisplace {
 }
 
 impl ShapeOp for NoiseDisplace {
+    /// La graine n'est pas un `Param` : `params` ne la décrit pas.
+    fn spec(&self) -> Spec {
+        describe(self.kind(), self.params()).with("graine", self.seed)
+    }
+
     params! {
         "Bruit";
         amount: "force", 0.0, 0.5;

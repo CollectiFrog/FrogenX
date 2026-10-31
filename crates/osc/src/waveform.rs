@@ -23,6 +23,26 @@ impl Waveform {
     /// Sortie dans `[-1, 1]` — bipolaire, conformément au §17. La phase est
     /// repliée dans `[0, 1)` : appeler avec `1.25` ou `-0.75` donne le même
     /// résultat que `0.25`.
+    /// Son nom dans un fichier (§19.1).
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Sine => "sine",
+            Self::Triangle => "triangle",
+            Self::Saw => "saw",
+            Self::Square => "square",
+        }
+    }
+
+    pub fn from_word(word: &str) -> Option<Self> {
+        match word {
+            "sine" => Some(Self::Sine),
+            "triangle" => Some(Self::Triangle),
+            "saw" => Some(Self::Saw),
+            "square" => Some(Self::Square),
+            _ => None,
+        }
+    }
+
     pub fn eval(self, phase: f32) -> f32 {
         let p = wrap01(phase);
         match self {

@@ -5,7 +5,7 @@
 //! l'organique (§5.3).
 
 use crate::waveform::{wrap01, Waveform};
-use frogenx_core::{Ctx, NodeState, Param, Signal};
+use frogenx_core::{Ctx, NodeState, Param, Signal, Spec, SpecError};
 
 /// Oscillateur à phase accumulée.
 ///
@@ -53,7 +53,30 @@ impl Oscillator {
     }
 }
 
+fn waveform_of(spec: &Spec) -> Result<Waveform, SpecError> {
+    Waveform::from_word(spec.word("waveform")?).ok_or_else(|| spec.field_error("waveform"))
+}
+
+impl Oscillator {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            waveform: waveform_of(spec)?,
+            freq: spec.param("freq")?,
+            amp: spec.param("amp")?,
+            phase_offset: spec.param("phase_offset")?,
+        })
+    }
+}
+
 impl Signal for Oscillator {
+    fn spec(&self) -> Spec {
+        Spec::new("Oscillator")
+            .with("waveform", self.waveform.word())
+            .with("freq", self.freq)
+            .with("amp", self.amp)
+            .with("phase_offset", self.phase_offset)
+    }
+
     // slots[0] = phase accumulée, en tours, repliée dans [0, 1)
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let freq = self.freq.eval(ctx);
@@ -107,7 +130,24 @@ impl Lfo {
     }
 }
 
+impl Lfo {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            waveform: waveform_of(spec)?,
+            freq: spec.param("freq")?,
+            unipolar: spec.bool("unipolar")?,
+        })
+    }
+}
+
 impl Signal for Lfo {
+    fn spec(&self) -> Spec {
+        Spec::new("Lfo")
+            .with("waveform", self.waveform.word())
+            .with("freq", self.freq)
+            .with("unipolar", self.unipolar)
+    }
+
     // slots[0] = phase accumulée, en tours
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let freq = self.freq.eval(ctx);
@@ -139,7 +179,17 @@ impl Signal for Lfo {
 /// détruirait la FM pour tous les autres consommateurs.
 pub struct Sum(pub Vec<Param>);
 
+impl Sum {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self(spec.params("inputs")?.to_vec()))
+    }
+}
+
 impl Signal for Sum {
+    fn spec(&self) -> Spec {
+        Spec::new("Sum").with("inputs", self.0.clone())
+    }
+
     fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
         self.0.iter().map(|p| p.eval(ctx)).sum()
     }
@@ -149,7 +199,17 @@ impl Signal for Sum {
 /// bipolaires.
 pub struct Product(pub Vec<Param>);
 
+impl Product {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self(spec.params("inputs")?.to_vec()))
+    }
+}
+
 impl Signal for Product {
+    fn spec(&self) -> Spec {
+        Spec::new("Product").with("inputs", self.0.clone())
+    }
+
     fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
         self.0.iter().map(|p| p.eval(ctx)).product()
     }
@@ -165,7 +225,24 @@ pub struct Mix {
     pub mix: Param,
 }
 
+impl Mix {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            a: spec.param("a")?,
+            b: spec.param("b")?,
+            mix: spec.param("mix")?,
+        })
+    }
+}
+
 impl Signal for Mix {
+    fn spec(&self) -> Spec {
+        Spec::new("Mix")
+            .with("a", self.a)
+            .with("b", self.b)
+            .with("mix", self.mix)
+    }
+
     fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
         let k = self.mix.eval(ctx).clamp(0.0, 1.0);
         self.a.eval(ctx) * (1.0 - k) + self.b.eval(ctx) * k

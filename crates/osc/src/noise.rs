@@ -9,7 +9,7 @@
 //! des valeurs proches. C'est ce qui produit un mouvement organique plutôt
 //! qu'un grésillement.
 
-use frogenx_core::{Ctx, NodeState, Param, Signal};
+use frogenx_core::{Ctx, NodeState, Param, Signal, Spec, SpecError};
 
 /// Hachage entier déterministe — même valeur sur toutes les plateformes.
 ///
@@ -114,7 +114,28 @@ impl Noise {
     }
 }
 
+impl Noise {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            rate: spec.param("rate")?,
+            amp: spec.param("amp")?,
+            seed: spec.int("seed")?,
+            octaves: spec.int("octaves")?,
+            persistence: spec.number("persistence")?,
+        })
+    }
+}
+
 impl Signal for Noise {
+    fn spec(&self) -> Spec {
+        Spec::new("Noise")
+            .with("rate", self.rate)
+            .with("amp", self.amp)
+            .with("seed", self.seed)
+            .with("octaves", self.octaves)
+            .with("persistence", self.persistence)
+    }
+
     // slots[0] = position accumulée dans l'espace du bruit
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let rate = self.rate.eval(ctx);

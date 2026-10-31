@@ -96,6 +96,10 @@ fn moteur(gpu: Gpu, composition: Composition) -> (Engine, Recu) {
 struct Compteur(Arc<AtomicU32>);
 
 impl Signal for Compteur {
+    fn spec(&self) -> frogenx_core::Spec {
+        frogenx_core::Spec::new("test")
+    }
+
     fn eval(&self, _t: f64, _ctx: &Ctx, _state: &mut NodeState) -> f32 {
         self.0.fetch_add(1, Ordering::Relaxed);
         0.0
@@ -556,6 +560,118 @@ fn fermer_une_sortie_laisse_tourner_le_moteur_et_les_autres_sorties() {
     assert_eq!(recu.0.lock().unwrap().len(), 2, "le moteur a continué");
     assert_eq!(moteur.output_statuses(), vec![SinkStatus::Active]);
     assert!(!moteur.remove_gpu_output(sortie));
+}
+
+#[test]
+fn jouer_ne_modifie_pas_mais_regler_si() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, _) = une_piste();
+    let (mut moteur, _) = moteur(gpu, composition);
+    assert!(!moteur.is_dirty());
+
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    moteur.frame(0.0);
+    assert!(!moteur.is_dirty(), "déclencher est jouer");
+
+    moteur.push(Command::SetBpm(90.0));
+    moteur.frame(0.0);
+    assert!(moteur.is_dirty());
+}
+
+#[test]
+fn une_commande_refusee_ne_compte_pas_comme_une_modification() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut moteur, _) = moteur(gpu, composition);
+    moteur.push(Command::SetBpm(f32::NAN));
+    moteur.frame(0.0);
+    assert!(!moteur.is_dirty());
+    assert_eq!(moteur.refused_commands(), 1);
+}
+
+#[test]
+fn poser_un_clip_est_une_modification() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, _, _) = une_piste();
+    let colonne = composition.columns()[0];
+    let (mut moteur, _) = moteur(gpu, composition);
+    moteur.place(piste, colonne, carre(Graph::new(), 0.0, 1.0));
+    moteur.frame(0.0);
+    assert!(moteur.is_dirty());
+}
+
+#[test]
+fn un_fichier_rouvert_donne_la_meme_image() {
+    let Some(gpu) = gpu() else { return };
+    let Some(gpu2) = self::gpu() else { return };
+    let rendre = |gpu: Gpu, grille: Composition| {
+        let (mut moteur, recu) = moteur(gpu, grille);
+        for _ in 0..30 {
+            moteur.frame(0.0);
+        }
+        moteur.finish();
+        let frames = recu.0.lock().unwrap();
+        frames.last().expect("une frame").pixels.to_vec()
+    };
+
+    // La grille de départ a un clip actif par piste une fois sa colonne jouée.
+    let mut grille = frogenx_library::starter();
+    let (colonne, mut pistes) = (grille.columns()[0], Vec::new());
+    grille.layers_in_order(&mut pistes);
+    grille.trigger_column(colonne, &pistes);
+    let texte = frogenx_patch::to_json(&grille).unwrap();
+    let relue = frogenx_patch::from_json(&texte).unwrap();
+
+    let a = rendre(gpu, grille);
+    let b = rendre(gpu2, relue);
+    assert!(a.iter().any(|o| *o != 0), "une image, pas du vide");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn remplacer_la_grille_oublie_ce_qui_visait_l_ancienne() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, _) = une_piste();
+    let colonne = composition.columns()[0];
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.set_dirty(true);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    moteur.place(piste, colonne, carre(Graph::new(), 0.0, 1.0));
+
+    let (nouvelle, _, _, _) = une_piste();
+    moteur.replace_composition(nouvelle);
+    moteur.frame(0.0);
+    moteur.finish();
+
+    assert_eq!(
+        moteur.refused_commands(),
+        0,
+        "rien n'a visé la nouvelle grille"
+    );
+    assert!(!moteur.is_dirty());
+    assert_eq!(
+        recu.dernier_pixel(SIZE.x / 2, SIZE.y / 2)[3],
+        0,
+        "rien ne joue"
+    );
+}
+
+#[test]
+fn la_grille_d_usine_joue_sa_premiere_colonne() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.play_starter(frogenx_library::starter());
+    moteur.frame(0.0);
+    moteur.finish();
+    assert!(!moteur.is_dirty());
+    assert_eq!(recu.dernier_pixel(0, 0)[3], 255, "le fond joue");
 }
 
 #[test]

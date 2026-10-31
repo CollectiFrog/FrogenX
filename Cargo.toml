@@ -7,6 +7,7 @@ members = [
     "crates/composition",
     "crates/audio",
     "crates/library",
+    "crates/patch",
     "crates/layer",
     "crates/render",
     "crates/output",
@@ -25,6 +26,7 @@ frogenx-shape = { path = "crates/shape" }
 frogenx-composition = { path = "crates/composition" }
 frogenx-audio = { path = "crates/audio" }
 frogenx-library = { path = "crates/library" }
+frogenx-patch = { path = "crates/patch" }
 frogenx-layer = { path = "crates/layer" }
 frogenx-render = { path = "crates/render" }
 frogenx-output = { path = "crates/output" }
@@ -32,6 +34,7 @@ frogenx-ui = { path = "crates/ui" }
 frogenx-app = { path = "crates/app" }
 glam = "0.29"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Majeure épinglée (§11) : wgpu change d'API à chaque majeure. Monter de
 # version est un commit délibéré, jamais l'effet d'un `cargo update`.
 wgpu = "30"
@@ -46,6 +49,8 @@ egui = { version = "0.37", features = ["default_fonts"] }
 egui-wgpu = "0.37"
 egui-winit = "0.37"
 egui_kittest = "0.37"
+# Boîtes de fichiers du système (§23.8), dans `app` seulement.
+rfd = "0.17"
 # Audio (§7) : capture, FFT, et le passage lock-free entre les trois threads.
 cpal = "0.18"
 rustfft = "6"

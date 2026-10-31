@@ -9,14 +9,17 @@
 //! cargo run                              # la fenêtre, jusqu'à sa fermeture
 //! cargo run -- --frames 120              # 120 frames, un bilan, puis quitte
 //! cargo run -- --output 2 --frames 120   # la même chose, sortie sur l'écran 2
+//! cargo run -- --patch concert.frogenx   # ouvre ce fichier
 //! ```
 //!
 //! Au clavier, en plus de l'interface : les touches 1 à 8 déclenchent les
 //! colonnes de la grille, Espace tape le tempo.
 
+mod files;
 mod gui;
 mod stage;
 
+use files::{Files, Reaction};
 use frogenx_app::{next_deadline, Engine, FrameRate};
 use frogenx_audio::AudioInput;
 use frogenx_composition::Command;
@@ -27,6 +30,7 @@ use frogenx_ui::OutputRequest;
 use glam::UVec2;
 use gui::Gui;
 use stage::Stage;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -44,7 +48,7 @@ const MONITOR_SIZE: UVec2 = UVec2::new(960, 540);
 /// 60 fps cible.
 const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
 
-const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN]";
+const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN] [--patch FICHIER]";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
@@ -53,6 +57,8 @@ struct Options {
     /// Ouvre la sortie sur cet écran, compté à partir de 1, dès le lancement :
     /// vérifie la sortie sans souris (§8.4).
     output: Option<usize>,
+    /// Ouvre ce fichier, plutôt que le dernier (§23.8).
+    patch: Option<PathBuf>,
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -69,6 +75,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 let ecran = ecran.and_then(|n| n.checked_sub(1));
                 options.output = Some(ecran.ok_or(USAGE)?);
             }
+            "--patch" => options.patch = Some(args.next().ok_or(USAGE)?.into()),
             _ => return Err(format!("argument inconnu : {arg}\n{USAGE}")),
         }
     }
@@ -116,6 +123,7 @@ struct Running {
     audio: Option<AudioInput>,
     audio_status: String,
     stage: Stage,
+    files: Files,
     rate: FrameRate,
     started: Instant,
     last: Instant,
@@ -124,7 +132,7 @@ struct Running {
 }
 
 impl Running {
-    fn start(event_loop: &ActiveEventLoop, sortie: Option<usize>) -> Result<Self, String> {
+    fn start(event_loop: &ActiveEventLoop, options: &Options) -> Result<Self, String> {
         let attributs = Window::default_attributes()
             .with_title("FrogenX")
             .with_inner_size(LogicalSize::new(1440.0, 900.0));
@@ -148,8 +156,8 @@ impl Running {
         let monitor = MonitorSink::new(&gpu, MONITOR_SIZE.x, MONITOR_SIZE.y);
         let aspect = MONITOR_SIZE.x as f32 / MONITOR_SIZE.y as f32;
         let gui = Gui::new(&window, &gpu, surface, &monitor.view(), aspect)?;
-        let grille = frogenx_library::starter();
-        let premiere = grille.columns().first().copied();
+        let (files, grille, usine) = Files::start(options.patch.clone());
+        let premiere = grille.columns().first().copied().filter(|_| usine);
         let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, grille);
         engine
             .add_output(OutputSink::Gpu(Box::new(monitor)))
@@ -170,7 +178,10 @@ impl Running {
         let maintenant = Instant::now();
         let mut stage = Stage::new(maintenant);
         stage.refresh(event_loop, &window, &mut engine, maintenant);
-        if let Some(ecran) = sortie {
+        if !files.status().is_empty() {
+            println!("{}", files.status());
+        }
+        if let Some(ecran) = options.output {
             stage.open(event_loop, ecran, &mut engine);
             println!("{}", stage.status());
         }
@@ -182,6 +193,7 @@ impl Running {
             audio,
             audio_status,
             stage,
+            files,
             rate: FrameRate::new(FRAME_PERIOD),
             started: maintenant,
             last: maintenant,
@@ -199,15 +211,27 @@ impl Running {
             self.audio_status = entree.status();
         }
         self.engine.frame(dt);
-        let demande = self.gui.draw(
+        let titre = self.files.title(self.engine.is_dirty());
+        let demandes = self.gui.draw(
             &self.window,
             &mut self.engine,
             self.rate.fps(),
             &self.audio_status,
             self.stage.view(),
+            self.files.view(&titre),
         );
         self.gui.recover(&self.window, self.engine.gpu());
-        match demande {
+        let mut reaction = self.files.poll(&self.window, &mut self.engine);
+        if let Some(demande) = demandes.file {
+            let suite = self.files.request(demande, &self.window, &mut self.engine);
+            reaction = if suite == Reaction::Nothing {
+                reaction
+            } else {
+                suite
+            };
+        }
+        self.react(reaction, event_loop);
+        match demandes.output {
             Some(OutputRequest::Open(ecran)) => {
                 self.stage.open(event_loop, ecran, &mut self.engine);
             }
@@ -231,6 +255,14 @@ impl Running {
             }
             Some(Action::Tap) => self.engine.push(Command::TapTempo),
             None => {}
+        }
+    }
+
+    fn react(&mut self, reaction: Reaction, event_loop: &ActiveEventLoop) {
+        match reaction {
+            Reaction::Nothing => {}
+            Reaction::GridReplaced => self.gui.forget_grid(),
+            Reaction::Quit => event_loop.exit(),
         }
     }
 
@@ -285,7 +317,7 @@ impl ApplicationHandler for App {
         if self.running.is_some() {
             return;
         }
-        match Running::start(event_loop, self.options.output) {
+        match Running::start(event_loop, &self.options) {
             Ok(running) => self.running = Some(running),
             Err(e) => {
                 self.failure = Some(e);
@@ -308,7 +340,13 @@ impl ApplicationHandler for App {
         }
         let garde_par_egui = running.gui.on_event(&running.window, &event);
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            // Pas de sortie directe : il reste peut-être de quoi enregistrer.
+            WindowEvent::CloseRequested => {
+                let reaction = running
+                    .files
+                    .close_requested(&running.window, &mut running.engine);
+                running.react(reaction, event_loop);
+            }
             WindowEvent::Resized(taille) => running.gui.resize(taille.width, taille.height),
             WindowEvent::KeyboardInput { event, .. } if !garde_par_egui => {
                 if let Some(key) = pressed_key(&event) {
@@ -383,9 +421,18 @@ mod tests {
             parse(&["--frames", "120"]),
             Ok(Options {
                 frames: Some(120),
-                output: None
+                ..Options::default()
             })
         );
+    }
+
+    #[test]
+    fn patch_designe_un_fichier() {
+        assert_eq!(
+            parse(&["--patch", "a.frogenx"]).unwrap().patch,
+            Some(PathBuf::from("a.frogenx"))
+        );
+        assert!(parse(&["--patch"]).is_err());
     }
 
     #[test]

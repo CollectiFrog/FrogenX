@@ -13,6 +13,7 @@ c'est ce qui les rend dangereux. Contrats détaillés : partie II de
 pub trait Signal {
     fn eval(&self, t: f64, ctx: &Ctx, state: &mut NodeState) -> f32;
     fn state_size(&self) -> usize { 0 }   // 0 = sans état
+    fn spec(&self) -> Spec;               // sa description, obligatoire (§19.1)
 }
 ```
 

@@ -1,7 +1,7 @@
 //! Le trait `ShapeGenerator` et le contrat des formes — §16.3.
 
 use crate::path::Path;
-use frogenx_core::{Ctx, Graph, Param};
+use frogenx_core::{Ctx, Graph, Param, Spec};
 
 /// Tout ce qui produit une forme.
 ///
@@ -40,6 +40,18 @@ pub trait ShapeGenerator {
 
     /// Le `index`-ième paramètre de [`Self::params`], en écriture.
     fn param_mut(&mut self, index: usize) -> Option<&mut Param>;
+
+    /// Sa description pour le format de patch (§19.1), déduite de ses `Param`.
+    fn spec(&self) -> Spec {
+        describe(self.kind(), self.params())
+    }
+}
+
+/// Une forme ou un effet, décrit par ses `Param` nommés.
+pub(crate) fn describe(kind: &str, params: Vec<ParamDesc>) -> Spec {
+    params
+        .into_iter()
+        .fold(Spec::new(kind), |spec, p| spec.with(p.name, p.value))
 }
 
 /// Un paramètre réglable, décrit pour qui ne connaît pas le type de la forme.

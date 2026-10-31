@@ -6,6 +6,9 @@
 
 use crate::param::NodeId;
 use crate::signal::{AudioFeatures, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
+use crate::spec::Spec;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 /// Erreurs du régime **édition** (§18.1) : câblage, suppression, chargement.
 ///
@@ -53,6 +56,14 @@ struct Slot {
     /// Offset et longueur de l'état de ce nœud dans `state`.
     state_off: usize,
     state_len: usize,
+}
+
+/// Un nœud décrit, pour le format de patch (§19.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeView {
+    pub id: NodeId,
+    pub spec: Spec,
+    pub deps: Vec<NodeId>,
 }
 
 /// Le graphe de signaux.
@@ -350,8 +361,28 @@ impl Graph {
         false
     }
 
-    /// Tri topologique (Kahn). Recalculé au câblage, pas à chaque frame.
+    /// Les nœuds vivants, chacun après ses dépendances.
+    pub fn nodes(&self) -> Vec<NodeView> {
+        self.topological_order()
+            .into_iter()
+            .filter_map(|i| {
+                let slot = &self.slots[i as usize];
+                Some(NodeView {
+                    id: NodeId::new(i, slot.gen),
+                    spec: slot.signal.as_ref()?.spec(),
+                    deps: slot.deps.clone(),
+                })
+            })
+            .collect()
+    }
+
     fn rebuild_order(&mut self) {
+        self.order = self.topological_order();
+        self.order_dirty = false;
+    }
+
+    /// Tri topologique (Kahn). Recalculé au câblage, pas à chaque frame.
+    fn topological_order(&self) -> Vec<u32> {
         let n = self.slots.len();
         let mut indegree = vec![0u32; n];
         // `deps` pointe vers les prérequis ; l'arête va donc dep -> nœud.
@@ -367,12 +398,15 @@ impl Graph {
             }
         }
 
-        let mut queue: Vec<u32> = (0..n as u32)
+        // Le plus petit index d'abord : un graphe relu d'un fichier, déjà trié,
+        // garde son ordre, et le réenregistrer ne change pas le texte (§19.1).
+        let mut queue: BinaryHeap<Reverse<u32>> = (0..n as u32)
             .filter(|&i| self.slots[i as usize].signal.is_some() && indegree[i as usize] == 0)
+            .map(Reverse)
             .collect();
 
         let mut order = Vec::with_capacity(n);
-        while let Some(i) = queue.pop() {
+        while let Some(Reverse(i)) = queue.pop() {
             order.push(i);
             for (j, slot) in self.slots.iter().enumerate() {
                 if slot.signal.is_none() {
@@ -381,14 +415,13 @@ impl Graph {
                 if slot.deps.iter().any(|d| d.index() == i) {
                     indegree[j] -= 1;
                     if indegree[j] == 0 {
-                        queue.push(j as u32);
+                        queue.push(Reverse(j as u32));
                     }
                 }
             }
         }
 
-        self.order = order;
-        self.order_dirty = false;
+        order
     }
 }
 
@@ -400,6 +433,10 @@ mod tests {
     struct Tempo;
 
     impl Signal for Tempo {
+        fn spec(&self) -> Spec {
+            Spec::new("test")
+        }
+
         fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
             ctx.bpm
         }
@@ -424,6 +461,10 @@ mod tests {
     /// Signal qui compte ses évaluations — sert à prouver le cache.
     struct Counter(Rc<Cell<u32>>);
     impl Signal for Counter {
+        fn spec(&self) -> Spec {
+            Spec::new("test")
+        }
+
         fn eval(&self, _t: f64, _ctx: &Ctx, _st: &mut NodeState) -> f32 {
             self.0.set(self.0.get() + 1);
             1.0
@@ -433,6 +474,10 @@ mod tests {
     /// Signal à état : accumule `dt` dans slots[0].
     struct Accum;
     impl Signal for Accum {
+        fn spec(&self) -> Spec {
+            Spec::new("test")
+        }
+
         // slots[0] = temps accumulé
         fn eval(&self, _t: f64, ctx: &Ctx, st: &mut NodeState) -> f32 {
             let v = st.get(0) + ctx.dt as f32;
@@ -446,6 +491,10 @@ mod tests {
 
     struct AlwaysNan;
     impl Signal for AlwaysNan {
+        fn spec(&self) -> Spec {
+            Spec::new("test")
+        }
+
         fn eval(&self, _t: f64, _ctx: &Ctx, _st: &mut NodeState) -> f32 {
             f32::NAN
         }
@@ -454,6 +503,10 @@ mod tests {
     /// Somme des dépendances, pour vérifier l'ordre d'évaluation.
     struct Sum(Vec<NodeId>);
     impl Signal for Sum {
+        fn spec(&self) -> Spec {
+            Spec::new("test")
+        }
+
         fn eval(&self, _t: f64, _ctx: &Ctx, _st: &mut NodeState) -> f32 {
             // Ne peut pas lire le graphe ici : la somme est vérifiée via Param
             // dans les tests d'intégration. Ce nœud sert au tri topologique.

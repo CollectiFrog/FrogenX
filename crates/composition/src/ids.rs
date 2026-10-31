@@ -99,6 +99,17 @@ impl<T> Arena<T> {
         taken
     }
 
+    /// Les emplacements occupés et leur génération, dans l'ordre.
+    pub(crate) fn ids(&self) -> Vec<(u32, u32)> {
+        self.slots
+            .iter()
+            .zip(&self.gens)
+            .enumerate()
+            .filter(|(_, (slot, _))| slot.is_some())
+            .map(|(i, (_, gen))| (i as u32, *gen))
+            .collect()
+    }
+
     /// Les valeurs présentes, dans l'ordre des emplacements.
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.slots.iter_mut().flatten()

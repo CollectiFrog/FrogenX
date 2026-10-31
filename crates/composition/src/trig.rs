@@ -62,6 +62,17 @@ pub struct Trig {
     flash: NodeId,
 }
 
+/// Ce qu'il faut pour rattacher un trig chargé d'un fichier.
+pub struct RestoredTrig {
+    pub name: String,
+    pub target: TrigTarget,
+    pub zone: SpectrumZone,
+    pub divider: Divider,
+    pub gate: NodeId,
+    pub pulse: NodeId,
+    pub flash: NodeId,
+}
+
 impl Trig {
     fn wire(
         graph: &mut Graph,
@@ -98,6 +109,10 @@ impl Trig {
     /// Le `N` de « 1 sur N ».
     pub fn every(&self) -> Param {
         self.divider.every
+    }
+
+    pub fn divider(&self) -> &Divider {
+        &self.divider
     }
 
     /// `1` tant que le pic est dans la zone, compteur ou pas.
@@ -152,6 +167,24 @@ impl Composition {
         let id = TrigId::new(i, g);
         self.trig_order.push(id);
         Some(id)
+    }
+
+    /// Rattache un trig dont les nœuds sont déjà dans le graphe de composition :
+    /// le chargement d'un fichier (§19.1). `zone` et `divider` doivent être les
+    /// copies de référence des nœuds `gate` et `pulse`.
+    pub fn restore_trig(&mut self, trig: RestoredTrig) -> TrigId {
+        let (i, g) = self.trig_arena.insert(Trig {
+            name: trig.name,
+            target: trig.target,
+            zone: trig.zone,
+            divider: trig.divider,
+            gate: trig.gate,
+            pulse: trig.pulse,
+            flash: trig.flash,
+        });
+        let id = TrigId::new(i, g);
+        self.trig_order.push(id);
+        id
     }
 
     /// Un trig de grosse caisse, à chaque coup.

@@ -4,7 +4,7 @@
 //! Une attaque rapide et un relâchement lent donnent l'impression que le
 //! visuel « respire » avec le son, plutôt que de trembler.
 
-use frogenx_core::{Ctx, NodeState, Param, Signal};
+use frogenx_core::{Ctx, NodeState, Param, Signal, Spec, SpecError};
 
 /// Suiveur d'enveloppe à attaque et relâchement séparés.
 ///
@@ -51,7 +51,24 @@ fn coeff(tau: f32, dt: f32) -> f32 {
     1.0 - (-dt / tau).exp()
 }
 
+impl Envelope {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            input: spec.param("input")?,
+            attack: spec.number("attack")?,
+            release: spec.number("release")?,
+        })
+    }
+}
+
 impl Signal for Envelope {
+    fn spec(&self) -> Spec {
+        Spec::new("Envelope")
+            .with("input", self.input)
+            .with("attack", self.attack)
+            .with("release", self.release)
+    }
+
     // slots[0] = valeur lissée courante
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let cible = self.input.eval(ctx);
@@ -94,7 +111,22 @@ impl Trigger {
     }
 }
 
+impl Trigger {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            input: spec.param("input")?,
+            threshold: spec.number("threshold")?,
+        })
+    }
+}
+
 impl Signal for Trigger {
+    fn spec(&self) -> Spec {
+        Spec::new("Trigger")
+            .with("input", self.input)
+            .with("threshold", self.threshold)
+    }
+
     // slots[0] = 1.0 si l'entrée était au-dessus du seuil à la frame précédente
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let v = self.input.eval(ctx);
@@ -121,7 +153,22 @@ pub struct SampleHold {
     pub trigger: Param,
 }
 
+impl SampleHold {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            input: spec.param("input")?,
+            trigger: spec.param("trigger")?,
+        })
+    }
+}
+
 impl Signal for SampleHold {
+    fn spec(&self) -> Spec {
+        Spec::new("SampleHold")
+            .with("input", self.input)
+            .with("trigger", self.trigger)
+    }
+
     // slots[0] = valeur maintenue
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         if self.trigger.eval(ctx) > 0.5 {

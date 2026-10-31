@@ -14,7 +14,7 @@
 //! `[0, 1)` : non repliée, non bornée — c'est au consommateur (`Transport`,
 //! `ClipTransition`) d'interpréter l'unité (secondes, battements, `[0,1]`).
 
-use frogenx_core::{Ctx, NodeState, Param, Signal};
+use frogenx_core::{Ctx, NodeState, Param, Signal, Spec, SpecError};
 
 /// Accumulateur : `position += speed * dt` à chaque frame.
 ///
@@ -56,7 +56,19 @@ impl BeatRate {
     }
 }
 
+impl BeatRate {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            beats: spec.param("beats")?,
+        })
+    }
+}
+
 impl Signal for BeatRate {
+    fn spec(&self) -> Spec {
+        Spec::new("BeatRate").with("beats", self.beats)
+    }
+
     fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
         let beats = self.beats.eval(ctx);
         // Saturé chez le consommateur (§18.4) : pas de cycle plus court que
@@ -69,7 +81,19 @@ impl Signal for BeatRate {
     }
 }
 
+impl PositionSignal {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            speed: spec.param("speed")?,
+        })
+    }
+}
+
 impl Signal for PositionSignal {
+    fn spec(&self) -> Spec {
+        Spec::new("PositionSignal").with("speed", self.speed)
+    }
+
     // slots[0] = position accumulée
     fn eval(&self, _t: f64, ctx: &Ctx, state: &mut NodeState) -> f32 {
         let pos = state.get(0) + self.speed.eval(ctx) * ctx.dt as f32;

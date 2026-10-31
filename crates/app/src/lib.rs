@@ -14,6 +14,9 @@
 //!           ─▶ graphe de chaque clip actif ─▶ Compositor::render ─▶ Outputs::submit
 //! ```
 
+pub mod file_flow;
+pub mod last_patch;
+
 use frogenx_composition::{
     sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, LayerId,
 };
@@ -168,6 +171,8 @@ pub struct Engine {
     /// Les clips à poser : un `Clip` n'est pas une `Command` (§23.6).
     placements: Vec<(LayerId, ColumnId, Clip)>,
     refused_commands: u32,
+    /// La grille diffère du fichier : jouer n'en fait pas partie (§23.8).
+    dirty: bool,
     bpm: f32,
     /// Les features de la prochaine frame. Vides sans entrée audio, écrites à
     /// la main par un rendu offline : c'est ce qui garde le déterminisme (§20.3).
@@ -191,6 +196,7 @@ impl Engine {
             commands: Vec::new(),
             placements: Vec::new(),
             refused_commands: 0,
+            dirty: false,
             bpm,
             audio: AudioFeatures::default(),
         }
@@ -241,16 +247,48 @@ impl Engine {
         self.composition.analysis.resolve(self.composition.graph())
     }
 
+    /// Remplace toute la grille, entre deux frames. Ce qui attendait dans les
+    /// files visait l'ancienne, et est oublié (§23.8).
+    pub fn replace_composition(&mut self, composition: Composition) {
+        self.commands.clear();
+        self.placements.clear();
+        self.bpm = composition.bpm();
+        self.composition = composition;
+        self.dirty = false;
+    }
+
+    /// Remplace la grille par une grille d'usine et joue sa première colonne.
+    pub fn play_starter(&mut self, composition: Composition) {
+        let premiere = composition.columns().first().copied();
+        self.replace_composition(composition);
+        if let Some(column) = premiere {
+            self.push(Command::TriggerColumn { column });
+        }
+    }
+
+    /// La grille a-t-elle changé depuis le dernier enregistrement ?
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
+    }
+
     /// Une frame. `wall_dt` n'a d'effet qu'en `Realtime` (§4).
     pub fn frame(&mut self, wall_dt: f64) {
         let instant = self.clock.t();
         for command in self.commands.drain(..) {
-            if !self.composition.apply(command, instant) {
+            if self.composition.apply(command, instant) {
+                self.dirty |= command.is_edit();
+            } else {
                 self.refused_commands = self.refused_commands.saturating_add(1);
             }
         }
         for (layer, column, clip) in self.placements.drain(..) {
-            if self.composition.place_clip(layer, column, clip).is_none() {
+            if self.composition.place_clip(layer, column, clip).is_some() {
+                self.dirty = true;
+            } else {
                 self.refused_commands = self.refused_commands.saturating_add(1);
             }
         }

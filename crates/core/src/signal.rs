@@ -5,6 +5,7 @@
 //! constante, mixeur, bande de fréquence audio — tous interchangeables, donc
 //! n'importe quelle source module n'importe quelle destination.
 
+use crate::spec::{Spec, SpecError};
 use crate::spectrum::Spectrum;
 
 /// Instantané des features audio, en lecture seule pendant la frame (§7).
@@ -140,6 +141,11 @@ pub trait Signal {
     fn state_size(&self) -> usize {
         0
     }
+
+    /// Sa description, pour le format de patch (§19.1). Sans implémentation par
+    /// défaut : un `Signal` oublié ne compile pas, plutôt que de disparaître
+    /// d'une sauvegarde.
+    fn spec(&self) -> Spec;
 }
 
 /// Compteurs d'incohérences, remis à zéro à chaque frame (§18.1).
@@ -172,7 +178,17 @@ impl Diagnostics {
 #[derive(Debug, Clone, Copy)]
 pub struct Constant(pub f32);
 
+impl Constant {
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        spec.number("value").map(Self)
+    }
+}
+
 impl Signal for Constant {
+    fn spec(&self) -> Spec {
+        Spec::new("Constant").with("value", self.0)
+    }
+
     fn eval(&self, _t: f64, _ctx: &Ctx, _state: &mut NodeState) -> f32 {
         self.0
     }

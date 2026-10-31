@@ -32,7 +32,7 @@ Détail dans la skill `modular-design`, contrats complets en partie II de l'arch
 
 ## Règle de dépendance des crates
 
-`core` → `osc` → `shape` → `composition` → `audio` → `library` → `layer` → `render` → `output` →
+`core` → `osc` → `shape` → `composition` → `audio` → `library` → `patch` → `layer` → `render` → `output` →
 `ui` → `app`, les flèches vers le haut. `core` ne dépend de rien ; `shape` et `composition` ne
 connaissent ni wgpu ni l'audio.
 
@@ -55,11 +55,12 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 7d faites.** `cargo run` ouvre l'application : une interface egui sur la
+**Étapes 1 à 7e faites.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
 les colonnes et Espace pour taper. Le menu `Sortie` envoie l'image en plein écran sur un
-autre écran (§8.4). Rendus sans fenêtre : `cargo run -p frogenx-render
+autre écran (§8.4), le menu `Fichier` enregistre et rouvre son travail (§23.8), et le
+dernier fichier revient au lancement. Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
 sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p frogenx-app
 --example catalogue` (une planche du catalogue). Les tests GPU se sautent proprement
@@ -90,6 +91,9 @@ disposition de Resolume, apparence de Pro-Q.
   de `core` seule : `app` pose les features dans `Engine` (`set_audio`).
 - `crates/library` : les 24 clips prédéfinis et la grille de départ (§23.6), en code
   jusqu'au format de l'étape 7e. Sans GPU ni carte son.
+- `crates/patch` : le format de fichier (§19), `Composition` ↔ JSON, version et fixture,
+  écriture par fichier temporaire. Seule crate à connaître le JSON ; `core` décrit un nœud
+  par une `Spec` neutre. Un nouveau `Signal` doit entrer dans `patch/src/signals.rs`.
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
   `ShapeRenderer` (un par piste, le clip lui prête son `ShapeContent`), `ShapeLayer`,
   tessellation lyon (module sans wgpu).
@@ -104,10 +108,11 @@ disposition de Resolume, apparence de Pro-Q.
   connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
-  `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés.
+  `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés. `file_flow.rs`
+  décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
-**Prochaine étape : 7e, la sauvegarde.** Première version visée, §12 : 7e sauvegarde, 8 audio
-(BPM calculé, autres features ; capture, spectre et trig faits, §7).
+**Prochaine étape : 8, l'audio.** Dernière étape de la première version, §12 : BPM calculé et
+autres features ; capture, spectre et trig sont faits (§7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version
