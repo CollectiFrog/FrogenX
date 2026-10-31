@@ -7,8 +7,7 @@ use crate::clip::ParamSlot;
 use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, DeckId, LayerId, TrigId};
 use crate::trig::{TrigSlot, TrigTarget};
-use frogenx_core::Param;
-use frogenx_core::{AmpScale, AnalysisMethod, FreqScale};
+use frogenx_core::{AmpScale, AnalysisMethod, FeatureKind, FreqScale, Param};
 use frogenx_osc::SpectrumZone;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -90,6 +89,14 @@ pub enum Command {
     SetAmpScale(AmpScale),
     /// La durée d'analyse, en secondes, sans couper sa modulation.
     SetAnalysisWindow(f32),
+    /// Le tempo suit, ou non, le BPM détecté (§7.1).
+    SetTempoFollow(bool),
+    /// Branche une feature audio sur un paramètre du clip, ou l'en débranche.
+    SetAudioModulation {
+        clip: ClipId,
+        slot: ParamSlot,
+        feature: Option<FeatureKind>,
+    },
 }
 
 impl Command {
@@ -118,6 +125,8 @@ impl Command {
             | Self::RemoveTrig(_)
             | Self::SetTrigParam { .. }
             | Self::SetTrigTarget { .. }
+            | Self::SetTempoFollow(_)
+            | Self::SetAudioModulation { .. }
             | Self::SetAnalysisMethod(_)
             | Self::SetFreqScale(_)
             | Self::SetAmpScale(_)
@@ -169,16 +178,30 @@ impl Composition {
             Command::RemoveLayer { layer } => self.remove_layer(layer),
             Command::RemoveClip { layer, column } => self.remove_clip(layer, column),
             Command::SetActiveDeck(deck) => self.set_active_deck(deck),
+            // Un geste explicite reprend la main sur le suivi (§7.1).
             Command::SetBpm(bpm) => {
                 if bpm.is_finite() {
                     self.tempo.tempo = Param::fixed(bpm);
+                    self.tempo_follow = false;
                 }
                 bpm.is_finite()
             }
             Command::TapTempo => {
                 self.tap(t);
+                self.tempo_follow = false;
                 true
             }
+            Command::SetTempoFollow(suivre) => {
+                self.tempo_follow = suivre;
+                true
+            }
+            Command::SetAudioModulation {
+                clip,
+                slot,
+                feature,
+            } => self
+                .clip_mut(clip)
+                .is_some_and(|c| c.set_audio_modulation(slot, feature)),
             Command::AddTrig => self.add_default_trig().is_some(),
             Command::AddTrigAt { freq, level } => {
                 let bornes = [freq.0, freq.1, level.0, level.1];
@@ -579,7 +602,31 @@ mod tests {
     }
 
     #[test]
+    fn suivre_le_tempo_se_choisit_et_un_geste_reprend_la_main() {
+        let (mut c, ..) = grille();
+        assert!(!c.tempo_follow);
+        assert!(c.apply(Command::SetTempoFollow(true), 0.0));
+        assert!(c.tempo_follow);
+
+        c.apply(Command::SetBpm(100.0), 0.0);
+        assert!(!c.tempo_follow, "fixer le tempo coupe le suivi");
+
+        c.apply(Command::SetTempoFollow(true), 0.0);
+        c.apply(Command::TapTempo, 0.0);
+        assert!(!c.tempo_follow, "taper le tempo coupe le suivi");
+    }
+
+    #[test]
+    fn un_tempo_refuse_ne_coupe_pas_le_suivi() {
+        let (mut c, ..) = grille();
+        c.apply(Command::SetTempoFollow(true), 0.0);
+        assert!(!c.apply(Command::SetBpm(f32::NAN), 0.0));
+        assert!(c.tempo_follow);
+    }
+
+    #[test]
     fn regler_l_analyse_est_une_modification_du_fichier() {
+        assert!(Command::SetTempoFollow(true).is_edit());
         assert!(Command::SetAnalysisWindow(0.1).is_edit());
         assert!(Command::SetFreqScale(FreqScale::Mel).is_edit());
         let trace = Command::AddTrigAt {

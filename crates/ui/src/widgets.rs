@@ -116,6 +116,15 @@ fn angle_of(t: f32) -> f32 {
 /// plage s'affiche telle quelle. La réécrire émettrait une commande à chaque
 /// frame, et marquerait le fichier comme modifié sans que personne n'ait touché.
 pub fn knob(ui: &mut Ui, k: &Knob<'_>) -> KnobChange {
+    knob_with_menu(ui, k, None)
+}
+
+/// Le même, avec un menu de clic droit sur son cadran : une source audio (§7.1).
+pub fn knob_with_menu(
+    ui: &mut Ui,
+    k: &Knob<'_>,
+    menu: Option<&mut dyn FnMut(&mut Ui)>,
+) -> KnobChange {
     let mut change = KnobChange::default();
     // Une largeur fixe : `vertical_centered` prendrait toute la place, et le
     // panneau s'étirerait sur le signal qu'il doit laisser voir.
@@ -124,6 +133,11 @@ pub fn knob(ui: &mut Ui, k: &Knob<'_>) -> KnobChange {
         ui.spacing_mut().item_spacing.y = 2.0;
         let (rect, cadran) =
             ui.allocate_exact_size(egui::vec2(KNOB, KNOB), Sense::click_and_drag());
+        if let Some(menu) = menu {
+            let nom = format!("{} : cadran", k.name);
+            cadran.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, nom.clone()));
+            cadran.context_menu(|ui| menu(ui));
+        }
         let t = knob_position(k.value, k.min, k.max, k.log);
         // Tenu sans bouger, un cadran n'émet rien : ce n'est pas une modification.
         let geste = cadran.drag_delta().y;

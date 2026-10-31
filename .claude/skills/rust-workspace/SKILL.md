@@ -19,7 +19,7 @@ crates/core/         Signal, Param, Graph, Clock               ← aucune dépen
 crates/osc/          oscillateurs, LFO, bruit, enveloppes      ← core               ✅
 crates/shape/        Path, primitives, opérateurs, style       ← core, osc, glam    ✅
 crates/composition/  grille, tempo, Trig, Command              ← core, osc, shape   ✅
-crates/audio/        cpal, FFT, spectre → AudioFeatures        ← core               ✅
+crates/audio/        cpal, FFT, spectre, features, BPM         ← core               ✅
 crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅

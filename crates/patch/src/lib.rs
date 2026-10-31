@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 /// La version écrite par ce programme. Tout changement du format l'incrémente,
 /// avec sa migration et sa fixture (§19.2).
-pub const CURRENT_VERSION: u64 = 1;
+pub const CURRENT_VERSION: u64 = 2;
 /// Plus de colonnes que ça n'est pas une grille : un fichier abîmé.
 pub const MAX_COLUMNS: usize = 4096;
 /// Refusé avant d'allouer quoi que ce soit.
@@ -109,13 +109,26 @@ pub fn from_json(json: &str) -> Result<Composition, PatchError> {
 }
 
 /// Amène un fichier à la version courante, une version à la fois (§19.2).
-fn migrate(data: Value) -> Result<Value, PatchError> {
-    let version = data["version"].as_u64().ok_or(PatchError::NoVersion)?;
+fn migrate(mut data: Value) -> Result<Value, PatchError> {
+    let mut version = data["version"].as_u64().ok_or(PatchError::NoVersion)?;
     if version == 0 || version > CURRENT_VERSION {
         return Err(PatchError::UnknownVersion(version));
     }
-    // Aucune migration encore : la boucle viendra avec la version 2.
+    while version < CURRENT_VERSION {
+        data = match version {
+            1 => migrate_1_to_2(data),
+            _ => return Err(PatchError::UnknownVersion(version)),
+        };
+        version += 1;
+    }
     Ok(data)
+}
+
+/// La version 2 ajoute le suivi du tempo (§7.1) : un fichier v1 ne suivait rien.
+fn migrate_1_to_2(mut data: Value) -> Value {
+    data["tempo_follow"] = Value::Bool(false);
+    data["version"] = Value::from(2);
+    data
 }
 
 /// Le fichier temporaire de `path`, dans le même dossier : un renommage entre
@@ -171,8 +184,15 @@ mod tests {
     fn une_version_plus_recente_est_refusee_sans_deviner() {
         let json = format!("{{\"version\": {}}}", CURRENT_VERSION + 1);
         let erreur = from_json(&json).err().expect("refusé");
-        assert!(matches!(erreur, PatchError::UnknownVersion(2)));
-        assert!(erreur.to_string().contains("version 2"));
+        assert!(matches!(erreur, PatchError::UnknownVersion(3)));
+        assert!(erreur.to_string().contains("version 3"));
+    }
+
+    #[test]
+    fn la_migration_v1_ne_suit_pas_le_tempo() {
+        let migre = migrate(serde_json::json!({"version": 1})).unwrap();
+        assert_eq!(migre["tempo_follow"], Value::Bool(false));
+        assert_eq!(migre["version"], Value::from(CURRENT_VERSION));
     }
 
     #[test]

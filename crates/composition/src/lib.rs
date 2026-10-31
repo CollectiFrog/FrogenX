@@ -52,7 +52,7 @@ pub use clip::{
 };
 pub use command::Command;
 pub use crossfader::{CrossFader, FadeCurve};
-pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup};
+pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup, MIN_TEMPO_CONFIDENCE};
 pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 pub use position::{BeatRate, PositionSignal};
 pub use transport::{sanitize_bpm, PlayMode, TempoController, Transport, MAX_BPM, MIN_BPM};

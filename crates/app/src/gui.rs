@@ -113,6 +113,7 @@ impl Gui {
             audio_status,
             output: sortie,
             file: fichier,
+            detected_bpm: engine.audio().bpm,
         };
         let mut commands = Vec::new();
         let mut placements = Vec::new();

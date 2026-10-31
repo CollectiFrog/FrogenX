@@ -11,6 +11,8 @@ pub struct FilePatch {
     pub version: u64,
     pub meta: FileMeta,
     pub tempo: FileParam,
+    /// Le tempo suit le BPM détecté (§7.1).
+    pub tempo_follow: bool,
     pub analysis: FileAnalysis,
     pub columns: usize,
     pub active_deck: Option<usize>,

@@ -332,6 +332,7 @@ pub(crate) fn patch(c: &Composition) -> Result<FilePatch, PatchError> {
             app: env!("CARGO_PKG_VERSION").to_string(),
         },
         tempo: param(c.tempo.tempo, &positions)?,
+        tempo_follow: c.tempo_follow,
         analysis: FileAnalysis {
             method: c.analysis.method.word().to_string(),
             freq_scale: c.analysis.freq_scale.word().to_string(),

@@ -5,11 +5,12 @@
 
 use frogenx_app::Engine;
 use frogenx_composition::{
-    Clip, ClipId, Command, Composition, LayerId, PlayMode, Transport, TrigSlot, TrigTarget,
+    Clip, ClipId, Command, Composition, LayerId, ParamSlot, PlayMode, Transport, TrigSlot,
+    TrigTarget,
 };
 use frogenx_core::{
-    AnalysisMethod, AnalysisSettings, AudioFeatures, Clock, Constant, Ctx, FreqScale, Graph,
-    NodeState, Param, Signal, Spectrum,
+    AnalysisMethod, AnalysisSettings, AudioFeatures, Clock, Constant, Ctx, FeatureKind, FreqScale,
+    Graph, NodeState, Param, Signal, Spectrum,
 };
 use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
 use frogenx_output::{
@@ -672,6 +673,99 @@ fn la_grille_d_usine_joue_sa_premiere_colonne() {
     moteur.finish();
     assert!(!moteur.is_dirty());
     assert_eq!(recu.dernier_pixel(0, 0)[3], 255, "le fond joue");
+}
+
+fn tempo_detecte(bpm: f32, confidence: f32) -> AudioFeatures {
+    AudioFeatures {
+        bpm,
+        bpm_confidence: confidence,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn suivre_le_tempo_ecrit_le_bpm_detecte_sans_marquer_de_modification() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut moteur, _) = moteur(gpu, composition);
+
+    moteur.set_audio(tempo_detecte(133.0, 0.9));
+    moteur.frame(0.0);
+    assert_eq!(moteur.bpm(), 120.0, "sans suivi, rien ne bouge");
+
+    moteur.push(Command::SetTempoFollow(true));
+    moteur.frame(0.0);
+    assert_eq!(moteur.bpm(), 133.0);
+
+    moteur.set_dirty(false);
+    moteur.set_audio(tempo_detecte(134.0, 0.9));
+    moteur.frame(0.0);
+    assert_eq!(moteur.bpm(), 134.0);
+    assert!(!moteur.is_dirty(), "le tempo qui suit n'est pas un réglage");
+}
+
+#[test]
+fn un_tempo_peu_fiable_ou_absent_laisse_le_dernier_en_place() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut moteur, _) = moteur(gpu, composition);
+    moteur.push(Command::SetTempoFollow(true));
+    moteur.set_audio(tempo_detecte(133.0, 0.9));
+    moteur.frame(0.0);
+
+    moteur.set_audio(tempo_detecte(90.0, 0.1));
+    moteur.frame(0.0);
+    assert_eq!(moteur.bpm(), 133.0, "peu fiable");
+
+    moteur.set_audio(tempo_detecte(0.0, 0.0));
+    moteur.frame(0.0);
+    assert_eq!(moteur.bpm(), 133.0, "le silence garde le tempo");
+}
+
+#[test]
+fn le_son_change_l_image_par_une_source_audio() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, composition);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    moteur.frame(0.0);
+
+    // La largeur du carré suit les graves : à zéro, il a disparu du centre.
+    moteur.push(Command::SetAudioModulation {
+        clip: rouge,
+        slot: ParamSlot::Generator(0),
+        feature: Some(FeatureKind::Bass),
+    });
+    moteur.push(Command::SetParam {
+        clip: rouge,
+        slot: ParamSlot::Generator(0),
+        value: 0.0,
+    });
+    for _ in 0..3 {
+        moteur.frame(0.0);
+    }
+
+    moteur.set_audio(AudioFeatures {
+        bands: [1.0, 0.0, 0.0],
+        ..Default::default()
+    });
+    for _ in 0..30 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+
+    let frames = recu.0.lock().unwrap();
+    let centre = |i: usize| pixel(&frames[i], SIZE.x / 2, SIZE.y / 2);
+    assert_eq!(centre(0)[0], 255, "le carré, avant la source");
+    assert_eq!(centre(3)[3], 0, "silence : rien au centre");
+    assert_eq!(
+        centre(frames.len() - 1)[0],
+        255,
+        "les graves le font revenir"
+    );
 }
 
 #[test]

@@ -5,14 +5,14 @@
 //! constante, mixeur, bande de fréquence audio — tous interchangeables, donc
 //! n'importe quelle source module n'importe quelle destination.
 
+use crate::features::CHROMA_NOTES;
 use crate::spec::{Spec, SpecError};
 use crate::spectrum::Spectrum;
 
 /// Instantané des features audio, en lecture seule pendant la frame (§7).
 ///
 /// Rempli par le thread d'analyse via un triple buffer ; le thread principal
-/// ne bloque jamais dessus. Seul `spectrum` est calculé pour l'instant : les
-/// autres champs restent à zéro jusqu'à la fin de l'étape 8.
+/// ne bloque jamais dessus. Un rendu offline écrit le sien (§7.1).
 #[derive(Debug, Clone, Default)]
 pub struct AudioFeatures {
     /// Le spectre de la frame, en bandes logarithmiques (§7).
@@ -23,8 +23,15 @@ pub struct AudioFeatures {
     pub bands: [f32; 3],
     /// Centroïde spectral normalisé, `[0, 1]`.
     pub centroid: f32,
-    /// Un transitoire a été détecté pendant cette frame.
-    pub onset: bool,
+    /// `1` au transitoire, puis retombe : un drapeau se perdrait entre deux
+    /// lectures du triple buffer (§7.1).
+    pub onset: f32,
+    /// L'énergie de chaque note, do en tête, la plus forte à `1`.
+    pub chroma: [f32; CHROMA_NOTES],
+    /// Le tempo détecté, `0` s'il n'y en a pas de fiable.
+    pub bpm: f32,
+    /// Sa fiabilité, `[0, 1]`.
+    pub bpm_confidence: f32,
 }
 
 /// Tempo tant qu'aucune composition n'en a fixé un.
@@ -248,6 +255,6 @@ mod tests {
         let a = AudioFeatures::default();
         assert_eq!(a.rms, 0.0);
         assert_eq!(a.bands, [0.0; 3]);
-        assert!(!a.onset);
+        assert_eq!(a.onset, 0.0);
     }
 }

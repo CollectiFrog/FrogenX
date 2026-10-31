@@ -38,6 +38,7 @@
 //! ```
 
 pub mod clock;
+pub mod features;
 pub mod graph;
 pub mod param;
 pub mod signal;
@@ -45,6 +46,7 @@ pub mod spec;
 pub mod spectrum;
 
 pub use clock::{Clock, ClockMode};
+pub use features::{FeatureKind, CHROMA_NOTES};
 pub use graph::{Graph, GraphError, NodeView};
 pub use param::{NodeId, Param};
 pub use signal::{AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};

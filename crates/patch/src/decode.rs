@@ -274,6 +274,7 @@ pub(crate) fn patch(file: FilePatch) -> Result<Composition, PatchError> {
     let mut c = Composition::new();
     let (nodes, specs) = graph(&file.graph, c.graph_mut())?;
     c.tempo.tempo = param(file.tempo, &nodes)?;
+    c.tempo_follow = file.tempo_follow;
     c.analysis = analysis(&file.analysis, &nodes)?;
     let colonnes: Vec<_> = (0..file.columns).map(|_| c.add_column()).collect();
 

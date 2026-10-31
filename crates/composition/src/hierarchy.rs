@@ -14,9 +14,11 @@ use crate::clip::Clip;
 use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 use crate::transport::{sanitize_bpm, TempoController};
 use crate::trig::Trig;
-use frogenx_core::{Graph, Param, DEFAULT_BPM};
+use frogenx_core::{AudioFeatures, Graph, Param, DEFAULT_BPM};
 use frogenx_shape::BlendParams;
 
+/// Sous cette fiabilité, un tempo détecté ne déforme pas le set (§7.1).
+pub const MIN_TEMPO_CONFIDENCE: f32 = 0.3;
 /// Instants de tap conservés : au-delà, on suit le tempo qui vient de changer.
 const TAP_MEMORY: usize = 8;
 /// Après ce silence, en secondes, une nouvelle série de taps commence.
@@ -124,6 +126,8 @@ pub struct Composition {
     pub tempo: TempoController,
     /// Comment analyser le son : un fichier le garde avec ses zones (§7).
     pub analysis: AudioAnalysis,
+    /// Le tempo suit le BPM détecté dans le son (§7.1).
+    pub tempo_follow: bool,
     taps: Vec<f64>,
     active_deck: Option<DeckId>,
 }
@@ -148,6 +152,7 @@ impl Composition {
             trig_order: Vec::new(),
             tempo: TempoController::new(DEFAULT_BPM),
             analysis: AudioAnalysis::default(),
+            tempo_follow: false,
             taps: Vec::new(),
             active_deck: None,
         }
@@ -166,6 +171,14 @@ impl Composition {
     /// composition. Saturé ici, chez le consommateur (§18.4).
     pub fn bpm(&self) -> f32 {
         sanitize_bpm(self.tempo.tempo.get(&self.graph))
+    }
+
+    /// Pose le tempo détecté, si la composition le suit et s'il est fiable. Dans
+    /// un silence, le dernier reste : un break ne doit pas changer de vitesse.
+    pub fn follow_tempo(&mut self, audio: &AudioFeatures) {
+        if self.tempo_follow && audio.bpm > 0.0 && audio.bpm_confidence >= MIN_TEMPO_CONFIDENCE {
+            self.tempo.tempo.set_base(audio.bpm);
+        }
     }
 
     /// Un tap à l'instant `t` : deux taps suffisent à fixer le tempo.

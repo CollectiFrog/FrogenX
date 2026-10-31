@@ -9,10 +9,11 @@
 //! sous un panneau ; une image de sortie doit se voir entière. Il flotte donc à
 //! côté d'elle, et ne se pose dessus que si la scène n'a plus de place.
 
-use crate::widgets::{floating_panel, knob, Knob, Modulation, KNOB_STEP};
+use crate::widgets::{floating_panel, knob, knob_with_menu, Knob, Modulation, KNOB_STEP};
 use crate::{theme, FrameView, UiState};
 use egui::{Rect, RichText, Ui};
 use frogenx_composition::{Clip, ClipId, ClipParam, Command, Layer, LayerId, MAX_CLIP_SPEED};
+use frogenx_core::FeatureKind;
 use std::ops::Range;
 
 /// La largeur qu'on garde à côté de l'image pour le panneau.
@@ -71,6 +72,33 @@ fn card<T>(
     });
 }
 
+/// Le choix d'une source audio, au clic droit d'un potentiomètre (§7.1). Rend le
+/// nouveau choix, s'il y en a un.
+fn audio_menu(ui: &mut Ui, actuelle: Option<FeatureKind>) -> Option<Option<FeatureKind>> {
+    let mut choix = None;
+    ui.label(
+        RichText::new("Source audio")
+            .color(theme::TEXT_DIM)
+            .size(11.0),
+    );
+    for feature in FeatureKind::MENU {
+        if ui
+            .selectable_label(actuelle == Some(feature), feature.label())
+            .clicked()
+        {
+            choix = Some(Some(feature));
+            ui.close();
+        }
+    }
+    ui.separator();
+    let debrancher = egui::Button::new("Sans source audio");
+    if ui.add_enabled(actuelle.is_some(), debrancher).clicked() {
+        choix = Some(None);
+        ui.close();
+    }
+    choix
+}
+
 /// Le réglage d'un `Param` du clip. Il émet une commande, n'écrit rien (§23).
 fn param_knob(ui: &mut Ui, clip: ClipId, graph: &Clip, param: &ClipParam, out: &mut Vec<Command>) {
     ui.spacing_mut().item_spacing.x = 8.0;
@@ -84,7 +112,16 @@ fn param_knob(ui: &mut Ui, clip: ClipId, graph: &Clip, param: &ClipParam, out: &
     let couleur = theme::ACCENT;
     let reglage =
         Knob::new(&nom, desc.value.base(), desc.min, desc.max, couleur).modulated(modulation);
-    let change = knob(ui, &reglage);
+    let mut demande = None;
+    let mut menu = |ui: &mut Ui| demande = audio_menu(ui, param.audio);
+    let change = knob_with_menu(ui, &reglage, Some(&mut menu));
+    if let Some(feature) = demande {
+        out.push(Command::SetAudioModulation {
+            clip,
+            slot: param.slot,
+            feature,
+        });
+    }
     if let Some(value) = change.value {
         out.push(Command::SetParam {
             clip,

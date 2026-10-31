@@ -4,11 +4,11 @@
 //! produisent la même forme, frame après frame.
 
 use frogenx_composition::{
-    AudioAnalysis, Clip, ClipSource, ClipTransition, Composition, FadeCurve, LayerId, PlayMode,
-    PositionSignal, Transport, TrigTarget, WipeDirection,
+    AudioAnalysis, Clip, ClipSource, ClipTransition, Composition, FadeCurve, LayerId, ParamSlot,
+    PlayMode, PositionSignal, Transport, TrigTarget, WipeDirection,
 };
 use frogenx_core::{
-    AmpScale, AnalysisMethod, AudioFeatures, Constant, Ctx, FreqScale, Graph, Param,
+    AmpScale, AnalysisMethod, AudioFeatures, Constant, Ctx, FeatureKind, FreqScale, Graph, Param,
 };
 use frogenx_library::{catalog, starter};
 use frogenx_patch::{from_json, to_json, PatchError, MAX_COLUMNS};
@@ -198,6 +198,35 @@ fn le_tempo_revient() {
     let mut copie = relu(&c);
     copie.graph_mut().eval_frame(0.0, DT);
     assert_eq!(copie.bpm(), 93.5);
+}
+
+#[test]
+fn le_suivi_du_tempo_revient() {
+    let mut c = starter();
+    assert!(!relu(&c).tempo_follow);
+    c.tempo_follow = true;
+    assert!(relu(&c).tempo_follow);
+}
+
+#[test]
+fn une_source_audio_revient_avec_son_amplitude() {
+    let (mut c, piste) = une_case(cercle());
+    let id = c.layer(piste).unwrap().cell(0).unwrap();
+    let slot = ParamSlot::Generator(0);
+    let clip = c.clip_mut(id).unwrap();
+    clip.set_audio_modulation(slot, Some(FeatureKind::Chroma(4)));
+    clip.set_depth(slot, 0.375);
+
+    let copie = relu(&c);
+    let id = copie
+        .layer(copie.layers_de_test()[0])
+        .unwrap()
+        .cell(0)
+        .unwrap();
+    let params = copie.clip(id).unwrap().params();
+    let rayon = params[0].params[0];
+    assert_eq!(rayon.audio, Some(FeatureKind::Chroma(4)));
+    assert_eq!(rayon.desc.value.depth(), Some(0.375));
 }
 
 #[test]

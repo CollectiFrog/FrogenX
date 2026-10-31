@@ -7,6 +7,7 @@
 //! Ne connaît pas `cpal` : un test remplit l'anneau à la main.
 
 use crate::analyzer::SpectrumAnalyzer;
+use crate::features::FeatureAnalyzer;
 use frogenx_core::{AnalysisSettings, AudioFeatures};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -122,6 +123,7 @@ fn run(
     stop: &AtomicBool,
 ) {
     let mut analyzer = SpectrumAnalyzer::new(sample_rate);
+    let mut features = FeatureAnalyzer::new(sample_rate);
     let mut energies = vec![0.0; channels];
     while !stop.load(Ordering::Relaxed) {
         // L'allocation d'un changement de fenêtre est permise ici : ce thread
@@ -144,14 +146,17 @@ fn run(
         let mut nouveau = false;
         downmix(a, b, &mut energies, |mono| {
             nouveau |= analyzer.push(mono);
+            nouveau |= features.push(mono);
         });
         bloc.commit_all();
 
         if nouveau {
-            output.write(AudioFeatures {
+            let mut sortie = AudioFeatures {
                 spectrum: *analyzer.spectrum(),
                 ..Default::default()
-            });
+            };
+            features.write_to(&mut sortie);
+            output.write(sortie);
         }
     }
 }
@@ -172,6 +177,18 @@ mod tests {
             assert!(debut.elapsed().as_secs() < 5, "rien reçu de l'analyse");
             std::thread::sleep(IDLE);
         }
+    }
+
+    #[test]
+    fn les_features_traversent_le_thread_avec_le_spectre() {
+        let (mut entree, sortie) = RingBuffer::new(32_768);
+        let mut analysis = Analysis::spawn(sortie, 1, SR).unwrap();
+        for i in 0..16_000 {
+            let _ = entree.push(0.5 * (TAU * 440.0 * i as f32 / SR).sin());
+        }
+        attend(&mut analysis, |f| {
+            f.rms > 0.5 && f.bands[1] > 0.5 && f.chroma[9] == 1.0
+        });
     }
 
     #[test]

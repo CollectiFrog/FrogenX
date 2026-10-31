@@ -5,10 +5,12 @@
 //! migration et sa fixture, pas une fixture réécrite.
 
 use frogenx_composition::{Composition, TrigTarget};
+use frogenx_core::FeatureKind;
 use frogenx_patch::{from_json, to_json, CURRENT_VERSION};
 use serde_json::Value;
 
 const V1: &str = include_str!("fixtures/patch_v1.json");
+const V2: &str = include_str!("fixtures/patch_v2.json");
 
 fn pistes(c: &Composition) -> Vec<String> {
     let mut ids = Vec::new();
@@ -42,11 +44,27 @@ fn la_fixture_v1_garde_ses_clips_actifs() {
     }
 }
 
-/// Tant que `CURRENT_VERSION` vaut 1, relire puis réécrire la fixture rend le
+#[test]
+fn la_fixture_v1_se_migre_sans_suivre_le_tempo() {
+    assert!(!from_json(V1).unwrap().tempo_follow);
+}
+
+#[test]
+fn la_fixture_v2_garde_le_suivi_et_sa_source_audio() {
+    let c = from_json(V2).expect("un fichier v2 s'ouvre");
+    assert!(c.tempo_follow);
+    let mut ids = Vec::new();
+    c.layers_in_order(&mut ids);
+    let formes = c.layer(ids[1]).unwrap();
+    let clip = c.clip(formes.cell(0).unwrap()).unwrap();
+    assert_eq!(clip.params()[0].params[0].audio, Some(FeatureKind::Bass));
+}
+
+/// Tant que `CURRENT_VERSION` vaut 2, relire puis réécrire la fixture rend le
 /// même contenu. Sinon, le format a changé sans changer de version.
 #[test]
 fn le_format_n_a_pas_change_sans_changer_de_version() {
-    if CURRENT_VERSION != 1 {
+    if CURRENT_VERSION != 2 {
         return;
     }
     let sans_meta = |texte: &str| {
@@ -54,6 +72,6 @@ fn le_format_n_a_pas_change_sans_changer_de_version() {
         v.as_object_mut().unwrap().remove("meta");
         v
     };
-    let reecrit = to_json(&from_json(V1).unwrap()).unwrap();
-    assert_eq!(sans_meta(&reecrit), sans_meta(V1));
+    let reecrit = to_json(&from_json(V2).unwrap()).unwrap();
+    assert_eq!(sans_meta(&reecrit), sans_meta(V2));
 }

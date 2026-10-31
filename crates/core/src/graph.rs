@@ -361,6 +361,14 @@ impl Graph {
         false
     }
 
+    /// La description d'un nœud vivant.
+    pub fn node_spec(&self, id: NodeId) -> Option<Spec> {
+        if !self.is_live(id) {
+            return None;
+        }
+        Some(self.slots[id.index() as usize].signal.as_ref()?.spec())
+    }
+
     /// Les nœuds vivants, chacun après ses dépendances.
     pub fn nodes(&self) -> Vec<NodeView> {
         self.topological_order()

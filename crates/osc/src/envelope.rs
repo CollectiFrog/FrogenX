@@ -41,7 +41,7 @@ impl Envelope {
 ///
 /// `1 - exp(-dt / tau)`. Un `tau` nul donne 1.0 (suivi instantané), ce qui est
 /// le comportement attendu et non une division par zéro.
-fn coeff(tau: f32, dt: f32) -> f32 {
+pub(crate) fn coeff(tau: f32, dt: f32) -> f32 {
     if tau <= 0.0 || !tau.is_finite() {
         return 1.0;
     }

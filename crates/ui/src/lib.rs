@@ -186,6 +186,8 @@ pub struct FrameView<'a> {
     pub file: FileView<'a>,
     /// L'instant de la dernière frame, en secondes.
     pub time: f64,
+    /// Le tempo détecté dans le son, `0` s'il n'y en a pas (§7.1).
+    pub detected_bpm: f32,
 }
 
 /// Dessine toute l'interface et remplit `commands`, `placements`, `output` et
@@ -254,6 +256,15 @@ fn wordmark(ui: &mut Ui) {
 }
 
 /// Le tempo, au plus près des menus : c'est ce qu'on touche le plus sur scène.
+/// Ce que le son dit du tempo, à côté de `Suivre`.
+fn detected_label(bpm: f32) -> String {
+    if bpm > 0.0 {
+        format!("son : {bpm:.1}")
+    } else {
+        "son : —".to_string()
+    }
+}
+
 fn tempo(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
     let mut bpm = view.bpm;
     let reglage = egui::DragValue::new(&mut bpm)
@@ -266,6 +277,15 @@ fn tempo(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
     if ui.button("Tap").clicked() {
         commands.push(Command::TapTempo);
     }
+    let suit = view.composition.tempo_follow;
+    if ui.selectable_label(suit, "Suivre").clicked() {
+        commands.push(Command::SetTempoFollow(!suit));
+    }
+    ui.label(
+        RichText::new(detected_label(view.detected_bpm))
+            .color(theme::TEXT_DIM)
+            .size(11.5),
+    );
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
     let pulsation = beat_pulse(view.time, view.bpm);
     ui.painter().circle_filled(rect.center(), 4.0, theme::IDLE);
@@ -804,6 +824,7 @@ mod tests {
                             status: "Enregistré : concert.frogenx",
                             confirming,
                         },
+                        detected_bpm: 127.5,
                     };
                     draw(
                         ui,
@@ -1094,6 +1115,98 @@ mod tests {
         assert_eq!(etat.selected, None);
         assert_eq!(etat.zone_gesture, None);
         assert_eq!(etat.known_trigs, None);
+    }
+
+    #[test]
+    fn suivre_le_tempo_se_choisit_dans_l_en_tete() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        assert!(h.query_by_label("son : 127.5").is_some());
+        h.get_by_label("Suivre").click();
+        h.run();
+        assert_eq!(h.state().commands, vec![Command::SetTempoFollow(true)]);
+    }
+
+    #[test]
+    fn suivre_une_seconde_fois_arrete_de_suivre() {
+        let mut g = grille();
+        g.composition.tempo_follow = true;
+        let mut h = harness(&g.composition);
+        h.get_by_label("Suivre").click();
+        h.run();
+        assert_eq!(h.state().commands, vec![Command::SetTempoFollow(false)]);
+    }
+
+    #[test]
+    fn sans_tempo_detecte_l_en_tete_le_dit() {
+        assert_eq!(detected_label(0.0), "son : —");
+        assert_eq!(detected_label(128.04), "son : 128.0");
+    }
+
+    /// Le menu d'un potentiomètre du clip Alpha, ouvert.
+    fn menu_du_rayon<'a>(composition: &'a Composition) -> Harness<'a, Etat> {
+        let mut h = harness(composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_label("RAYON : cadran").click_secondary();
+        h.run();
+        h
+    }
+
+    #[test]
+    fn une_source_audio_se_choisit_au_clic_droit() {
+        let g = grille();
+        let mut h = menu_du_rayon(&g.composition);
+        h.get_by_label("Graves").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetAudioModulation {
+                clip: g.clips[0],
+                slot: ParamSlot::Generator(0),
+                feature: Some(frogenx_core::FeatureKind::Bass),
+            }]
+        );
+    }
+
+    #[test]
+    fn le_menu_propose_chaque_feature() {
+        let g = grille();
+        let h = menu_du_rayon(&g.composition);
+        for feature in frogenx_core::FeatureKind::MENU {
+            assert!(h.query_by_label(feature.label()).is_some(), "{feature:?}");
+        }
+    }
+
+    #[test]
+    fn sans_source_il_n_y_a_rien_a_debrancher() {
+        let g = grille();
+        let mut h = menu_du_rayon(&g.composition);
+        h.get_by_label("Sans source audio").click();
+        h.run();
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn une_source_branchee_se_debranche() {
+        let mut g = grille();
+        let clip = g.composition.clip_mut(g.clips[0]).unwrap();
+        clip.set_audio_modulation(
+            ParamSlot::Generator(0),
+            Some(frogenx_core::FeatureKind::Onset),
+        );
+        let mut h = menu_du_rayon(&g.composition);
+        h.get_by_label("Sans source audio").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetAudioModulation {
+                clip: g.clips[0],
+                slot: ParamSlot::Generator(0),
+                feature: None,
+            }]
+        );
     }
 
     #[test]

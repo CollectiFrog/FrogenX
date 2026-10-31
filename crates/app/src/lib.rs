@@ -293,6 +293,9 @@ impl Engine {
             }
         }
 
+        // Pas une modification du fichier : le choix de suivre en est une (§7.1).
+        self.composition.follow_tempo(&self.audio);
+
         self.clock.tick(wall_dt);
         let (t, dt) = (self.clock.t(), self.clock.dt());
 

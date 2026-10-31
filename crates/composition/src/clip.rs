@@ -1,7 +1,8 @@
 //! Le `Clip` — point de jonction avec le graphe modulaire, §3bis.2 de
 //! `docs/ARCHITECTURE.md`.
 
-use frogenx_core::{Graph, Param};
+use frogenx_core::{FeatureKind, Graph, Param};
+use frogenx_osc::AudioFeature;
 use frogenx_shape::{ColorParam, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle, COLOR_CHANNELS};
 
 use crate::crossfader::FadeCurve;
@@ -75,6 +76,8 @@ pub enum ParamSlot {
 pub struct ClipParam {
     pub slot: ParamSlot,
     pub desc: ParamDesc,
+    /// La feature audio qui le module, s'il y en a une (§7.1).
+    pub audio: Option<FeatureKind>,
 }
 
 /// Les paramètres d'une partie du clip : son générateur, un effet, son style.
@@ -82,6 +85,14 @@ pub struct ClipParam {
 pub struct ParamGroup {
     pub label: String,
     pub params: Vec<ClipParam>,
+}
+
+/// La feature audio que lit `param`, si sa source en est une.
+fn audio_source(graph: &Graph, param: Param) -> Option<FeatureKind> {
+    let spec = graph.node_spec(param.source()?)?;
+    (spec.kind == "AudioFeature")
+        .then(|| FeatureKind::from_word(spec.word("feature").ok()?))
+        .flatten()
 }
 
 /// Les canaux d'une couleur, décrits pour un curseur.
@@ -155,7 +166,9 @@ impl Clip {
     /// (§16.3 ter). Les `Param` de son graphe interne n'y figurent pas.
     pub fn params(&self) -> Vec<ParamGroup> {
         let ClipSource::Shape {
-            generator, style, ..
+            generator,
+            style,
+            graph,
         } = &self.source;
 
         let enumere = |descs: Vec<ParamDesc>, slot: &dyn Fn(usize) -> ParamSlot| {
@@ -165,6 +178,7 @@ impl Clip {
                 .map(|(i, desc)| ClipParam {
                     slot: slot(i),
                     desc,
+                    audio: audio_source(graph, desc.value),
                 })
                 .collect()
         };
@@ -225,6 +239,44 @@ impl Clip {
         value.is_finite() && self.param_mut(slot).is_some_and(|p| p.set_depth(value))
     }
 
+    /// Branche `feature` sur un paramètre, ou l'en débranche (§7.1). Une nouvelle
+    /// source part d'une demi-plage d'amplitude ; changer de feature garde celle
+    /// qui était réglée. `None` n'efface qu'une source audio : le LFO d'un clip du
+    /// catalogue reste en place. Rend `false` si `slot` ne désigne rien.
+    pub fn set_audio_modulation(&mut self, slot: ParamSlot, feature: Option<FeatureKind>) -> bool {
+        let params = self.params();
+        let Some(param) = params
+            .iter()
+            .flat_map(|g| &g.params)
+            .find(|p| p.slot == slot)
+        else {
+            return false;
+        };
+        if param.audio == feature {
+            return true;
+        }
+        let valeur = param.desc.value;
+        let ancienne = param.audio.and(valeur.source());
+        let amplitude = valeur
+            .depth()
+            .filter(|_| ancienne.is_some())
+            .unwrap_or((param.desc.max - param.desc.min) * 0.5);
+        let nouvelle = match feature {
+            Some(feature) => {
+                let source = self.graph_mut().add(Box::new(AudioFeature::new(feature)));
+                Param::modulated(valeur.base(), amplitude, source)
+            }
+            None => Param::fixed(valeur.base()),
+        };
+        if let Some(p) = self.param_mut(slot) {
+            *p = nouvelle;
+        }
+        if let Some(source) = ancienne {
+            let _ = self.graph_mut().remove(source);
+        }
+        true
+    }
+
     fn param_mut(&mut self, slot: ParamSlot) -> Option<&mut Param> {
         let ClipSource::Shape {
             generator, style, ..
@@ -278,6 +330,89 @@ mod tests {
     use crate::transport::{PlayMode, Transport};
     use frogenx_core::{AudioFeatures, Ctx, NodeId, Param};
     use frogenx_shape::{Ellipse, Path, RadialRepeat};
+
+    fn un_cercle() -> Clip {
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+        Clip::shape(g, Box::new(Ellipse::circle(0.5)), transport)
+    }
+
+    fn rayon(c: &Clip) -> ClipParam {
+        c.params()[0].params[0]
+    }
+
+    #[test]
+    fn une_feature_se_branche_sur_un_parametre_et_garde_sa_base() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        let noeuds = c.graph().len();
+        assert!(c.set_audio_modulation(slot, Some(FeatureKind::Bass)));
+
+        let p = rayon(&c);
+        assert_eq!(p.audio, Some(FeatureKind::Bass));
+        assert_eq!(p.desc.value.base(), 0.5);
+        assert_eq!(p.desc.value.depth(), Some(1.0), "une demi-plage");
+        assert_eq!(c.graph().len(), noeuds + 1);
+
+        c.graph_mut().set_audio(AudioFeatures {
+            bands: [1.0, 0.0, 0.0],
+            ..Default::default()
+        });
+        for _ in 0..60 {
+            c.graph_mut().eval_frame(0.0, 1.0 / 60.0);
+        }
+        assert!(rayon(&c).desc.value.get(c.graph()) > 1.4);
+    }
+
+    #[test]
+    fn changer_de_feature_garde_l_amplitude_et_ne_laisse_aucun_noeud() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        c.set_audio_modulation(slot, Some(FeatureKind::Bass));
+        c.set_depth(slot, 0.25);
+        let noeuds = c.graph().len();
+        c.set_audio_modulation(slot, Some(FeatureKind::Onset));
+        assert_eq!(rayon(&c).audio, Some(FeatureKind::Onset));
+        assert_eq!(rayon(&c).desc.value.depth(), Some(0.25));
+        assert_eq!(c.graph().len(), noeuds);
+    }
+
+    #[test]
+    fn debrancher_rend_le_parametre_fixe_a_sa_base() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        let noeuds = c.graph().len();
+        c.set_audio_modulation(slot, Some(FeatureKind::Rms));
+        assert!(c.set_audio_modulation(slot, None));
+        assert_eq!(rayon(&c).desc.value, Param::fixed(0.5));
+        assert_eq!(rayon(&c).audio, None);
+        assert_eq!(c.graph().len(), noeuds);
+    }
+
+    #[test]
+    fn debrancher_ne_coupe_pas_un_lfo() {
+        let mut c = un_cercle();
+        let lfo = c.graph_mut().add(Box::new(frogenx_core::Constant(1.0)));
+        *c.param_mut(ParamSlot::Generator(0)).unwrap() = Param::modulated(0.5, 0.2, lfo);
+        assert!(c.set_audio_modulation(ParamSlot::Generator(0), None));
+        assert_eq!(rayon(&c).desc.value.source(), Some(lfo));
+    }
+
+    #[test]
+    fn une_feature_remplace_un_lfo() {
+        let mut c = un_cercle();
+        let lfo = c.graph_mut().add(Box::new(frogenx_core::Constant(1.0)));
+        *c.param_mut(ParamSlot::Generator(0)).unwrap() = Param::modulated(0.5, 0.2, lfo);
+        c.set_audio_modulation(ParamSlot::Generator(0), Some(FeatureKind::Treble));
+        assert_eq!(rayon(&c).audio, Some(FeatureKind::Treble));
+    }
+
+    #[test]
+    fn un_emplacement_inconnu_est_refuse() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(99);
+        assert!(!c.set_audio_modulation(slot, Some(FeatureKind::Rms)));
+    }
 
     fn dummy_position() -> NodeId {
         // Un Clip de test n'a pas besoin que `position` résolve réellement

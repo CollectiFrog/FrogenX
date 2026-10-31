@@ -322,7 +322,7 @@ pull de synchro avec un DJ). C'est une couche au-dessus de `Clock`, pas une red�
 résout `TempoController::tempo` une fois par frame, après avoir évalué son graphe, et le
 moteur le pose dans le `Ctx` de chaque clip actif (§16.2). Aucun clip n'est câblé au
 tempo un par un, et une nouvelle source n'a qu'une chose à faire : écrire le tempo. Le
-tap tempo le fait aujourd'hui, le BPM calculé depuis l'audio le fera à l'étape 8 (§7).
+le tap tempo le fait, et le BPM calculé depuis l'audio aussi quand on le suit (§7.1).
 Saturé à `[20, 400]` chez ce consommateur (§18.4) ; un tempo non fini rend 120.
 
 ```rust
@@ -804,6 +804,11 @@ tempo double ou moitié se distingue mal : une courbe en cloche autour de 120 BP
 la détection peut donc rendre 87 pour un morceau à 174. Elle attend 4 s de son, n'accepte un
 saut de tempo que confirmé deux fois de suite, et rend `0` sans signal rythmique.
 
+**Ce qui distingue un rythme d'un son tenu : le contraste, pas le niveau.** Une note tenue
+produit une force minuscule, mais régulière, qui donnait un faux tempo avec une fiabilité
+de 0,84. Un seuil absolu perdait une boucle 30 dB plus basse. Les coups doivent donc dépasser
+cinq fois la force moyenne : mesuré, 4 pour une note tenue, 19 pour une boucle de batterie.
+
 **Suivre le tempo.** `Composition::tempo_follow`, désactivé par défaut. Actif, chaque frame
 écrit le BPM détecté dans le `Param` du tempo, si sa fiabilité dépasse 0,3 : le tempo garde
 sa source unique (§3bis.3), et le dernier reste en place dans un silence. Taper ou fixer le
@@ -813,6 +818,27 @@ battement détecté ne recale pas la position des clips.
 
 **Déterminisme.** Rien de tout cela ne lit l'horloge : un rendu offline écrit ses propres
 `AudioFeatures`, BPM compris, et obtient la même image (§20.3).
+
+**Ce qui est vérifié, et comment.** Des boucles de batterie de synthèse (grosse caisse et
+charleston) traversent toute l'analyse : 90, 100, 110, 120, 128, 140 et 150 BPM, à 44,1 et
+48 kHz, se trouvent à moins d'1 BPM, et encore 128 BPM à 30 dB plus bas. Une note tenue, un
+accord tenu, un bruit et un silence ne donnent aucun tempo. Chaque feature se teste sur des
+sinusoïdes : le niveau, le registre, la note de la chroma. Un test du moteur montre le son
+changer l'image par une source audio, un autre que le tempo suivi ne marque pas le fichier
+comme modifié. La source audio se choisit par clics simulés, et se relit d'un fichier. Une
+fixture v1 s'ouvre par migration. L'analyse coûte environ 0,4 % d'un cœur en release : 196 s
+de son en 0,77 s, synthèse comprise. L'application tourne à 60 fps, et la fenêtre réelle a été
+regardée sur une capture.
+
+**Pas encore essayés :** de la vraie musique, ni pour le BPM, ni pour les features, ni pour un
+trig : l'entrée de cette machine était silencieuse. Les seuils viennent de sons de synthèse
+et peuvent demander un réglage. Le menu de clic droit à la vraie souris non plus. Un tempo
+au-delà de 150 BPM n'est pas garanti : 174 peut se lire 87.
+
+**Non couvert.** La phase : le tempo se cale, pas le battement. Une source audio sur
+l'opacité d'une piste ou la vitesse d'un clip, qui vivent dans le graphe de composition. Le
+réglage du lissage d'une source depuis l'interface : ses `Param` existent, sans
+potentiomètre, jusqu'à l'éditeur de nœuds. La chroma se lit mais ne se choisit pas au menu.
 
 ---
 
@@ -1259,10 +1285,10 @@ route (§12).
 ```
 frogenx/
 ├── core/      # Signal, Param, Graph, Clock          ← aucune dépendance ✅
-├── osc/       # oscillateurs, LFO, enveloppes, bruit ✅
+├── osc/       # oscillateurs, LFO, enveloppes, bruit, feature audio ✅
 ├── shape/     # primitives, opérateurs, style (ColorParam, BlendParams) ✅ (core, osc, glam)
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
-├── audio/     # cpal, FFT, spectre → AudioFeatures ✅ (core, cpal, rustfft, rtrb, triple_buffer)
+├── audio/     # cpal, FFT, spectre, features, tempo → AudioFeatures ✅ (core, cpal, rustfft, rtrb, triple_buffer)
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Trig, Command ✅ (core, osc, shape)
 ├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
 ├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre ✅ (core, osc, shape, composition, serde_json)
@@ -1413,7 +1439,7 @@ couches complètes empilées.
 | 7c | ✅ Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | **une grille qu'on remplit soi-même** — *fait* : `cargo run`, glisser un clip sur une case |
 | 7d | ✅ Sortie plein écran sur un second écran (`Preview`, §8.4) | **usage sur scène** — *fait* : `cargo run`, menu `Sortie` |
 | 7e | ✅ Sauvegarde des patchs (§19, §23.8) | **retrouver son travail** — *fait* : `cargo run`, menu `Fichier` |
-| 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) — *capture, spectre et trig faits, avant 7d et 7e à la demande de l'utilisateur (§3bis.6) ; restent le BPM calculé et les autres features* | **visuel audio-réactif** |
+| 8 | ✅ Audio → features → `Signal`, BPM calculé, déclenchements (§7, §7.1) | **visuel audio-réactif** — *fait* : `cargo run`, clic droit sur un potentiomètre, `Suivre` |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
 | 11 | NDI, puis Spout / Syphon | intégration VJ |
@@ -1424,7 +1450,7 @@ couches complètes empilées.
 | 16 | Shaders d'effets custom en WGSL natif (§23.4) | effets utilisateur sans recompiler FrogenX |
 | 17 | Entrées MIDI/OSC, `Param3d::Bind` sur `scene3d` (§22bis.1) | pilotage live de l'interface et des effets par surface de contrôle externe |
 
-**Première version utilisable : jusqu'à l'étape 8 incluse.** Les étapes 7b à 7e ont été
+**Première version utilisable : jusqu'à l'étape 8 incluse, atteinte.** Les étapes 7b à 7e ont été
 insérées quand le plan a révélé qu'aucune étape ne couvrait l'interface. On y ouvre
 l'application, on déclenche des clips dans une grille, on règle leurs paramètres, on
 envoie l'image sur un projecteur, on retrouve son travail, et le son pilote l'image.
@@ -2042,9 +2068,10 @@ s'ouvrir dans six mois.
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
   "meta": { "app": "0.1.0" },
   "tempo": { "fixed": 120.0 },
+  "tempo_follow": false,
   "analysis": { "method": "peak", "freq_scale": "log", "amp_scale": "db",
                 "window": { "fixed": 0.0427 } },
   "columns": 8,
@@ -2120,7 +2147,7 @@ main quand le logiciel refuse de l'ouvrir. La taille et la vitesse de chargement
 sans enjeu ici.
 
 **Ce qui est sauvegardé.** La grille, chaque clip, l'opacité et le mode des pistes, le
-tempo, le réglage de l'analyse audio (§7), les trigs, et le clip actif de chaque piste : la composition revient et joue tout de
+tempo et son suivi, le réglage de l'analyse audio (§7), les trigs, et le clip actif de chaque piste : la composition revient et joue tout de
 suite, avec des phases reparties de zéro. `"state": null` demeure : un patch décrit une
 *configuration*, pas un instant. Ni la disposition des panneaux ni l'écran de sortie ne
 sont sauvegardés : les écrans changent d'une salle à l'autre (§8.4).
@@ -3012,6 +3039,9 @@ et l'état de la sortie y restent toujours lisibles (§8.4, §23.8). La pastille
 pulse à chaque temps : elle dit le tempo, **pas la place dans la mesure**, puisque rien ne
 recale encore la phase (§3bis.3).
 
+**Le tempo** a deux gestes de plus : `Suivre`, et à côté ce que le son en dit, `son : 128.0`
+ou `son : —` (§7.1).
+
 **La scène.** L'image est calée à gauche, entière. **Le panneau du clip ne la couvre pas :
 c'est la seule entorse au modèle du spectre, et elle est voulue.** Un spectre se lit encore
 sous un panneau ; une image de sortie doit se voir entière. Il flotte donc à côté, dans
@@ -3024,7 +3054,8 @@ le même coût qu'avant, puisqu'il est déjà évalué (§3bis.2). Une case vide
 contour : la grille se lit par ce qu'elle contient.
 
 **Le panneau du clip.** Un potentiomètre par `Param`, regroupés en cartes : le clip et sa
-piste, le générateur, chaque effet, le style. Un `Param` modulé porte **une couronne**,
+piste, le générateur, chaque effet, le style. Un clic droit sur un cadran y branche une
+source audio (§7.1). Un `Param` modulé porte **une couronne**,
 reprise de l'anneau de gain de Pro-Q : l'arc montre ce que la modulation parcourt, le point
 où elle en est à cette frame, et une ligne `±` règle sa profondeur.
 

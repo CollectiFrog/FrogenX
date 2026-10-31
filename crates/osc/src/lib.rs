@@ -44,12 +44,14 @@
 //! assert!(g.diagnostics().is_clean());
 //! ```
 
+pub mod audio;
 pub mod envelope;
 pub mod noise;
 pub mod oscillator;
 pub mod trig;
 pub mod waveform;
 
+pub use audio::AudioFeature;
 pub use envelope::{Envelope, SampleHold, Trigger};
 pub use noise::{fbm_1d, value_noise_1d, Noise};
 pub use oscillator::{Lfo, Mix, Oscillator, Product, Sum};

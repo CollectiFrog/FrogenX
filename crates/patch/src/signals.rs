@@ -7,7 +7,8 @@
 use frogenx_composition::{BeatRate, PositionSignal};
 use frogenx_core::{Constant, Signal, Spec, SpecError};
 use frogenx_osc::{
-    Divider, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold, SpectrumZone, Sum, Trigger,
+    AudioFeature, Divider, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold,
+    SpectrumZone, Sum, Trigger,
 };
 
 /// Le `Signal` que décrit `spec`.
@@ -25,6 +26,7 @@ pub fn signal_from_spec(spec: &Spec) -> Result<Box<dyn Signal>, SpecError> {
         "SampleHold" => Box::new(SampleHold::from_spec(spec)?),
         "SpectrumZone" => Box::new(SpectrumZone::from_spec(spec)?),
         "Divider" => Box::new(Divider::from_spec(spec)?),
+        "AudioFeature" => Box::new(AudioFeature::from_spec(spec)?),
         "BeatRate" => Box::new(BeatRate::from_spec(spec)?),
         "PositionSignal" => Box::new(PositionSignal::from_spec(spec)?),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
@@ -34,7 +36,7 @@ pub fn signal_from_spec(spec: &Spec) -> Result<Box<dyn Signal>, SpecError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogenx_core::Param;
+    use frogenx_core::{FeatureKind, Param};
     use frogenx_osc::Waveform;
 
     /// Un `Signal` de chaque type, ses champs décalés de leur défaut.
@@ -64,6 +66,11 @@ mod tests {
             }),
             Box::new(SpectrumZone::new((40.0, 90.0), (0.25, 0.75))),
             Box::new(Divider::new(p(1.0), 8.0)),
+            Box::new(AudioFeature {
+                attack: p(0.25),
+                release: p(0.5),
+                ..AudioFeature::new(FeatureKind::Chroma(9))
+            }),
             Box::new(BeatRate::new(4.0)),
             Box::new(PositionSignal::new(p(1.5))),
         ]
@@ -84,7 +91,7 @@ mod tests {
         let mut noms: Vec<_> = signaux().iter().map(|s| s.spec().kind).collect();
         noms.sort();
         noms.dedup();
-        assert_eq!(noms.len(), 14, "un type par ligne");
+        assert_eq!(noms.len(), 15, "un type par ligne");
     }
 
     #[test]

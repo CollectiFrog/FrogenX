@@ -55,7 +55,7 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 7e faites.** `cargo run` ouvre l'application : une interface egui sur la
+**Étapes 1 à 8 faites : la première version est là.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
 les colonnes et Espace pour taper. Le menu `Sortie` envoie l'image en plein écran sur un
@@ -87,7 +87,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   `Clip`, `CrossFader`, `TempoController`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
   de composition. Dépend de `core` et `shape`. Seul `Cut` s'applique, et `PlayMode` n'a
   pas encore d'effet (§3bis.3).
-- `crates/audio` : capture `cpal`, analyse en 128 bandes (crête, énergie, multi-résolution). Seul
+- `crates/audio` : capture `cpal`, analyse en 128 bandes (crête, énergie, multi-résolution),
+  features fixes et BPM (`features.rs`, `tempo.rs`, §7.1). Seul
   `capture.rs` touche à la carte son ; le reste se teste sur des signaux de synthèse. Dépend
   de `core` seule : `app` pose les features dans `Engine` (`set_audio`).
 - `crates/library` : les 24 clips prédéfinis et la grille de départ (§23.6), en code
@@ -112,8 +113,9 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés. `file_flow.rs`
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
-**Prochaine étape : 8, l'audio.** Dernière étape de la première version, §12 : BPM calculé et
-autres features ; capture, spectre et trig sont faits (§7).
+**Prochaine étape : à choisir.** L'éditeur de nœuds, qui n'a pas de numéro au §12, rendrait
+accessibles les modulations encore réservées au code ; la 9 est la `FeedbackLayer`. Le BPM et
+les features n'ont pas encore été essayés sur de la vraie musique (§7.1).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version
