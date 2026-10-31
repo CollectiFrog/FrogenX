@@ -65,9 +65,11 @@ sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p f
 --example catalogue` (une planche du catalogue). Les tests GPU se sautent proprement
 sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 
-Le panneau audio montre le spectre de l'entrée par défaut : on y dessine à la souris la
-zone d'un **trig**, qui déclenche une colonne ou un clip une fois sur 1, 2, 4, 8, 16 ou 32
-(§3bis.6).
+Le panneau audio montre le spectre de l'entrée par défaut, dans l'analyse choisie : trois
+méthodes, quatre échelles de fréquence dont la linéaire, deux d'amplitude, et une durée
+d'analyse de 5 ms à 1 s (§7). On y trace à la souris la zone d'un **trig**, qui déclenche
+une colonne ou un clip une fois sur 1, 2, 4, 8, 16 ou 32 (§3bis.6). Le design suit §23.1 :
+disposition de Resolume, apparence de Pro-Q.
 
 - `crates/core` : `Signal`, `Param`, `Graph`, `Clock`, `Spectrum`. Aucune dépendance.
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
@@ -83,7 +85,7 @@ zone d'un **trig**, qui déclenche une colonne ou un clip une fois sur 1, 2, 4, 
   `Clip`, `CrossFader`, `TempoController`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
   de composition. Dépend de `core` et `shape`. Seul `Cut` s'applique, et `PlayMode` n'a
   pas encore d'effet (§3bis.3).
-- `crates/audio` : capture `cpal`, FFT, spectre en 128 bandes logarithmiques. Seul
+- `crates/audio` : capture `cpal`, analyse en 128 bandes (crête, énergie, multi-résolution). Seul
   `capture.rs` touche à la carte son ; le reste se teste sur des signaux de synthèse. Dépend
   de `core` seule : `app` pose les features dans `Engine` (`set_audio`).
 - `crates/library` : les 24 clips prédéfinis et la grille de départ (§23.6), en code

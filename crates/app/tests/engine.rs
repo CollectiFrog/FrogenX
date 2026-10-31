@@ -8,7 +8,8 @@ use frogenx_composition::{
     Clip, ClipId, Command, Composition, LayerId, PlayMode, Transport, TrigSlot, TrigTarget,
 };
 use frogenx_core::{
-    AudioFeatures, Clock, Constant, Ctx, Graph, NodeState, Param, Signal, Spectrum, SPECTRUM_BANDS,
+    AnalysisMethod, AnalysisSettings, AudioFeatures, Clock, Constant, Ctx, FreqScale, Graph,
+    NodeState, Param, Signal, Spectrum,
 };
 use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
 use frogenx_output::{
@@ -573,9 +574,7 @@ fn le_temps_reel_refuse_une_sortie_cpu() {
 /// Un spectre plat : tout le spectre à ce niveau.
 fn son(niveau: f32) -> AudioFeatures {
     AudioFeatures {
-        spectrum: Spectrum {
-            levels: [niveau; SPECTRUM_BANDS],
-        },
+        spectrum: Spectrum::flat(niveau),
         ..Default::default()
     }
 }
@@ -640,6 +639,24 @@ fn le_clip_actif_lit_le_spectre_dans_son_propre_graphe() {
     moteur.frame(0.0);
     let graphe = moteur.composition().clip(clip).unwrap().graph();
     assert_eq!(graphe.value(zone), 1.0);
+}
+
+#[test]
+fn une_commande_change_ce_que_le_moteur_demande_a_l_analyse() {
+    // C'est ce que le binaire transmet à l'entrée, à chaque frame (§7).
+    let Some(gpu) = gpu() else { return };
+    let (c, ..) = une_piste();
+    let (mut moteur, _) = moteur(gpu, c);
+    assert_eq!(moteur.analysis(), AnalysisSettings::default());
+
+    moteur.push(Command::SetAnalysisMethod(AnalysisMethod::ConstantQ));
+    moteur.push(Command::SetFreqScale(FreqScale::Linear));
+    moteur.push(Command::SetAnalysisWindow(0.25));
+    moteur.frame(0.0);
+    let reglage = moteur.analysis();
+    assert_eq!(reglage.method, AnalysisMethod::ConstantQ);
+    assert_eq!(reglage.freq_scale, FreqScale::Linear);
+    assert_eq!(reglage.window, 0.25);
 }
 
 #[test]

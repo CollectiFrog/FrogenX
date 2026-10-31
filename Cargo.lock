@@ -947,6 +947,7 @@ dependencies = [
  "frogenx-composition",
  "frogenx-core",
  "frogenx-library",
+ "frogenx-osc",
  "frogenx-shape",
 ]
 

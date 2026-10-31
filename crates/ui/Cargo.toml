@@ -12,6 +12,7 @@ license.workspace = true
 frogenx-composition.workspace = true
 frogenx-core.workspace = true
 frogenx-library.workspace = true
+frogenx-osc.workspace = true
 egui.workspace = true
 
 [dev-dependencies]

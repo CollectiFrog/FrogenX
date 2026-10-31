@@ -8,6 +8,8 @@ use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, DeckId, LayerId, TrigId};
 use crate::trig::{TrigSlot, TrigTarget};
 use frogenx_core::Param;
+use frogenx_core::{AmpScale, AnalysisMethod, FreqScale};
+use frogenx_osc::SpectrumZone;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
@@ -65,6 +67,11 @@ pub enum Command {
     TapTempo,
     /// Ajoute un trig sur les graves, sans cible (§3bis.6).
     AddTrig,
+    /// Ajoute un trig sur une zone tracée à la souris, sans cible.
+    AddTrigAt {
+        freq: (f32, f32),
+        level: (f32, f32),
+    },
     RemoveTrig(TrigId),
     /// Règle une zone ou un compteur, sans couper leur modulation.
     SetTrigParam {
@@ -78,6 +85,11 @@ pub enum Command {
     },
     /// Le coup suivant redevient le premier du compte.
     ResetTrigCount(TrigId),
+    SetAnalysisMethod(AnalysisMethod),
+    SetFreqScale(FreqScale),
+    SetAmpScale(AmpScale),
+    /// La durée d'analyse, en secondes, sans couper sa modulation.
+    SetAnalysisWindow(f32),
 }
 
 impl Composition {
@@ -134,6 +146,11 @@ impl Composition {
                 true
             }
             Command::AddTrig => self.add_default_trig().is_some(),
+            Command::AddTrigAt { freq, level } => {
+                let bornes = [freq.0, freq.1, level.0, level.1];
+                bornes.iter().all(|v| v.is_finite())
+                    && self.add_trig(SpectrumZone::new(freq, level), 1.0).is_some()
+            }
             Command::RemoveTrig(trig) => self.remove_trig(trig),
             Command::SetTrigParam { trig, slot, value } => self.set_trig_param(trig, slot, value),
             Command::SetTrigTarget { trig, target } => match self.trig_mut(trig) {
@@ -144,6 +161,24 @@ impl Composition {
                 None => false,
             },
             Command::ResetTrigCount(trig) => self.reset_trig_count(trig),
+            Command::SetAnalysisMethod(method) => {
+                self.analysis.method = method;
+                true
+            }
+            Command::SetFreqScale(scale) => {
+                self.analysis.freq_scale = scale;
+                true
+            }
+            Command::SetAmpScale(scale) => {
+                self.analysis.amp_scale = scale;
+                true
+            }
+            Command::SetAnalysisWindow(seconds) => {
+                if seconds.is_finite() {
+                    self.analysis.window.set_base(seconds);
+                }
+                seconds.is_finite()
+            }
         }
     }
 }
@@ -472,6 +507,41 @@ mod tests {
         assert!(!c.apply(Command::RemoveTrig(trig), 0.0), "périmé");
         assert!(!c.apply(Command::ResetTrigCount(trig), 0.0));
         assert!(!c.apply(Command::SetTrigTarget { trig, target }, 0.0));
+    }
+
+    #[test]
+    fn un_trig_peut_naitre_d_une_zone_tracee() {
+        let (mut c, ..) = grille();
+        let trace = Command::AddTrigAt {
+            freq: (200.0, 900.0),
+            level: (0.3, 0.6),
+        };
+        assert!(c.apply(trace, 0.0));
+        let z = *c.trig(c.trigs()[0]).unwrap().zone();
+        assert_eq!(z.freq_min.base(), 200.0);
+        assert_eq!(z.level_max.base(), 0.6);
+
+        let invalide = Command::AddTrigAt {
+            freq: (f32::NAN, 900.0),
+            level: (0.3, 0.6),
+        };
+        assert!(!c.apply(invalide, 0.0));
+        assert_eq!(c.trigs().len(), 1);
+    }
+
+    #[test]
+    fn les_commandes_reglent_l_analyse() {
+        let (mut c, ..) = grille();
+        assert!(c.apply(Command::SetAnalysisMethod(AnalysisMethod::ConstantQ), 0.0));
+        assert!(c.apply(Command::SetFreqScale(FreqScale::Linear), 0.0));
+        assert!(c.apply(Command::SetAmpScale(AmpScale::Linear), 0.0));
+        assert!(c.apply(Command::SetAnalysisWindow(0.25), 0.0));
+        assert!(!c.apply(Command::SetAnalysisWindow(f32::NAN), 0.0));
+        let reglage = c.analysis.resolve(c.graph());
+        assert_eq!(reglage.method, AnalysisMethod::ConstantQ);
+        assert_eq!(reglage.freq_scale, FreqScale::Linear);
+        assert_eq!(reglage.amp_scale, AmpScale::Linear);
+        assert_eq!(reglage.window, 0.25);
     }
 
     #[test]

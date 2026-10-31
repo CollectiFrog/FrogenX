@@ -194,6 +194,7 @@ impl Running {
         let dt = (now - self.last).as_secs_f64();
         self.rate.tick(dt);
         if let Some(entree) = &mut self.audio {
+            entree.configure(self.engine.analysis());
             self.engine.set_audio(entree.read().clone());
             self.audio_status = entree.status();
         }

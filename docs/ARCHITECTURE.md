@@ -712,14 +712,46 @@ qui alimente le `TempoController` (§3bis.3) en plus du tap tempo, et à **décl
 effets vidéo** à partir des transitoires. Le modèle de déclenchement est tranché : c'est
 le **trig** (§3bis.6). L'algorithme de détection du BPM le sera avec la fin de l'étape 8.
 
-**Le spectre.** `AudioFeatures::spectrum` : 128 bandes logarithmiques de 20 Hz à 20 kHz,
-chacune dans `[0, 1]`. Le type vit dans `core` (§16.2), de taille fixe : il voyage dans le
-triple buffer et dans `Ctx` sans jamais allouer. Une FFT de 2048 points, fenêtre de Hann,
-toutes les 512 échantillons, soit 94 spectres par seconde et des cases de 23 Hz à 48 kHz :
-le double séparerait mieux les graves, mais doublerait le retard d'un déclenchement. Le
-niveau est linéaire en dB : `0` à -72 dB, `1` pour une sinusoïde à pleine échelle. La
-montée est immédiate, et la descente a 60 ms de constante de temps : lisser l'attaque
-retarderait le trig (§3bis.6).
+**Le spectre.** `AudioFeatures::spectrum` : 128 bandes de 20 Hz à 20 kHz, chacune dans
+`[0, 1]`. Le type vit dans `core` (§16.2), de taille fixe : il voyage dans le triple buffer
+et dans `Ctx` sans jamais allouer. Il **porte ses échelles** : une zone en Hz se relit donc
+juste, quel que soit le découpage. La montée est immédiate, et la descente a 60 ms de
+constante de temps : lisser l'attaque retarderait le trig (§3bis.6).
+
+**Quatre réglages, tenus par la composition** (`Composition.analysis`, un `AudioAnalysis`).
+Un fichier les garde avec ses zones : une zone n'a de sens que relue comme elle a été posée.
+
+| Réglage | Choix | Ce que ça change |
+|---|---|---|
+| `AnalysisMethod` | `Peak` | la case de FFT la plus haute de chaque bande : les notes ressortent |
+| | `Energy` | l'énergie de toute la bande : le bruit et les charleys pèsent leur poids |
+| | `ConstantQ` | une fenêtre par bande, d'autant plus courte que la bande est large : les aigus réagissent vite, les graves restent séparés |
+| `FreqScale` | `Log`, `Mel`, `Bark`, `Linear` | comment l'axe se découpe en bandes égales. `Linear` donne 157 Hz par bande : les graves y tiennent dans une seule |
+| `AmpScale` | `Decibel` | de -72 dB (`0`) à une sinusoïde à pleine échelle (`1`) |
+| | `Linear` | la magnitude elle-même : seuls les sons forts émergent |
+| `window` | 5 ms à 1 s | la durée de signal analysée, le compromis temps/fréquence |
+
+**La durée d'analyse.** Longue, elle sépare deux graves proches, mais répond tard : il faut
+environ 250 ms pour distinguer 100 et 130 Hz. Courte, elle réagit tout de suite et confond
+tout ce qui est plus proche que son inverse. Les 43 ms par défaut (2048 échantillons à
+48 kHz) sont un compromis pour un trig. La FFT fait toujours au moins deux fois la fenêtre,
+complétée de zéros : une sinusoïde tombée entre deux cases y perd 0,4 dB au lieu de 1,4,
+écart qui se lisait en amplitude linéaire. Le saut entre deux analyses reste à 512
+échantillons au plus, et jamais plus d'une demi-fenêtre : une attaque ne passe pas entre
+deux analyses. En `ConstantQ`, la durée plafonne le noyau le plus long.
+
+**La durée reste un `Param`.** La règle du §2.2 tient ici aussi : `AudioAnalysis::window`
+se module, et son consommateur la sature (`sanitize_window`, §18.4). C'est possible parce
+que l'analyseur garde 1 s d'historique quelle que soit la fenêtre : en changer ne perd aucun
+échantillon. Les trois autres réglages sont des choix qu'on tranche, pas des valeurs.
+Ce qui traverse les threads est la version résolue, `AnalysisSettings`, par un petit anneau
+`rtrb` du thread principal vers l'analyse, qui peut allouer : il n'est pas temps réel.
+
+**Une zone se lit dans l'échelle où elle a été posée.** Ses fréquences sont en Hz et
+survivent à tout changement d'échelle. Ses niveaux, eux, sont en unités du spectre :
+passer de `Decibel` à `Linear` ne les convertit pas, et une zone à `0.7` n'y signifie plus
+la même chose. Ce n'est pas un oubli : c'est le réglage d'un trig qu'on est en train de
+changer, et le dire vaut mieux qu'une conversion que personne ne relirait.
 
 **Quatre pièges déjà payés.** Le continu d'un micro fuit dans les premières bandes, celles
 où l'on pose un trig de grosse caisse, et y tient la zone ouverte : la moyenne est retirée
@@ -1187,7 +1219,7 @@ frogenx/
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
-├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ✅ (library, composition, core, egui)
+├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ✅ (library, composition, osc, core, egui)
 └── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit, egui-wgpu, egui-winit ✅
 ```
 
@@ -1385,7 +1417,14 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Le trig : deux `Signal` dans `osc` (`SpectrumZone`, `Divider`), câblés par un `Trig` de `composition`** (§3bis.6) | ils ne lisent que `Ctx`, donc déterministes et testés sans carte son ; un clip peut s'en servir pour moduler ses `Param` ; `Trig` porte seulement la cible et survit aux changements de clip |
 | **Une zone se franchit par le bas, une seule fois** (§3bis.6) | une attaque traverse la zone deux fois : sans ce contrat, chaque coup compterait double et le compteur serait faux ; le haut de la zone garde un sens en excluant ce qui saute au-dessus |
 | **`Divider` compte des fronts et laisse passer le premier** (§3bis.6) | il ignore la musique, donc toute porte s'y branche ; partir du premier répond tout de suite et cale le compte sur le temps fort |
-| **Spectre : bandes logarithmiques de taille fixe, dans `core`** (§7) | l'oreille entend en octaves ; une taille fixe traverse le triple buffer et `Ctx` sans allouer ; `core` n'en sait pas l'origine, un rendu offline écrit le sien |
+| **Spectre : un nombre fixe de bandes, qui porte ses échelles, dans `core`** (§7) | une taille fixe traverse le triple buffer et `Ctx` sans allouer ; `core` n'en sait pas l'origine, un rendu offline écrit le sien ; les échelles voyagent avec lui, donc une zone en Hz se relit juste sur tout découpage |
+| **L'analyse se règle dans la composition** (`AudioAnalysis`), pas dans l'interface ni dans `audio` (§7) | une zone n'a de sens que relue avec l'analyse qui l'a fait poser : un fichier doit garder les deux ; `composition` ne touche pas la carte son, elle résout, et `app` transmet |
+| **La durée d'analyse est un `Param`, l'analyseur garde 1 s d'historique** (§7) | la règle du §2.2 n'a pas d'exception : changer de fenêtre ne perd aucun échantillon, donc la moduler reste possible ; les méthodes et échelles sont des choix, pas des valeurs |
+| **Trois méthodes sur un même découpage**, pas un analyseur par usage (§7) | les bandes viennent de la `FreqScale` et la mesure de l'`AnalysisMethod` : toute méthode vaut sur toute échelle, et le `Spectrum` en sortie reste le même contrat pour le trig et l'interface |
+| **Une zone garde ses niveaux quand l'échelle d'amplitude change** (§7) | c'est le réglage du trig qu'on change ; une conversion silencieuse cacherait qu'une zone à 0.7 ne veut plus dire la même chose |
+| **Apparence de Pro-Q, disposition de Resolume** (§23.1) | la disposition répond à la conduite d'un set, l'apparence à la lecture d'un son ; le spectre est devenu le cœur de l'audio-réactivité |
+| **Une couleur par trig, enfermée dans le spectre** (§23.1) | des zones qui se superposent se distinguent par leur couleur ; hors du panneau, l'or reste le seul ton saturé, et rien ne concurrence le monitor |
+| **Les gestes sur le spectre se calculent en coordonnées du tracé** (§23.7) | ni Hz ni pixels : un même geste vaut sur toutes les échelles, et se teste sans egui |
 | **Un `Signal` lit l'audio dans `Ctx`, pas dans le triple buffer** (§7, §20.1) | le buffer se lit une fois par frame, à l'étape 2 : deux lectures pendant l'évaluation verraient deux spectres, et le rendu ne serait plus déterministe |
 | **`Graph::replace`, plutôt qu'un `Param` partagé** (§3bis.6) | un `Signal` est opaque dans le graphe ; le remplacer garde son identifiant, ses dépendances et son état, donc le compte d'un trig qu'on règle en jouant |
 | NDI avant Spout / Syphon | seule techno des trois plateformes ; les autres sont `unsafe` et tardives |
@@ -1946,6 +1985,8 @@ s'ouvrir dans six mois.
   "version": 1,
   "meta": { "app": "0.1.0" },
   "tempo": { "fixed": 120.0 },
+  "analysis": { "method": "peak", "freq_scale": "log", "amp_scale": "db",
+                "window": { "fixed": 0.0427 } },
   "columns": 8,
   "active_deck": 0,
   "graph": [ /* le graphe de composition, trigs compris */ ],
@@ -2019,7 +2060,7 @@ main quand le logiciel refuse de l'ouvrir. La taille et la vitesse de chargement
 sans enjeu ici.
 
 **Ce qui est sauvegardé.** La grille, chaque clip, l'opacité et le mode des pistes, le
-tempo, les trigs, et le clip actif de chaque piste : la composition revient et joue tout de
+tempo, le réglage de l'analyse audio (§7), les trigs, et le clip actif de chaque piste : la composition revient et joue tout de
 suite, avec des phases reparties de zéro. `"state": null` demeure : un patch décrit une
 *configuration*, pas un instant. Ni la disposition des panneaux ni l'écran de sortie ne
 sont sauvegardés : les écrans changent d'une salle à l'autre (§8.4).
@@ -2508,34 +2549,40 @@ sans panique. `Engine` les applique entre deux frames. Tout pilote passe par là
 touches 1 à 8 aujourd'hui, l'interface, le MIDI et l'OSC ensuite. Les commandes de
 câblage ci-dessus arriveront avec l'éditeur de nœuds.
 
-### 23.1 Charte graphique de référence — Resolume Arena
+### 23.1 Charte graphique — Resolume Arena pour la disposition, Pro-Q pour le signal
 
-**Décision : l'UI de FrogenX part de la charte graphique et de la disposition de
-Resolume Arena**, observées sur une capture de l'application réelle (v7.28.1) et
-confirmées par ses fichiers de layout (`Preferences/recentLayout.xml`,
-`Presets/Interface/*.xml`). Cette charte est un point de départ, amené à évoluer
-avec les fonctionnalités développées — pas une contrainte figée.
+**Décision : la disposition de FrogenX vient de Resolume Arena** (§23.2), et **son
+apparence de FabFilter Pro-Q** : un noir légèrement teinté, des surfaces arrondies, le
+signal comme fond de l'écran, et les réglages qui flottent dessus seulement quand on les
+demande. La disposition répond à la conduite d'un set, que Resolume a résolue ; l'apparence
+répond à la lecture d'un son, que Pro-Q a résolue, et le spectre est devenu le cœur de
+l'audio-réactivité (§3bis.6). Cette charte reste amenée à évoluer avec les fonctionnalités.
 
-**Palette (valeurs relatives, à affiner en hex pendant l'implémentation UI) :**
+**Palette (`ui/src/theme.rs`) :**
 
 | Rôle | Ton | Usage |
 |---|---|---|
-| Fond principal | anthracite quasi noir | zone de grille, dashboards, monitors |
-| Fond des en-têtes | gris sombre, légèrement plus clair que le fond principal | barres de colonnes, toolbar |
-| **Accent unique** | cyan/menthe vif | sélection active — layer sélectionné, onglet actif, bouton play, clip/effet mis en avant |
-| Accent secondaire | vert terne | toggles actifs mais non sélectionnés |
+| Fond principal | noir teinté de violet | zone de grille, panneaux, monitor |
+| Fond des en-têtes | gris sombre, légèrement plus clair | barres, cases vides |
+| **Accent unique** | or vif | état actif — clip joué, valeur choisie, bouton pressé, crêtes du spectre |
+| Couleurs de trig | six teintes saturées | **dans le spectre seulement** : une par trig |
 | Texte principal | blanc cassé | tous les labels |
-| Texte secondaire | gris moyen | labels désactivés, placeholders |
+| Texte secondaire | gris moyen | labels secondaires, placeholders |
 | Bordures | noir quasi pur | séparateurs entre panneaux |
 
-**Un seul accent porte toute la sélection**, plutôt qu'une couleur par catégorie
-d'élément — layer actif, onglet actif, transport, effet actif partagent la même
-teinte. C'est délibéré chez Resolume : dans un environnement de régie sombre, une
-palette monochrome avec un accent unique reste lisible sous faible éclairage et ne
-rivalise jamais avec les couleurs du contenu vidéo affiché dans les vignettes et les
-monitors, qui doivent rester les éléments les plus saturés à l'écran. FrogenX reprend
-ce principe plutôt que la palette dans l'absolu : fond sombre neutre, un seul accent
-réservé à l'état actif, jamais de couleur UI qui concurrence le rendu.
+**Un seul accent porte tout l'état actif**, plutôt qu'une couleur par catégorie d'élément.
+Le principe vient de Resolume et il reste, même si la teinte a changé : dans une régie
+sombre, une palette monochrome avec un accent unique reste lisible sous faible éclairage,
+et ne rivalise jamais avec le contenu vidéo du monitor, qui doit rester l'élément le plus
+saturé de l'écran.
+
+**Une exception, et sa raison : les trigs.** Dans le spectre, la couleur ne dit pas un
+état, elle distingue des objets qui se superposent, comme les bandes d'un égaliseur. Elle
+y reste enfermée : hors du panneau audio, rien d'autre que l'or n'est saturé.
+
+**Un survol ne gonfle pas une case.** Le défaut d'egui agrandit légèrement un bouton
+survolé ; sur une grille, cela fait bouger ses voisines, et rien ne justifie ce mouvement
+sur scène.
 
 ### 23.2 Disposition de référence
 
@@ -2678,7 +2725,7 @@ appartient (`UiState`).
 
 **Grille.** Une ligne par piste, la plus haute en haut, comme dans la pile de
 composition. Un clic sur une cellule déclenche le clip et l'affiche dans les réglages ;
-un clic sur un en-tête déclenche la colonne. Le clip actif porte l'accent cyan (§23.1) ;
+un clic sur un en-tête déclenche la colonne. Le clip actif porte l'accent or (§23.1) ;
 il n'y a **pas de vignette**, qui évaluerait tous les clips. Chaque ligne montre une case
 par colonne, vide ou non (§3bis.1).
 
@@ -2760,31 +2807,66 @@ dents trop larges ne dessinait qu'un anneau.
 
 ### 23.7 Le panneau audio
 
-Un panneau bas, masquable : le spectre à gauche, les réglages du trig choisi à droite
-(`ui/src/spectrum.rs`). L'accent cyan reste réservé à l'état actif (§23.1) : les barres du
-spectre sont grises, le contour du trig choisi est cyan, et sa zone ne s'emplit que porte
-ouverte, plus fort à chaque passage du compteur.
+Le son est le fond de l'écran : c'est le principe repris de FabFilter Pro-Q (§23.1). Tout
+le panneau (`ui/src/spectrum.rs`) est un tracé, sur lequel chaque trig pose sa zone.
 
-**Glisser sur le spectre dessine la zone du trig choisi** ; cliquer dans une zone choisit
-son trig. Le glissé émet ses `Command::SetTrigParam`, frame après frame, et ne garde dans
-`UiState` que son coin de départ, en fréquence et niveau plutôt qu'en pixels.
+```
+┌─────────────────────────────────────────────────────────┬────┐
+│  ┌─zone──●──┐                     ┌─zone──●──┐        -12 │ ▐  │
+│  └──────────┘    courbe du son    └──────────┘        -24 │ ▐  │
+│        ╭───panneau flottant du trig choisi───╮        -36 │ ▐  │
+│ ▁▂▃▅▆▅ │ ◔ ◔ ◔ ◔ ◔   1/1 1/2 1/4 1/8 … Cible │ ▅▃▂▁   -48 │ ▐  │
+│ 20  50 ╰─────────────────────────────────────╯   10k  20k │    │
+├─────────────────────────────────────────────────────────┴────┤
+│ Trig 1  Trig 2  Ajouter   source   Analyse  Échelle  Amplitude  Fenêtre │
+└──────────────────────────────────────────────────────────────┘
+```
 
-**Piège d'egui :** `drag_started` ne tombe qu'après quelques pixels de déplacement ; le
-coin de la zone se lit dans `pointer.press_origin()`, pas sous le curseur. Le test de
-glissé l'a révélé.
+**Le tracé.** Le son est une surface grise qui s'efface vers le bas, lissée entre les
+bandes (Catmull-Rom). La courbe or est celle des crêtes : elle saute au niveau et retombe
+doucement, pour montrer où poser une zone quand le son est déjà passé. Les repères suivent
+les échelles (§7) : `freq_marks` efface ceux qui se chevauchent, si bien que l'échelle
+linéaire perd ses graves plutôt que de les empiler. Les repères de fréquence se dessinent
+après la courbe : avant, le son les recouvrait.
 
-Les réglages : trigs, compteur (« 1 sur N », et le coup attendu, `3 / 8`), `Recaler`,
-cible, `Retirer`, et un curseur par borne pour les valeurs exactes. Sans entrée audio,
-le panneau dit pourquoi et l'application tourne quand même (§18.1).
+**Une couleur par trig.** Les zones sont les seuls éléments colorés de l'interface
+(`theme::TRIGS`). Elles s'éclairent porte ouverte, et plus fort, avec un halo sur la
+poignée, quand le compteur laisse passer le coup. Le trig choisi porte un contour plus
+épais et une bague blanche.
 
-**Ce qui est vérifié, et comment.** Les clics et le glissé par `egui_kittest` ; le
-parcours complet, du son au trig, sur une boucle de batterie de synthèse (16 coups, 16
-fronts, puis 4, 2 et 1 passages à 1 sur 4, 8 et 16) ; le déclenchement dans `Engine`, sans
-fenêtre. L'entrée réelle s'ouvre et transmet du signal (M-Audio ProFire 610, 6 canaux,
-44,1 kHz, Windows), mais elle était silencieuse pendant l'essai. Le panneau a été regardé
-sur une capture de la vraie fenêtre, avec un spectre simulé. **Pas encore essayés :** un
-trig sur de la vraie musique, et le glissé à la vraie souris. L'interface entière, panneau
-compris, a coûté 3,8 ms par frame en debug ; le coût du seul panneau n'a pas été isolé.
+**Les gestes.** Glisser dans le vide trace une nouvelle zone (`Command::AddTrigAt`) ; le
+trig qui vient de naître devient le trig choisi. Attraper le corps déplace la zone, un bord
+la redimensionne, et le curseur annonce lequel. Cliquer choisit une zone, cliquer dans le
+vide referme le panneau : le spectre redevient lisible. Un geste se calcule en coordonnées
+du tracé `[0, 1]²`, ni en Hz ni en pixels : il vaut donc sur toutes les échelles, et se teste
+sans egui (`moved`, `grab_at`). Seules les bornes touchées émettent une commande.
+
+**Le panneau flottant** n'existe que pour le trig choisi, et son fond retient la souris :
+un clic manqué ne trace pas de zone dessous. Cinq potentiomètres (`BASSE`, `HAUTE`, `SEUIL`,
+`PLAFOND`, `MARGE`), chacun avec sa valeur exacte en saisie ; le compteur en boutons, parce
+que six valeurs se lisent mieux qu'une liste ; le coup attendu, la cible, `Recaler` et
+`Retirer`. La barre du bas règle l'analyse (§7), et la fenêtre annonce sa résolution au
+survol. Sans entrée audio, elle dit pourquoi et l'application tourne quand même (§18.1).
+
+**Pièges.** `drag_started` ne tombe qu'après quelques pixels : un geste part de
+`pointer.press_origin()`, pas du curseur. `vertical_centered` prend toute la largeur
+disponible : cinq potentiomètres y étiraient le panneau sur le son qu'il doit laisser voir.
+`override_text_color` l'emporte sur tout : le texte d'un état choisi restait clair sur l'or.
+`ComboBox::from_label` met son nom à droite ; il est donc ajouté après, dans une barre
+remplie de droite à gauche. Un cadran tenu sans bouger ne doit rien émettre : sinon, le
+fichier se marque comme modifié à chaque frame (§23.8).
+
+**Ce qui est vérifié, et comment.** Les clics, les glissés et les potentiomètres par
+`egui_kittest` ; le parcours complet, du son au trig, sur une boucle de batterie de synthèse
+(16 coups, 16 fronts, puis 4, 2 et 1 passages à 1 sur 4, 8 et 16) ; le déclenchement dans
+`Engine`, sans fenêtre. Trois captures de la vraie fenêtre ont été regardées, avec un
+spectre simulé. Mesuré en release, avec le panneau ouvert et deux zones : 0,83 ms
+d'interface par frame, 16,2 à 17,1 ms entre deux frames. Sur le thread d'analyse, à 48 kHz :
+1 % d'un cœur au plus en FFT, 10,6 % au pire en `ConstantQ` (fenêtre de 250 ms).
+
+L'entrée réelle s'ouvre et transmet du signal (M-Audio ProFire 610, 6 canaux, 44,1 kHz,
+Windows), mais elle était silencieuse pendant l'essai. **Pas encore essayés :** un trig sur
+de la vraie musique, le choix des méthodes à l'oreille, et les gestes à la vraie souris.
 
 ### 23.8 Le fichier (étape 7e)
 

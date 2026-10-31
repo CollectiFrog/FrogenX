@@ -9,6 +9,7 @@
 //!  └─ Column[]          déclenche la même tranche sur tous les layers à la fois
 //! ```
 
+use crate::analysis::AudioAnalysis;
 use crate::clip::Clip;
 use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 use crate::transport::{sanitize_bpm, TempoController};
@@ -107,6 +108,8 @@ pub struct Composition {
     /// L'ordre des trigs, celui de leurs commandes (§3bis.6).
     pub(crate) trig_order: Vec<TrigId>,
     pub tempo: TempoController,
+    /// Comment analyser le son : un fichier le garde avec ses zones (§7).
+    pub analysis: AudioAnalysis,
     taps: Vec<f64>,
     active_deck: Option<DeckId>,
 }
@@ -130,6 +133,7 @@ impl Composition {
             trig_arena: Arena::new(),
             trig_order: Vec::new(),
             tempo: TempoController::new(DEFAULT_BPM),
+            analysis: AudioAnalysis::default(),
             taps: Vec::new(),
             active_deck: None,
         }

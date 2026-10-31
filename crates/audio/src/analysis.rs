@@ -7,8 +7,8 @@
 //! Ne connaît pas `cpal` : un test remplit l'anneau à la main.
 
 use crate::analyzer::SpectrumAnalyzer;
-use frogenx_core::AudioFeatures;
-use rtrb::Consumer;
+use frogenx_core::{AnalysisSettings, AudioFeatures};
+use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -20,10 +20,15 @@ const IDLE: Duration = Duration::from_millis(1);
 /// L'énergie moyenne (carré du RMS, -60 dB) sous laquelle un canal ne compte
 /// pas dans le mixage.
 const SILENT_CHANNEL: f32 = 1e-6;
+/// Réglages en attente. Le thread les lit à chaque tour : quelques-uns suffisent.
+const PENDING_SETTINGS: usize = 4;
 
 /// Le thread d'analyse, arrêté et attendu à la destruction.
 pub struct Analysis {
     output: Output<AudioFeatures>,
+    settings: Producer<AnalysisSettings>,
+    /// Les derniers réglages transmis.
+    current: AnalysisSettings,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -36,13 +41,16 @@ impl Analysis {
         sample_rate: f32,
     ) -> std::io::Result<Self> {
         let (input, output) = triple_buffer(&AudioFeatures::default());
+        let (reglages, lus) = RingBuffer::new(PENDING_SETTINGS);
         let stop = Arc::new(AtomicBool::new(false));
         let arret = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
             .name("analyse audio".into())
-            .spawn(move || run(samples, channels.max(1), sample_rate, input, &arret))?;
+            .spawn(move || run(samples, lus, channels.max(1), sample_rate, input, &arret))?;
         Ok(Self {
             output,
+            settings: reglages,
+            current: AnalysisSettings::default(),
             stop,
             thread: Some(thread),
         })
@@ -52,6 +60,15 @@ impl Analysis {
     /// retard, c'est la lecture précédente.
     pub fn read(&mut self) -> &AudioFeatures {
         self.output.read()
+    }
+
+    /// Transmet des réglages au thread d'analyse, sans bloquer (§20.2). File
+    /// pleine : ils restent différents de `current`, donc retentés à la frame
+    /// suivante. Sans effet si rien ne change.
+    pub fn configure(&mut self, settings: AnalysisSettings) {
+        if settings != self.current && self.settings.push(settings).is_ok() {
+            self.current = settings;
+        }
     }
 }
 
@@ -98,6 +115,7 @@ fn downmix(a: &[f32], b: &[f32], energies: &mut [f32], mut push: impl FnMut(f32)
 
 fn run(
     mut samples: Consumer<f32>,
+    mut settings: Consumer<AnalysisSettings>,
     channels: usize,
     sample_rate: f32,
     mut output: Input<AudioFeatures>,
@@ -106,6 +124,11 @@ fn run(
     let mut analyzer = SpectrumAnalyzer::new(sample_rate);
     let mut energies = vec![0.0; channels];
     while !stop.load(Ordering::Relaxed) {
+        // L'allocation d'un changement de fenêtre est permise ici : ce thread
+        // n'est pas temps réel, et le callback n'attend jamais après lui.
+        while let Ok(reglages) = settings.pop() {
+            analyzer.configure(reglages);
+        }
         // Des frames entières seulement : le callback écrit par blocs entiers,
         // les canaux restent donc alignés.
         let disponibles = samples.slots() - samples.slots() % channels;
@@ -136,7 +159,7 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtrb::RingBuffer;
+    use frogenx_core::{AmpScale, FreqScale};
     use std::f32::consts::TAU;
     use std::time::Instant;
 
@@ -209,6 +232,37 @@ mod tests {
         let mut mono = Vec::new();
         downmix(&[0.5], &[0.5, -0.5, -0.5], &mut [0.0; 2], |s| mono.push(s));
         assert_eq!(mono, [0.5, -0.5]);
+    }
+
+    #[test]
+    fn des_reglages_transmis_changent_le_spectre_produit() {
+        let (mut entree, sortie) = RingBuffer::new(32_768);
+        let mut analysis = Analysis::spawn(sortie, 1, SR).unwrap();
+        analysis.configure(AnalysisSettings {
+            freq_scale: FreqScale::Linear,
+            amp_scale: AmpScale::Linear,
+            ..Default::default()
+        });
+        for i in 0..8192 {
+            entree
+                .push(0.5 * (TAU * 1000.0 * i as f32 / SR).sin())
+                .unwrap();
+        }
+        attend(&mut analysis, |a| {
+            a.spectrum.freq_scale == FreqScale::Linear
+                && a.spectrum.amp_scale == AmpScale::Linear
+                && (a.spectrum.peak(900.0, 1100.0) - 0.5).abs() < 0.05
+        });
+    }
+
+    #[test]
+    fn des_reglages_identiques_ne_remplissent_pas_la_file() {
+        let (_entree, sortie) = RingBuffer::<f32>::new(16);
+        let mut analysis = Analysis::spawn(sortie, 1, SR).unwrap();
+        for _ in 0..100 {
+            analysis.configure(AnalysisSettings::default());
+        }
+        assert_eq!(analysis.settings.slots(), PENDING_SETTINGS);
     }
 
     #[test]

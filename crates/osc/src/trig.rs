@@ -177,14 +177,12 @@ impl Signal for Divider {
 mod tests {
     use super::*;
     use crate::Envelope;
-    use frogenx_core::{AudioFeatures, Constant, Graph, Spectrum, SPECTRUM_BANDS};
+    use frogenx_core::{AudioFeatures, Constant, Graph, Spectrum};
 
     /// Un spectre plat à `niveau`.
     fn plat(niveau: f32) -> AudioFeatures {
         AudioFeatures {
-            spectrum: Spectrum {
-                levels: [niveau; SPECTRUM_BANDS],
-            },
+            spectrum: Spectrum::flat(niveau),
             ..Default::default()
         }
     }
@@ -255,7 +253,7 @@ mod tests {
         let id = g.add(Box::new(zone()));
         let mut audio = AudioFeatures::default();
         // Un pic loin de la zone, à 10 kHz.
-        let bande = (Spectrum::position(10_000.0) * SPECTRUM_BANDS as f32) as usize;
+        let bande = audio.spectrum.band(10_000.0);
         audio.spectrum.levels[bande] = 0.7;
         g.set_audio(audio);
         g.eval_frame(0.0, 1.0 / 60.0);

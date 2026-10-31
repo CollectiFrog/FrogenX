@@ -47,7 +47,11 @@ pub use clock::{Clock, ClockMode};
 pub use graph::{Graph, GraphError};
 pub use param::{NodeId, Param};
 pub use signal::{AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
-pub use spectrum::{Spectrum, SPECTRUM_BANDS, SPECTRUM_MAX_HZ, SPECTRUM_MIN_HZ};
+pub use spectrum::{
+    sanitize_window, AmpScale, AnalysisMethod, AnalysisSettings, FreqScale, Spectrum,
+    DEFAULT_WINDOW, FLOOR_DB, MAX_WINDOW, MIN_WINDOW, SPECTRUM_BANDS, SPECTRUM_MAX_HZ,
+    SPECTRUM_MIN_HZ,
+};
 
 /// Deux fois pi — la conversion tours → radians (§17 : la phase est en tours).
 pub const TAU: f32 = std::f32::consts::TAU;

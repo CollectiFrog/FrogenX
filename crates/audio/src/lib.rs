@@ -18,5 +18,5 @@ pub mod analyzer;
 pub mod capture;
 
 pub use analysis::Analysis;
-pub use analyzer::{SpectrumAnalyzer, FFT_SIZE, FLOOR_DB, HOP};
+pub use analyzer::SpectrumAnalyzer;
 pub use capture::{AudioError, AudioInput};

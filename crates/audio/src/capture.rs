@@ -4,7 +4,7 @@
 use crate::analysis::Analysis;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample};
-use frogenx_core::AudioFeatures;
+use frogenx_core::{AnalysisSettings, AudioFeatures};
 use rtrb::{Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -103,6 +103,11 @@ impl AudioInput {
             return &self.silence;
         }
         self.analysis.read()
+    }
+
+    /// Change l'analyse, sans bloquer : à appeler à chaque frame (§7).
+    pub fn configure(&mut self, settings: AnalysisSettings) {
+        self.analysis.configure(settings);
     }
 
     /// L'état de l'entrée, en mots : ce que lit l'interface.

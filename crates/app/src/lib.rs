@@ -17,7 +17,7 @@
 use frogenx_composition::{
     sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, LayerId,
 };
-use frogenx_core::{AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
+use frogenx_core::{AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
 use frogenx_layer::{BlendParams, Gpu, RenderLayer, ShapeContent, ShapeRenderer};
 use frogenx_output::{
     DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs, SinkStatus,
@@ -234,6 +234,11 @@ impl Engine {
     /// Les features de la dernière frame.
     pub fn audio(&self) -> &AudioFeatures {
         &self.audio
+    }
+
+    /// Ce que la composition demande à l'analyse audio (§7).
+    pub fn analysis(&self) -> AnalysisSettings {
+        self.composition.analysis.resolve(self.composition.graph())
     }
 
     /// Une frame. `wall_dt` n'a d'effet qu'en `Realtime` (§4).

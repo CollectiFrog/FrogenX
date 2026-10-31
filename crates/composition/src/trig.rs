@@ -223,14 +223,12 @@ mod tests {
     use super::*;
     use crate::clip::Clip;
     use crate::transport::{PlayMode, Transport};
-    use frogenx_core::{AudioFeatures, Spectrum, SPECTRUM_BANDS};
+    use frogenx_core::{AudioFeatures, Spectrum};
     use frogenx_shape::Ellipse;
 
     fn plat(niveau: f32) -> AudioFeatures {
         AudioFeatures {
-            spectrum: Spectrum {
-                levels: [niveau; SPECTRUM_BANDS],
-            },
+            spectrum: Spectrum::flat(niveau),
             ..Default::default()
         }
     }

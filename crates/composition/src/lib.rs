@@ -35,6 +35,7 @@
 //!   `Cut` est appliqué (§3bis.2).
 //! - L'effet de `PlayMode` : rien ne le lit encore (§3bis.3).
 
+pub mod analysis;
 pub mod clip;
 pub mod command;
 pub mod crossfader;
@@ -44,6 +45,7 @@ pub mod position;
 pub mod transport;
 pub mod trig;
 
+pub use analysis::AudioAnalysis;
 pub use clip::{
     sanitize_speed, Clip, ClipParam, ClipSource, ClipTransition, ParamGroup, ParamSlot,
     WipeDirection, MAX_CLIP_SPEED,
