@@ -5,12 +5,17 @@
 //! constante, mixeur, bande de fréquence audio — tous interchangeables, donc
 //! n'importe quelle source module n'importe quelle destination.
 
+use crate::spectrum::Spectrum;
+
 /// Instantané des features audio, en lecture seule pendant la frame (§7).
 ///
 /// Rempli par le thread d'analyse via un triple buffer ; le thread principal
-/// ne bloque jamais dessus. Reste vide tant que l'étape 7 n'est pas faite.
+/// ne bloque jamais dessus. Seul `spectrum` est calculé pour l'instant : les
+/// autres champs restent à zéro jusqu'à la fin de l'étape 8.
 #[derive(Debug, Clone, Default)]
 pub struct AudioFeatures {
+    /// Le spectre de la frame, en bandes logarithmiques (§7).
+    pub spectrum: Spectrum,
     /// Loudness global, `[0, 1]` (§17 : les features audio sont unipolaires).
     pub rms: f32,
     /// Bandes spectrales grave / médium / aigu, `[0, 1]`.

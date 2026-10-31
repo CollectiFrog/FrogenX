@@ -64,10 +64,14 @@ sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p f
 --example catalogue` (une planche du catalogue). Les tests GPU se sautent proprement
 sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 
-- `crates/core` : `Signal`, `Param`, `Graph`, `Clock`. Aucune dépendance.
+Le panneau audio montre le spectre de l'entrée par défaut : on y dessine à la souris la
+zone d'un **trig**, qui déclenche une colonne ou un clip une fois sur 1, 2, 4, 8, 16 ou 32
+(§3bis.6).
+
+- `crates/core` : `Signal`, `Param`, `Graph`, `Clock`, `Spectrum`. Aucune dépendance.
 - `crates/osc` : oscillateurs (phase accumulée), LFO, bruit cohérent à graine
   explicite, enveloppes attaque/relâchement, opérateurs (`Sum`, `Product`, `Mix`,
-  `Trigger`, `SampleHold`).
+  `Trigger`, `SampleHold`), et les deux `Signal` du trig (`SpectrumZone`, `Divider`).
 - `crates/shape` : une forme est un `Path` (buffer plat de points découpé en contours
   fermés ou ouverts, §16.3). Primitives (`Ellipse`, `Polygon` à côtés flottants, `Star`,
   `Rect`, `Arc`), générateurs paramétriques (`Lissajous`, `Rose`, `Superformula`) et
@@ -75,9 +79,12 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
   `Chain`). Le style y vit aussi (`ColorParam`, `ShapeStyle`, `BlendParams`) : un clip le
   porte, et `composition` ne connaît pas wgpu.
 - `crates/composition` : la grille (§3bis) — `Deck`/`LayerGroup`/`Layer`/`Column`/
-  `Clip`, `CrossFader`, `TempoController`, `PositionSignal`, `BeatRate`, `Command`, graphe
+  `Clip`, `CrossFader`, `TempoController`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
   de composition. Dépend de `core` et `shape`. Seul `Cut` s'applique, et `PlayMode` n'a
   pas encore d'effet (§3bis.3).
+- `crates/audio` : capture `cpal`, FFT, spectre en 128 bandes logarithmiques. Seul
+  `capture.rs` touche à la carte son ; le reste se teste sur des signaux de synthèse. Dépend
+  de `core` seule : `app` pose les features dans `Engine` (`set_audio`).
 - `crates/library` : les 24 clips prédéfinis et la grille de départ (§23.6), en code
   jusqu'au format de l'étape 7e. Sans GPU ni carte son.
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
@@ -96,7 +103,7 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
 
 **Prochaine étape : 7d, la sortie plein écran.** Première version visée, §12 : 7d sortie
-plein écran, 7e sauvegarde, 8 audio (capture, BPM calculé, déclenchements, §7).
+plein écran, 7e sauvegarde, 8 audio (BPM calculé, autres features ; capture, spectre et trig faits, §7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

@@ -20,6 +20,8 @@ pub enum GraphError {
     StaleNode,
     /// Suppression d'un nœud encore référencé, avec la liste des dépendants.
     StillReferenced(Vec<NodeId>),
+    /// Le module de remplacement ne réclame pas la même mémoire que l'ancien.
+    StateSizeMismatch,
 }
 
 impl std::fmt::Display for GraphError {
@@ -31,6 +33,9 @@ impl std::fmt::Display for GraphError {
             GraphError::StaleNode => write!(f, "référence vers un nœud supprimé"),
             GraphError::StillReferenced(deps) => {
                 write!(f, "nœud encore référencé par {} nœud(s)", deps.len())
+            }
+            GraphError::StateSizeMismatch => {
+                write!(f, "remplacement refusé : mémoire de nœud différente")
             }
         }
     }
@@ -186,6 +191,43 @@ impl Graph {
         slot.gen = slot.gen.wrapping_add(1);
         self.cache[node.index() as usize] = 0.0;
         self.order_dirty = true;
+        Ok(())
+    }
+
+    /// Remplace le module d'un nœud, en gardant son identifiant, ses
+    /// dépendances et son état — c'est ainsi qu'on règle un `Param` déjà dans
+    /// le graphe, derrière un `Box<dyn Signal>` opaque (§3bis.6). Régime
+    /// d'édition : refusé si la nouvelle version ne tient pas dans l'état.
+    pub fn replace(&mut self, node: NodeId, signal: Box<dyn Signal>) -> Result<(), GraphError> {
+        if !self.is_live(node) {
+            return Err(GraphError::StaleNode);
+        }
+        let slot = &mut self.slots[node.index() as usize];
+        if signal.state_size() != slot.state_len {
+            return Err(GraphError::StateSizeMismatch);
+        }
+        slot.signal = Some(signal);
+        Ok(())
+    }
+
+    /// La mémoire d'un nœud, vide pour un nœud périmé. Pour l'affichage : un
+    /// `Signal` documente ses slots, c'est son seul contrat de lecture.
+    pub fn node_state(&self, node: NodeId) -> &[f32] {
+        if !self.is_live(node) {
+            return &[];
+        }
+        let slot = &self.slots[node.index() as usize];
+        &self.state[slot.state_off..slot.state_off + slot.state_len]
+    }
+
+    /// Remet à zéro la mémoire d'un seul nœud (§16.1).
+    pub fn reset_node(&mut self, node: NodeId) -> Result<(), GraphError> {
+        if !self.is_live(node) {
+            return Err(GraphError::StaleNode);
+        }
+        let slot = &self.slots[node.index() as usize];
+        let (debut, fin) = (slot.state_off, slot.state_off + slot.state_len);
+        self.state[debut..fin].fill(0.0);
         Ok(())
     }
 
@@ -581,6 +623,71 @@ mod tests {
         let pos = |id: NodeId| g.order.iter().position(|&i| i == id.index()).unwrap();
         assert!(pos(a) < pos(b), "a doit précéder b");
         assert!(pos(b) < pos(c), "b doit précéder c");
+    }
+
+    #[test]
+    fn remplacer_un_noeud_garde_son_identite_et_son_etat() {
+        let mut g = Graph::new();
+        let a = g.add(Box::new(Accum));
+        g.eval_frame(0.0, 0.016);
+        g.eval_frame(0.0, 0.016);
+        let avant = g.node_state(a).to_vec();
+        assert!(avant[0] != 0.0, "l'accumulateur a avancé");
+
+        g.replace(a, Box::new(Accum)).unwrap();
+        assert!(g.is_live(a));
+        assert_eq!(g.node_state(a), avant, "l'état survit au remplacement");
+    }
+
+    #[test]
+    fn remplacer_garde_les_dependances() {
+        let mut g = Graph::new();
+        let source = g.add(Box::new(Constant(1.0)));
+        let somme = g
+            .add_with_deps(Box::new(Sum(vec![source])), vec![source])
+            .unwrap();
+        g.replace(somme, Box::new(Sum(vec![source]))).unwrap();
+        assert!(matches!(
+            g.remove(source),
+            Err(GraphError::StillReferenced(_))
+        ));
+    }
+
+    #[test]
+    fn remplacer_est_refuse_si_la_memoire_change_ou_si_le_noeud_est_perime() {
+        let mut g = Graph::new();
+        let a = g.add(Box::new(Accum));
+        assert_eq!(
+            g.replace(a, Box::new(Constant(0.0))),
+            Err(GraphError::StateSizeMismatch)
+        );
+        g.remove(a).unwrap();
+        assert_eq!(
+            g.replace(a, Box::new(Accum)),
+            Err(GraphError::StaleNode),
+            "périmé"
+        );
+    }
+
+    #[test]
+    fn remettre_un_noeud_a_zero_ne_touche_pas_aux_autres() {
+        let mut g = Graph::new();
+        let (a, b) = (g.add(Box::new(Accum)), g.add(Box::new(Accum)));
+        g.eval_frame(0.0, 0.016);
+        let b_avant = g.node_state(b).to_vec();
+
+        g.reset_node(a).unwrap();
+        assert_eq!(g.node_state(a), [0.0]);
+        assert_eq!(g.node_state(b), b_avant);
+    }
+
+    #[test]
+    fn l_etat_d_un_noeud_perime_est_vide() {
+        let mut g = Graph::new();
+        let a = g.add(Box::new(Accum));
+        g.remove(a).unwrap();
+        assert!(g.node_state(a).is_empty());
+        assert_eq!(g.reset_node(a), Err(GraphError::StaleNode));
     }
 
     #[test]

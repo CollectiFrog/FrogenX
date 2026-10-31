@@ -10,8 +10,9 @@
 //! ```
 
 use crate::clip::Clip;
-use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId};
+use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 use crate::transport::{sanitize_bpm, TempoController};
+use crate::trig::Trig;
 use frogenx_core::{Graph, Param, DEFAULT_BPM};
 use frogenx_shape::BlendParams;
 
@@ -101,7 +102,10 @@ pub struct Composition {
     /// L'ordre des colonnes dans la grille.
     column_order: Vec<ColumnId>,
     /// Module ce qui appartient à la régie, pas à un clip (§3).
-    graph: Graph,
+    pub(crate) graph: Graph,
+    pub(crate) trig_arena: Arena<Trig>,
+    /// L'ordre des trigs, celui de leurs commandes (§3bis.6).
+    pub(crate) trig_order: Vec<TrigId>,
     pub tempo: TempoController,
     taps: Vec<f64>,
     active_deck: Option<DeckId>,
@@ -123,6 +127,8 @@ impl Composition {
             clips: Arena::new(),
             column_order: Vec::new(),
             graph: Graph::new(),
+            trig_arena: Arena::new(),
+            trig_order: Vec::new(),
             tempo: TempoController::new(DEFAULT_BPM),
             taps: Vec::new(),
             active_deck: None,

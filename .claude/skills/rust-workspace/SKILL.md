@@ -18,8 +18,8 @@ Elles vivent sous `crates/`, le workspace est à la racine.
 crates/core/         Signal, Param, Graph, Clock               ← aucune dépendance  ✅
 crates/osc/          oscillateurs, LFO, bruit, enveloppes      ← core               ✅
 crates/shape/        Path, primitives, opérateurs, style       ← core, osc, glam    ✅
-crates/composition/  grille, tempo, Command                    ← core, shape        ✅
-crates/audio/        cpal, FFT, features → Signal
+crates/composition/  grille, tempo, Trig, Command              ← core, osc, shape   ✅
+crates/audio/        cpal, FFT, spectre → AudioFeatures        ← core               ✅
 crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
@@ -72,8 +72,8 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 | Image | `png` | ✅ (render) |
 | Fenêtrage | `winit` **0.30** | ✅ (app seulement) — version imposée par `egui-wgpu` (§11) |
 | UI | `egui`, `egui-wgpu`, `egui-winit` **0.37** | ui (egui seul), app (le reste) — Rust 1.95 minimum (§11) |
-| Audio | `cpal`, `rustfft` | à venir |
-| Lock-free | `rtrb`, `triple_buffer` | à venir |
+| Audio | `cpal` **0.18**, `rustfft` | ✅ (audio seulement) |
+| Lock-free | `rtrb`, `triple_buffer` | ✅ (audio seulement) |
 
 **Avant d'écrire du code wgpu, lire les signatures dans les sources de la version
 épinglée** (`~/.cargo/registry/src/*/wgpu-30*`, `wgpu-types-30*`), pas de mémoire :

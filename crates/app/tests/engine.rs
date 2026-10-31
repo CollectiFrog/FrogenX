@@ -4,8 +4,12 @@
 //! Sans adaptateur, chaque test s'arrête **avec succès** et le dit (§24.3).
 
 use frogenx_app::Engine;
-use frogenx_composition::{Clip, ClipId, Command, Composition, LayerId, PlayMode, Transport};
-use frogenx_core::{Clock, Constant, Ctx, Graph, NodeState, Param, Signal};
+use frogenx_composition::{
+    Clip, ClipId, Command, Composition, LayerId, PlayMode, Transport, TrigSlot, TrigTarget,
+};
+use frogenx_core::{
+    AudioFeatures, Clock, Constant, Ctx, Graph, NodeState, Param, Signal, Spectrum, SPECTRUM_BANDS,
+};
 use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
 use frogenx_output::{CpuFrame, CpuSink, OutputError, OutputSink, PngSequenceSink, SinkStatus};
 use frogenx_shape::Rect;
@@ -528,4 +532,90 @@ fn le_temps_reel_refuse_une_sortie_cpu() {
     );
     moteur.frame(0.016);
     assert!((moteur.clock().t() - 0.016).abs() < 1e-9);
+}
+
+/// Un spectre plat : tout le spectre à ce niveau.
+fn son(niveau: f32) -> AudioFeatures {
+    AudioFeatures {
+        spectrum: Spectrum {
+            levels: [niveau; SPECTRUM_BANDS],
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn un_coup_dans_la_zone_declenche_le_clip_une_fois_sur_deux() {
+    let Some(gpu) = gpu() else { return };
+    let (mut c, layer, rouge, bleu) = une_piste();
+    let trig = c.add_default_trig().unwrap();
+    c.trig_mut(trig).unwrap().target = TrigTarget::Clip { layer, clip: bleu };
+    assert!(c.set_trig_param(trig, TrigSlot::Every, 2.0));
+
+    let (mut moteur, recu) = moteur(gpu, c);
+    moteur.push(Command::TriggerClip { layer, clip: rouge });
+    moteur.frame(0.0);
+    let actif = |m: &Engine| m.composition().layer(layer).unwrap().active_clip();
+    assert_eq!(actif(&moteur), Some(rouge));
+
+    // Premier coup : il passe, et agit à la frame suivante (§3bis.6).
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    assert_eq!(actif(&moteur), Some(rouge), "une frame de retard");
+    moteur.set_audio(son(0.0));
+    moteur.frame(0.0);
+    assert_eq!(actif(&moteur), Some(bleu));
+    moteur.finish();
+    assert_eq!(recu.dernier_pixel(16, 16), BLEU);
+
+    // Deuxième coup : le compteur le retient.
+    moteur.push(Command::TriggerClip { layer, clip: rouge });
+    moteur.frame(0.0);
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    moteur.set_audio(son(0.0));
+    moteur.frame(0.0);
+    assert_eq!(actif(&moteur), Some(rouge));
+
+    // Troisième coup : il passe de nouveau.
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    moteur.set_audio(son(0.0));
+    moteur.frame(0.0);
+    assert_eq!(actif(&moteur), Some(bleu));
+    assert_eq!(moteur.refused_commands(), 0);
+}
+
+#[test]
+fn le_clip_actif_lit_le_spectre_dans_son_propre_graphe() {
+    // Une zone dans le graphe d'un clip : le trig y est un Signal ordinaire.
+    let Some(gpu) = gpu() else { return };
+    let mut g = Graph::new();
+    let zone = g.add(Box::new(frogenx_osc::SpectrumZone::new(
+        (20.0, 20_000.0),
+        (0.5, 1.0),
+    )));
+    let (mut c, layer, ..) = une_piste();
+    let clip = c.add_clip(layer, carre(g, 1.0, 0.0)).unwrap();
+
+    let (mut moteur, _) = moteur(gpu, c);
+    moteur.push(Command::TriggerClip { layer, clip });
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    let graphe = moteur.composition().clip(clip).unwrap().graph();
+    assert_eq!(graphe.value(zone), 1.0);
+}
+
+#[test]
+fn sans_audio_un_trig_reste_inerte() {
+    let Some(gpu) = gpu() else { return };
+    let (mut c, layer, _, bleu) = une_piste();
+    let trig = c.add_default_trig().unwrap();
+    c.trig_mut(trig).unwrap().target = TrigTarget::Clip { layer, clip: bleu };
+    let (mut moteur, _) = moteur(gpu, c);
+    for _ in 0..5 {
+        moteur.frame(0.0);
+    }
+    let piste = moteur.composition().layer(layer).unwrap();
+    assert_eq!(piste.active_clip(), None);
 }

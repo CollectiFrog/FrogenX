@@ -443,6 +443,82 @@ régression par rapport à la décision ci-dessus — les cinq identifiants *are
 `Transport`/`Clip` ↔ JSON du patch est le travail de l'étape où §19.1 s'étend pour
 porter la grille (§3bis.5), pas de ce commit.
 
+### 3bis.6 Le trig
+
+**Une zone dessinée sur le spectre déclenche la grille, une fois sur N.** C'est le modèle
+de déclenchement que le §7 laissait ouvert. On trace un rectangle dans le plan fréquence ×
+amplitude ; quand le pic du spectre y entre, la porte s'ouvre ; un compteur laisse passer
+un front sur N ; et ce qui passe devient un `Signal` et, si on le veut, un `Command`.
+
+```
+Ctx.audio.spectrum ─▶ gate : SpectrumZone ─▶ pulse : Divider ─▶ flash : Envelope
+                       porte 0 / 1            1 pendant une        retombe seule
+                                              frame, 1 fois sur N
+                                                     │
+                                                     └─▶ Command, à la frame suivante
+```
+
+```rust
+pub struct SpectrumZone {            // osc — un Signal, à état
+    pub freq_min: Param, pub freq_max: Param,   // Hz, dans n'importe quel ordre
+    pub level_min: Param, pub level_max: Param, // [0, 1]
+    pub hysteresis: Param,
+}
+pub struct Divider { pub input: Param, pub every: Param }  // osc — un Signal, à état
+
+pub struct Trig {                    // composition
+    pub name: String,
+    pub target: TrigTarget,          // None | Clip { layer, clip } | Column(ColumnId)
+    // zone, divider et les trois NodeId : gate(), pulse(), flash()
+}
+```
+
+**La zone se franchit par le bas, une seule fois.** Une attaque traverse le rectangle en
+montant, le dépasse, puis le retraverse en descendant : une porte qui dirait seulement
+« le pic est dans la zone » s'ouvrirait deux fois par coup. `SpectrumZone` a donc trois
+états, dans son slot : sous la zone, ouverte, passée au-dessus. Ouverte, elle le reste
+jusqu'à ce que le pic repasse sous `level_min - hysteresis`, même s'il dépasse le haut
+entre-temps. Un son qui saute d'un coup au-dessus de `level_max` ne l'ouvre pas, ni en
+montant, ni en redescendant : c'est ce qui donne un sens au haut de la zone. À
+`level_max = 1`, c'est un seuil simple. L'hystérésis évite la rafale d'un son qui tremble
+sur le bord.
+
+**Le compteur compte des fronts, pas des battements.** « 1 sur 4 » veut dire : un coup
+détecté sur quatre. Sur un kick régulier, cela tombe sur la mesure, mais `Divider` ne sait
+rien de la musique ni de l'audio : il compte les fronts de n'importe quelle porte, et une
+source calée sur le tempo pourra s'y brancher. **Le premier front passe, pas le dernier** :
+le trig répond tout de suite et son compte se cale sur le temps fort où on l'a lancé.
+`Recaler` (`Command::ResetTrigCount`) remet ce compte à zéro, parce qu'un coup manqué le
+décale. Les valeurs proposées sont 1, 2, 4, 8, 16, 32 ; `every` reste un `Param`, arrondi
+et saturé dans `[1, 1024]` par son consommateur (§18.4).
+
+**Deux couches : deux `Signal` dans `osc`, un `Trig` dans `composition`.** `SpectrumZone`
+et `Divider` ne lisent que `Ctx` : ils sont déterministes, testables à la main, et un
+clip peut en mettre dans son propre graphe pour moduler n'importe lequel de ses `Param`,
+car `Engine` pose le spectre dans le graphe de chaque clip actif. `Trig` est ce câblage
+tout fait, avec une cible. Il appartient à la composition, comme le tempo : ses nœuds
+vivent dans le graphe de composition, il survit aux changements de clip et de deck, et
+son compte aussi. Le déclenchement remettant à zéro le graphe du clip (§3bis.2), un trig
+placé dans un clip ne compterait pas à travers ses propres déclenchements. `flash` se
+branche sur tout `Param` de la régie, l'opacité d'une piste par exemple.
+
+**Une frame de retard, voulue.** `Composition::trig_commands` se lit après le graphe de
+composition, et les commandes obtenues rejoignent la file : elles s'appliquent au début
+de la frame suivante, jamais pendant l'évaluation (§23). Avec les 21 ms du centre de la
+fenêtre FFT (§7), le saut d'analyse et les deux frames, un coup agit à l'écran environ
+50 ms après le son, à 60 fps. C'est un calcul, pas une mesure.
+
+**Régler un `Param` déjà dans le graphe : `Graph::replace`.** Un `Signal` est opaque
+derrière son `Box<dyn Signal>`. `Trig` garde donc la version de référence de `zone` et
+`divider`, écrit dedans (`set_base`, la modulation survit, §16.3 ter) et remplace le nœud.
+L'identifiant, les dépendances et l'état sont conservés : déplacer une zone ne perd pas le
+compte. Refusé si la mémoire du module change (`GraphError::StateSizeMismatch`).
+`Graph::node_state` expose l'état d'un nœud en lecture, pour afficher le compte.
+
+**Non couvert.** Un trig n'est pas encore sauvegardé (étape 7e). L'interface ne sait pas
+brancher `flash` sur un `Param` : ce câble s'écrit en code, jusqu'à l'éditeur de nœuds. Le
+trig d'un `Column` déclenche sur le deck actif, comme tout `TriggerColumn`.
+
 ---
 
 ## 4. Le temps
@@ -616,12 +692,14 @@ Le thread audio **ne fait que copier des échantillons**. L'analyse tourne à c�
 
 ```rust
 struct AudioFeature { feature: FeatureKind, smoothing: f32 }
-impl Signal for AudioFeature { /* lit le triple buffer */ }
+impl Signal for AudioFeature { /* lit ctx.audio */ }
 ```
 
 **Une feature audio est un `Signal`.** Aucune nouvelle abstraction, aucun câblage
 spécial : l'audio se branche sur n'importe quel paramètre exactement comme un LFO.
-Le système modulaire absorbe l'audio gratuitement.
+Le système modulaire absorbe l'audio gratuitement. Un `Signal` lit `ctx.audio`, jamais le
+triple buffer : celui-ci se lit une fois par frame, à l'étape 2 du §20.1, ce qui donne à
+tous les graphes le même instantané et laisse un rendu offline fabriquer le sien.
 
 **Lissage :** obligatoire. Les features brutes sont bruitées et produisent un visuel
 nerveux. Attaque et release réglables par feature.
@@ -632,8 +710,28 @@ une synchro parfaite.
 
 **Décidé pour la première version :** l'audio capturé sert aussi à **calculer le BPM**,
 qui alimente le `TempoController` (§3bis.3) en plus du tap tempo, et à **déclencher des
-effets vidéo** à partir des transitoires. Ni l'algorithme de détection du BPM, ni le
-modèle de déclenchement ne sont encore tranchés : ils le seront avec l'étape 8.
+effets vidéo** à partir des transitoires. Le modèle de déclenchement est tranché : c'est
+le **trig** (§3bis.6). L'algorithme de détection du BPM le sera avec la fin de l'étape 8.
+
+**Le spectre.** `AudioFeatures::spectrum` : 128 bandes logarithmiques de 20 Hz à 20 kHz,
+chacune dans `[0, 1]`. Le type vit dans `core` (§16.2), de taille fixe : il voyage dans le
+triple buffer et dans `Ctx` sans jamais allouer. Une FFT de 2048 points, fenêtre de Hann,
+toutes les 512 échantillons, soit 94 spectres par seconde et des cases de 23 Hz à 48 kHz :
+le double séparerait mieux les graves, mais doublerait le retard d'un déclenchement. Le
+niveau est linéaire en dB : `0` à -72 dB, `1` pour une sinusoïde à pleine échelle. La
+montée est immédiate, et la descente a 60 ms de constante de temps : lisser l'attaque
+retarderait le trig (§3bis.6).
+
+**Quatre pièges déjà payés.** Le continu d'un micro fuit dans les premières bandes, celles
+où l'on pose un trig de grosse caisse, et y tient la zone ouverte : la moyenne est retirée
+avant la fenêtre. Une carte multicanale n'a souvent qu'une entrée branchée : la moyenne de
+tous ses canaux perdrait 15 dB sur six, donc le mono ne moyenne que les canaux au-dessus de
+-60 dB, décidés par bloc pour rester linéaire. Le callback écrit par blocs entiers ou pas du tout : couper une frame
+stéréo mélangerait les canaux jusqu'à la fin de la session. Une entrée perdue rend le
+silence, pas le dernier spectre : figé, il tiendrait une zone ouverte indéfiniment.
+
+**Seul `spectrum` est calculé.** `rms`, `bands`, `centroid` et `onset` restent à zéro
+jusqu'à la fin de l'étape 8.
 
 ---
 
@@ -961,7 +1059,8 @@ wgpu abstrait Vulkan / Metal / DX12. C'est la raison même de ce choix.
 ### 9.2 Audio
 `cpal` couvre ALSA / CoreAudio / WASAPI. **Piège classique :** les tailles de buffer et
 les latences diffèrent nettement selon la plateforme. Ne jamais coder en supposant une
-taille de buffer fixe.
+taille de buffer fixe. Sur Linux, compiler `cpal` demande les en-têtes ALSA
+(`libasound2-dev`), en CI comme sur un poste. Seul Windows a été essayé à ce jour.
 
 ### 9.3 Vidéo
 Le décodage est le morceau le plus lourd du projet : thread de décodage dédié, buffer
@@ -974,7 +1073,7 @@ place en dernier.
 ## 10. Structure des crates
 
 Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
-`composition`, `library`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+`composition`, `audio`, `library`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -983,8 +1082,8 @@ frogenx/
 ├── osc/       # oscillateurs, LFO, enveloppes, bruit ✅
 ├── shape/     # primitives, opérateurs, style (ColorParam, BlendParams) ✅ (core, osc, glam)
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
-├── audio/     # cpal, FFT, features → Signal
-├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Command ✅ (core, shape)
+├── audio/     # cpal, FFT, spectre → AudioFeatures ✅ (core, cpal, rustfft, rtrb, triple_buffer)
+├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Trig, Command ✅ (core, osc, shape)
 ├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
@@ -1016,6 +1115,17 @@ transition de clip restent vérifiables sur des structures de données pures. La
 distinction qui compte n'est donc pas « combien de crates en amont », mais « est-ce
 que l'une d'elles connaît le GPU, la carte son ou une fenêtre » —`shape` n'en connaît
 aucun.
+
+**`composition` dépend aussi de `osc`** pour les nœuds d'un `Trig` (§3bis.6), sans plus
+de conséquence : `osc` ne connaît ni GPU ni carte son.
+
+**`audio` s'arrête à `AudioFeatures`.** Elle ne connaît pas la grille : `app` lit l'entrée
+et pose les features dans `Engine`. Seul `capture.rs` touche à `cpal` : l'analyse et le
+thread d'analyse se testent avec des signaux de synthèse, sans carte son :
+`audio/tests/trig.rs` fait passer une boucle de batterie par la vraie FFT, la vraie zone et
+le vrai compteur (`osc` y est une dépendance de test). Les `Signal`
+de l'audio vivent dans `osc`, car ils ne lisent que `Ctx` : `composition` peut donc les
+câbler sans dépendre d'`audio`.
 
 **Conséquence sur l'ordre de la chaîne de dépendance (§0, en-tête du document) :**
 `composition` se place après `shape`, pas après `core` directement —
@@ -1076,9 +1186,9 @@ maintenable à mesure qu'il grossit.
 | Tessellation | `lyon_tessellation` | `Path` → triangles, remplissage et trait (étape 5) |
 | GPU, utilitaires | `bytemuck`, `pollster` | octets des buffers de sommets ; attente synchrone de l'adaptateur (étape 5) |
 | Image | `png` | écriture de la première image et des snapshots de test (étape 5) |
-| Audio | `cpal` | capture multiplateforme |
-| FFT | `rustfft` | analyse spectrale |
-| Lock-free | `rtrb`, `triple_buffer` | passage audio → rendu |
+| Audio | `cpal` 0.18 ✅ | capture multiplateforme, dans `audio` seulement |
+| FFT | `rustfft` 6 ✅ | analyse spectrale |
+| Lock-free | `rtrb` 0.4, `triple_buffer` 9 ✅ | passage audio → rendu |
 | Sérialisation | `serde` ✅ | sauvegarde de patchs |
 | Encodage | binaire `ffmpeg` (pipe) | enregistrement, décodage de clips (§9.3) |
 | Éclairage | `artnet` ou équivalent | sortie Art-Net / DMX (§3bis, §8) |
@@ -1121,7 +1231,7 @@ couches complètes empilées.
 | 7c | ✅ Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | **une grille qu'on remplit soi-même** — *fait* : `cargo run`, glisser un clip sur une case |
 | 7d | Sortie plein écran sur un second écran (`Preview`) | usage sur scène |
 | 7e | Sauvegarde des patchs (§19) | retrouver son travail |
-| 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) | **visuel audio-réactif** |
+| 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) — *capture, spectre et trig faits, avant 7d et 7e à la demande de l'utilisateur (§3bis.6) ; restent le BPM calculé et les autres features* | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
 | 11 | NDI, puis Spout / Syphon | intégration VJ |
@@ -1172,6 +1282,12 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | Couches texturées | seul point de rencontre entre vectoriel et matriciel |
 | Feedback au niveau couche, pas signal | délai d'une frame bien défini, DAG préservé |
 | Audio via buffers lock-free | le callback temps réel ne peut ni allouer ni bloquer |
+| **Le trig : deux `Signal` dans `osc` (`SpectrumZone`, `Divider`), câblés par un `Trig` de `composition`** (§3bis.6) | ils ne lisent que `Ctx`, donc déterministes et testés sans carte son ; un clip peut s'en servir pour moduler ses `Param` ; `Trig` porte seulement la cible et survit aux changements de clip |
+| **Une zone se franchit par le bas, une seule fois** (§3bis.6) | une attaque traverse la zone deux fois : sans ce contrat, chaque coup compterait double et le compteur serait faux ; le haut de la zone garde un sens en excluant ce qui saute au-dessus |
+| **`Divider` compte des fronts et laisse passer le premier** (§3bis.6) | il ignore la musique, donc toute porte s'y branche ; partir du premier répond tout de suite et cale le compte sur le temps fort |
+| **Spectre : bandes logarithmiques de taille fixe, dans `core`** (§7) | l'oreille entend en octaves ; une taille fixe traverse le triple buffer et `Ctx` sans allouer ; `core` n'en sait pas l'origine, un rendu offline écrit le sien |
+| **Un `Signal` lit l'audio dans `Ctx`, pas dans le triple buffer** (§7, §20.1) | le buffer se lit une fois par frame, à l'étape 2 : deux lectures pendant l'évaluation verraient deux spectres, et le rendu ne serait plus déterministe |
+| **`Graph::replace`, plutôt qu'un `Param` partagé** (§3bis.6) | un `Signal` est opaque dans le graphe ; le remplacer garde son identifiant, ses dépendances et son état, donc le compte d'un trig qu'on règle en jouant |
 | NDI avant Spout / Syphon | seule techno des trois plateformes ; les autres sont `unsafe` et tardives |
 | **Deux traits de sortie, `GpuSink` et `CpuSink`**, réunis dans `enum OutputSink` (§8.0) | une sortie ne peut pas recevoir la mauvaise forme de frame, garanti à la compilation ; la relecture GPU → CPU, l'opération la plus chère, n'est payée que si une sortie CPU est active |
 | **Une relecture unique partagée** (`Arc<[u8]>`) entre toutes les sorties CPU (§8.0, §8.2) | NDI + enregistrement actifs ne paient pas deux relectures ; l'anneau du §8.2 n'existe qu'à un endroit |
@@ -1413,6 +1529,9 @@ C'est aussi plus honnête sur le plan de la conception : un `Signal` n'a **pas**
 la topologie du graphe, seulement les valeurs déjà calculées de ses dépendances. La
 contrainte du compilateur a révélé un couplage que le contrat initial autorisait à
 tort.
+
+`audio` porte le spectre de la frame (`Spectrum`, §7) : c'est par là qu'une zone de trig
+le lit (§3bis.6), sans savoir d'où il vient.
 
 `dt` est nécessaire aux modules à état — une enveloppe doit savoir combien de temps
 s'est écoulé, et ne peut pas le déduire de `t` seul si elle veut rester correcte quand
@@ -1798,6 +1917,9 @@ a son propre encodeur : le compositeur a déjà soumis le sien à l'étape 8, et
 `GpuFrame` lui lit une texture finie. La
 `CpuFrame` déposée en (d) est, avec l'anneau du §8.2, celle d'une frame antérieure ;
 elle porte son propre `t`.
+
+**Un trig agit à la frame suivante.** Ses commandes se lisent après le graphe de
+composition (4) et rejoignent la file de l'étape 0 (§3bis.6).
 
 **Le graphe est entièrement évalué (4) avant que la moindre forme ne soit générée
 (5).** C'est ce qui rend `Param::get()` sans coût et sans effet de bord, et ce qui
@@ -2457,6 +2579,34 @@ sur le GPU. Un test d'interface vérifie qu'afficher chaque clip n'émet aucune 
 L'exemple `catalogue` rend une planche de toutes les entrées, pour les regarder : un test
 ne dit pas si une forme est belle. C'est elle qui a montré qu'un premier `Engrenage` à
 dents trop larges ne dessinait qu'un anneau.
+
+### 23.7 Le panneau audio
+
+Un panneau bas, masquable : le spectre à gauche, les réglages du trig choisi à droite
+(`ui/src/spectrum.rs`). L'accent cyan reste réservé à l'état actif (§23.1) : les barres du
+spectre sont grises, le contour du trig choisi est cyan, et sa zone ne s'emplit que porte
+ouverte, plus fort à chaque passage du compteur.
+
+**Glisser sur le spectre dessine la zone du trig choisi** ; cliquer dans une zone choisit
+son trig. Le glissé émet ses `Command::SetTrigParam`, frame après frame, et ne garde dans
+`UiState` que son coin de départ, en fréquence et niveau plutôt qu'en pixels.
+
+**Piège d'egui :** `drag_started` ne tombe qu'après quelques pixels de déplacement ; le
+coin de la zone se lit dans `pointer.press_origin()`, pas sous le curseur. Le test de
+glissé l'a révélé.
+
+Les réglages : trigs, compteur (« 1 sur N », et le coup attendu, `3 / 8`), `Recaler`,
+cible, `Retirer`, et un curseur par borne pour les valeurs exactes. Sans entrée audio,
+le panneau dit pourquoi et l'application tourne quand même (§18.1).
+
+**Ce qui est vérifié, et comment.** Les clics et le glissé par `egui_kittest` ; le
+parcours complet, du son au trig, sur une boucle de batterie de synthèse (16 coups, 16
+fronts, puis 4, 2 et 1 passages à 1 sur 4, 8 et 16) ; le déclenchement dans `Engine`, sans
+fenêtre. L'entrée réelle s'ouvre et transmet du signal (M-Audio ProFire 610, 6 canaux,
+44,1 kHz, Windows), mais elle était silencieuse pendant l'essai. Le panneau a été regardé
+sur une capture de la vraie fenêtre, avec un spectre simulé. **Pas encore essayés :** un
+trig sur de la vraie musique, et le glissé à la vraie souris. L'interface entière, panneau
+compris, a coûté 3,8 ms par frame en debug ; le coût du seul panneau n'a pas été isolé.
 
 ---
 

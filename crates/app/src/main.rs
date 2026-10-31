@@ -16,6 +16,7 @@
 mod gui;
 
 use frogenx_app::{next_deadline, Engine, FrameRate};
+use frogenx_audio::AudioInput;
 use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
@@ -90,6 +91,10 @@ struct Running {
     window: Arc<Window>,
     engine: Engine,
     gui: Gui,
+    /// `None` sans entrée utilisable : l'application tourne quand même, et
+    /// `audio_status` dit pourquoi (§18.1).
+    audio: Option<AudioInput>,
+    audio_status: String,
     rate: FrameRate,
     started: Instant,
     last: Instant,
@@ -132,11 +137,22 @@ impl Running {
             engine.push(Command::TriggerColumn { column });
         }
 
+        let (audio, audio_status) = match AudioInput::open_default() {
+            Ok(entree) => {
+                let status = entree.status();
+                (Some(entree), status)
+            }
+            Err(e) => (None, e.to_string()),
+        };
+        println!("Audio : {audio_status}");
+
         let maintenant = Instant::now();
         Ok(Self {
             window,
             engine,
             gui,
+            audio,
+            audio_status,
             rate: FrameRate::new(FRAME_PERIOD),
             started: maintenant,
             last: maintenant,
@@ -148,9 +164,17 @@ impl Running {
     fn frame(&mut self, now: Instant) {
         let dt = (now - self.last).as_secs_f64();
         self.rate.tick(dt);
+        if let Some(entree) = &mut self.audio {
+            self.engine.set_audio(entree.read().clone());
+            self.audio_status = entree.status();
+        }
         self.engine.frame(dt);
-        self.gui
-            .draw(&self.window, &mut self.engine, self.rate.fps());
+        self.gui.draw(
+            &self.window,
+            &mut self.engine,
+            self.rate.fps(),
+            &self.audio_status,
+        );
         self.gui.recover(&self.window, self.engine.gpu());
         self.last = now;
         self.frames += 1;

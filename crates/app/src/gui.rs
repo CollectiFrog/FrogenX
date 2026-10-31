@@ -80,7 +80,7 @@ impl Gui {
 
     /// Dessine l'interface d'après la dernière frame du moteur, et lui transmet
     /// les commandes émises. Elles s'appliqueront à la frame suivante (§23).
-    pub fn draw(&mut self, window: &Window, engine: &mut Engine, fps: f32) {
+    pub fn draw(&mut self, window: &Window, engine: &mut Engine, fps: f32, audio_status: &str) {
         let debut = Instant::now();
         let input = self.winit.take_egui_input(window);
         let sorties = describe_outputs(&engine.output_statuses());
@@ -90,6 +90,8 @@ impl Gui {
             fps,
             outputs: &sorties,
             monitor: Some(self.monitor),
+            spectrum: &engine.audio().spectrum,
+            audio_status,
         };
         let mut commands = Vec::new();
         let mut placements = Vec::new();

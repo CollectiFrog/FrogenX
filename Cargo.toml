@@ -5,6 +5,7 @@ members = [
     "crates/osc",
     "crates/shape",
     "crates/composition",
+    "crates/audio",
     "crates/library",
     "crates/layer",
     "crates/render",
@@ -22,6 +23,7 @@ frogenx-core = { path = "crates/core" }
 frogenx-osc = { path = "crates/osc" }
 frogenx-shape = { path = "crates/shape" }
 frogenx-composition = { path = "crates/composition" }
+frogenx-audio = { path = "crates/audio" }
 frogenx-library = { path = "crates/library" }
 frogenx-layer = { path = "crates/layer" }
 frogenx-render = { path = "crates/render" }
@@ -44,6 +46,11 @@ egui = { version = "0.37", features = ["default_fonts"] }
 egui-wgpu = "0.37"
 egui-winit = "0.37"
 egui_kittest = "0.37"
+# Audio (§7) : capture, FFT, et le passage lock-free entre les trois threads.
+cpal = "0.18"
+rustfft = "6"
+rtrb = "0.4"
+triple_buffer = "9"
 
 [workspace.package]
 version = "0.1.0"

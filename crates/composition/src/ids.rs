@@ -40,6 +40,7 @@ arena_id!(LayerGroupId, "Identifiant d'un `LayerGroup` (§3bis.1).");
 arena_id!(LayerId, "Identifiant d'un `Layer` (§3bis.1).");
 arena_id!(ColumnId, "Identifiant d'une `Column` (§3bis.1).");
 arena_id!(ClipId, "Identifiant d'un `Clip` (§3bis.2).");
+arena_id!(TrigId, "Identifiant d'un `Trig` (§3bis.6).");
 
 /// Une arena par niveau : `Vec<Option<T>>` indexé par `index()`, avec
 /// compteur de génération par emplacement — même principe que

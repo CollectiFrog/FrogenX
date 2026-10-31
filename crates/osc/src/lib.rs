@@ -47,9 +47,11 @@
 pub mod envelope;
 pub mod noise;
 pub mod oscillator;
+pub mod trig;
 pub mod waveform;
 
 pub use envelope::{Envelope, SampleHold, Trigger};
 pub use noise::{fbm_1d, value_noise_1d, Noise};
 pub use oscillator::{Lfo, Mix, Oscillator, Product, Sum};
+pub use trig::{Divider, SpectrumZone, MAX_DIVISION};
 pub use waveform::{wrap01, Waveform};

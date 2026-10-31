@@ -14,7 +14,8 @@
 //!
 //! ## Dépendances (§10)
 //!
-//! Dépend de `core` et `shape` — pas seulement de `core` comme le sketch
+//! Dépend de `core`, `osc` (les nœuds d'un `Trig`, §3bis.6) et `shape` — pas
+//! seulement de `core` comme le sketch
 //! initial le supposait. `Clip.effects` référence une chaîne `ShapeOp`
 //! (§16.3 bis), dont le type vit dans `shape`. `shape` ne connaît ni GPU ni
 //! carte son, donc cette dépendance ne casse pas la testabilité sans GPU qui
@@ -41,6 +42,7 @@ pub mod hierarchy;
 pub mod ids;
 pub mod position;
 pub mod transport;
+pub mod trig;
 
 pub use clip::{
     sanitize_speed, Clip, ClipParam, ClipSource, ClipTransition, ParamGroup, ParamSlot,
@@ -49,6 +51,7 @@ pub use clip::{
 pub use command::Command;
 pub use crossfader::{CrossFader, FadeCurve};
 pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup};
-pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId};
+pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 pub use position::{BeatRate, PositionSignal};
 pub use transport::{sanitize_bpm, PlayMode, TempoController, Transport, MAX_BPM, MIN_BPM};
+pub use trig::{Trig, TrigSlot, TrigTarget};

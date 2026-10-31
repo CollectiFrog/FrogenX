@@ -10,7 +10,7 @@
 //! ## Une frame
 //!
 //! ```text
-//! commandes ─▶ Clock::tick ─▶ graphe de composition ─▶ tempo
+//! commandes ─▶ Clock::tick ─▶ audio ─▶ graphe de composition ─▶ tempo, trigs
 //!           ─▶ graphe de chaque clip actif ─▶ Compositor::render ─▶ Outputs::submit
 //! ```
 
@@ -167,6 +167,9 @@ pub struct Engine {
     placements: Vec<(LayerId, ColumnId, Clip)>,
     refused_commands: u32,
     bpm: f32,
+    /// Les features de la prochaine frame. Vides sans entrée audio, écrites à
+    /// la main par un rendu offline : c'est ce qui garde le déterminisme (§20.3).
+    audio: AudioFeatures,
 }
 
 impl Engine {
@@ -187,6 +190,7 @@ impl Engine {
             placements: Vec::new(),
             refused_commands: 0,
             bpm,
+            audio: AudioFeatures::default(),
         }
     }
 
@@ -205,6 +209,17 @@ impl Engine {
     /// commandes (§23.6). Un refus se compte comme une commande refusée.
     pub fn place(&mut self, layer: LayerId, column: ColumnId, clip: Clip) {
         self.placements.push((layer, column, clip));
+    }
+
+    /// Pose les features audio de la prochaine frame. `Engine` ne connaît pas
+    /// la carte son : le binaire lit l'entrée, un rendu offline les fabrique.
+    pub fn set_audio(&mut self, audio: AudioFeatures) {
+        self.audio = audio;
+    }
+
+    /// Les features de la dernière frame.
+    pub fn audio(&self) -> &AudioFeatures {
+        &self.audio
     }
 
     /// Une frame. `wall_dt` n'a d'effet qu'en `Realtime` (§4).
@@ -227,8 +242,12 @@ impl Engine {
         // Les graphes sont entièrement évalués avant que la moindre couche ne
         // lise un `Param` (§20.1). Celui de la composition d'abord : il donne
         // le tempo que voient les clips.
+        self.composition.graph_mut().set_audio(self.audio.clone());
         self.composition.graph_mut().eval_frame(t, dt);
         self.bpm = self.composition.bpm();
+        // Une commande ne s'applique qu'entre deux frames (§23) : un trig agit
+        // donc à la frame suivante, une de retard sur le spectre.
+        self.composition.trig_commands(&mut self.commands);
         self.composition.layers_in_order(&mut self.order);
         for layer in &self.order {
             let actif = self.composition.layer(*layer).and_then(|l| l.active_clip());
@@ -240,13 +259,13 @@ impl Engine {
             if let Some(clip) = self.composition.clip_mut(id) {
                 let graph = clip.graph_mut();
                 graph.set_bpm(self.bpm);
+                graph.set_audio(self.audio.clone());
                 graph.eval_frame(t, dt * vitesse as f64);
             }
         }
         self.sync_tracks();
 
-        let audio = AudioFeatures::default();
-        let ctx = Ctx::new(dt, self.clock.frame(), &audio).with_bpm(self.bpm);
+        let ctx = Ctx::new(dt, self.clock.frame(), &self.audio).with_bpm(self.bpm);
         let composition = &self.composition;
         let mut couches: Vec<(ClipLayer, &Graph)> = Vec::with_capacity(self.tracks.len());
         for track in &mut self.tracks {

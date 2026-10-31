@@ -5,7 +5,8 @@
 
 use crate::clip::ParamSlot;
 use crate::hierarchy::Composition;
-use crate::ids::{ClipId, ColumnId, DeckId, LayerId};
+use crate::ids::{ClipId, ColumnId, DeckId, LayerId, TrigId};
+use crate::trig::{TrigSlot, TrigTarget};
 use frogenx_core::Param;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,6 +63,21 @@ pub enum Command {
     SetBpm(f32),
     /// Un tap, à l'instant où la commande s'applique.
     TapTempo,
+    /// Ajoute un trig sur les graves, sans cible (§3bis.6).
+    AddTrig,
+    RemoveTrig(TrigId),
+    /// Règle une zone ou un compteur, sans couper leur modulation.
+    SetTrigParam {
+        trig: TrigId,
+        slot: TrigSlot,
+        value: f32,
+    },
+    SetTrigTarget {
+        trig: TrigId,
+        target: TrigTarget,
+    },
+    /// Le coup suivant redevient le premier du compte.
+    ResetTrigCount(TrigId),
 }
 
 impl Composition {
@@ -117,6 +133,17 @@ impl Composition {
                 self.tap(t);
                 true
             }
+            Command::AddTrig => self.add_default_trig().is_some(),
+            Command::RemoveTrig(trig) => self.remove_trig(trig),
+            Command::SetTrigParam { trig, slot, value } => self.set_trig_param(trig, slot, value),
+            Command::SetTrigTarget { trig, target } => match self.trig_mut(trig) {
+                Some(t) => {
+                    t.target = target;
+                    true
+                }
+                None => false,
+            },
+            Command::ResetTrigCount(trig) => self.reset_trig_count(trig),
         }
     }
 }
@@ -415,6 +442,36 @@ mod tests {
             t += 0.5;
         }
         assert!((c.bpm() - 120.0).abs() < 1e-2, "got {}", c.bpm());
+    }
+
+    #[test]
+    fn les_commandes_pilotent_un_trig() {
+        let (mut c, piste, [a, _], _) = grille();
+        assert!(c.apply(Command::AddTrig, 0.0));
+        let trig = c.trigs()[0];
+        let every = TrigSlot::Every;
+        assert!(c.apply(
+            Command::SetTrigParam {
+                trig,
+                slot: every,
+                value: 8.0
+            },
+            0.0
+        ));
+        assert_eq!(c.trig(trig).unwrap().every(), Param::fixed(8.0));
+
+        let target = TrigTarget::Clip {
+            layer: piste,
+            clip: a,
+        };
+        assert!(c.apply(Command::SetTrigTarget { trig, target }, 0.0));
+        assert_eq!(c.trig(trig).unwrap().target, target);
+
+        assert!(c.apply(Command::ResetTrigCount(trig), 0.0));
+        assert!(c.apply(Command::RemoveTrig(trig), 0.0));
+        assert!(!c.apply(Command::RemoveTrig(trig), 0.0), "périmé");
+        assert!(!c.apply(Command::ResetTrigCount(trig), 0.0));
+        assert!(!c.apply(Command::SetTrigTarget { trig, target }, 0.0));
     }
 
     #[test]

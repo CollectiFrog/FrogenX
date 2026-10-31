@@ -1,0 +1,20 @@
+[package]
+name = "frogenx-audio"
+description = "Capture audio et analyse spectrale : du micro aux AudioFeatures (§7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Ne dépend que de `core` : `audio` ne sait pas ce qu'est une grille (§10). C'est
+# `app` qui pose les features dans le moteur. L'analyse et le passage entre
+# threads se testent sans carte son ; seul `capture.rs` touche à `cpal`.
+[dependencies]
+frogenx-core.workspace = true
+cpal.workspace = true
+rustfft.workspace = true
+rtrb.workspace = true
+triple_buffer.workspace = true
+
+[dev-dependencies]
+frogenx-osc.workspace = true

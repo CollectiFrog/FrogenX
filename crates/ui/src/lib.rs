@@ -10,12 +10,14 @@
 //! **Ne connaît ni wgpu ni `winit` :** `egui-wgpu` et `egui-winit` restent dans
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
 
+pub mod spectrum;
 pub mod theme;
 
 use egui::{Button, Color32, Label, Response, RichText, Sense, Slider, SliderClamping, Stroke, Ui};
 use frogenx_composition::{
-    ClipId, ClipParam, ColumnId, Command, Composition, LayerId, MAX_CLIP_SPEED,
+    ClipId, ClipParam, ColumnId, Command, Composition, LayerId, TrigId, MAX_CLIP_SPEED,
 };
+use frogenx_core::Spectrum;
 use frogenx_library::{presets, Family, PresetId};
 
 /// Ce qu'affiche une case vide, pour la retrouver et la viser.
@@ -41,6 +43,12 @@ pub struct UiState {
     pub show_monitor: bool,
     pub show_settings: bool,
     pub show_library: bool,
+    pub show_audio: bool,
+    /// Le trig réglé dans le panneau audio ; le premier s'il n'y en a pas.
+    pub selected_trig: Option<TrigId>,
+    /// Pendant un glissé sur le spectre, le coin où il a commencé : fréquence
+    /// et niveau, en coordonnées du spectre et non en pixels.
+    pub zone_anchor: Option<(f32, f32)>,
 }
 
 impl Default for UiState {
@@ -51,6 +59,9 @@ impl Default for UiState {
             show_monitor: true,
             show_settings: true,
             show_library: true,
+            show_audio: true,
+            selected_trig: None,
+            zone_anchor: None,
         }
     }
 }
@@ -70,6 +81,10 @@ pub struct FrameView<'a> {
     /// Le statut des sorties, déjà mis en mots.
     pub outputs: &'a str,
     pub monitor: Option<Monitor>,
+    /// Le spectre de la dernière frame.
+    pub spectrum: &'a Spectrum,
+    /// L'état de l'entrée audio, déjà mis en mots.
+    pub audio_status: &'a str,
 }
 
 /// Dessine toute l'interface et remplit `commands` et `placements`.
@@ -90,6 +105,12 @@ pub fn draw(
             });
     }
     egui::Panel::top("barre").show(ui, |ui| toolbar(ui, view, commands));
+    if state.show_audio {
+        egui::Panel::bottom("audio")
+            .resizable(true)
+            .default_size(240.0)
+            .show(ui, |ui| spectrum::panel(ui, state, view, commands));
+    }
     if state.show_library {
         egui::Panel::right("bibliotheque")
             .resizable(true)
@@ -113,6 +134,7 @@ fn menu(ui: &mut Ui, state: &mut UiState) {
             ui.checkbox(&mut state.show_grid, "Grille");
             ui.checkbox(&mut state.show_monitor, "Monitor");
             ui.checkbox(&mut state.show_settings, "Réglages");
+            ui.checkbox(&mut state.show_audio, "Audio");
             ui.checkbox(&mut state.show_library, "Bibliothèque");
         });
     });
@@ -391,7 +413,7 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
     use egui_kittest::Harness;
-    use frogenx_composition::{Clip, ParamSlot, PlayMode, Transport};
+    use frogenx_composition::{Clip, ParamSlot, PlayMode, Transport, TrigSlot, TrigTarget};
     use frogenx_core::{Constant, Graph, Param};
     use frogenx_library::find;
     use frogenx_shape::{ColorParam, Ellipse, ShapeStyle};
@@ -441,6 +463,7 @@ mod tests {
             commands: Vec::new(),
             placements: Vec::new(),
         };
+        let spectre = Spectrum::default();
         Harness::builder()
             .with_size(egui::vec2(1400.0, 900.0))
             .build_ui_state(
@@ -451,6 +474,8 @@ mod tests {
                         fps: 60.0,
                         outputs: "Monitor : actif",
                         monitor: None,
+                        spectrum: &spectre,
+                        audio_status: "Micro — 48000 Hz",
                     };
                     draw(
                         ui,
@@ -830,6 +855,160 @@ mod tests {
         h.state_mut().ui.show_library = false;
         h.run();
         assert!(h.query_by_label("Kaléidoscope").is_none());
+    }
+
+    #[test]
+    fn le_bouton_ajoute_un_trig() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        assert!(h
+            .query_by_label("Ajoute un trig pour dessiner sa zone.")
+            .is_some());
+        h.get_by_label("Ajouter un trig").click();
+        h.run();
+        assert_eq!(h.state().commands, vec![Command::AddTrig]);
+    }
+
+    #[test]
+    fn glisser_sur_le_spectre_dessine_la_zone_du_trig() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let mut h = harness(&g.composition);
+
+        let r = h.get_by_label("Spectre").rect();
+        let debut = r.lerp_inside(egui::vec2(0.25, 0.75));
+        let fin = r.lerp_inside(egui::vec2(0.5, 0.25));
+        h.drag_at(debut);
+        h.run();
+        h.hover_at(fin);
+        h.run();
+        assert!(h.state().ui.zone_anchor.is_some(), "le glissé a commencé");
+        h.state_mut().commands.clear();
+        h.hover_at(r.lerp_inside(egui::vec2(0.5, 0.2)));
+        h.run();
+        h.hover_at(fin);
+        h.run();
+        h.drop_at(fin);
+        h.run();
+        assert_eq!(h.state().ui.zone_anchor, None, "le glissé est fini");
+
+        // Les quatre bords, dans l'ordre : deux fréquences, deux niveaux.
+        let bord = |slot: TrigSlot| {
+            h.state().commands.iter().rev().find_map(|c| match c {
+                Command::SetTrigParam {
+                    slot: s,
+                    value,
+                    trig: t,
+                } if *s == slot && *t == trig => Some(*value),
+                _ => None,
+            })
+        };
+        let attendu = |x: f32| Spectrum::frequency(x);
+        let proche = |a: f32, b: f32| (a / b - 1.0).abs() < 0.02;
+        assert!(proche(bord(TrigSlot::FreqMin).unwrap(), attendu(0.25)));
+        assert!(proche(bord(TrigSlot::FreqMax).unwrap(), attendu(0.5)));
+        assert!(proche(bord(TrigSlot::LevelMin).unwrap(), 0.25));
+        assert!(proche(bord(TrigSlot::LevelMax).unwrap(), 0.75));
+    }
+
+    #[test]
+    fn le_compteur_propose_les_divisions_et_emet_une_commande() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let mut h = harness(&g.composition);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Compteur")
+            .click();
+        h.run();
+        for n in [2, 4, 8, 16, 32] {
+            assert!(h.query_by_label(&format!("1 sur {n}")).is_some());
+        }
+        h.get_by_label("1 sur 16").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetTrigParam {
+                trig,
+                slot: TrigSlot::Every,
+                value: 16.0
+            }]
+        );
+    }
+
+    #[test]
+    fn la_cible_se_choisit_parmi_les_colonnes_et_les_clips() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let mut h = harness(&g.composition);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Cible")
+            .click();
+        h.run();
+        assert!(h.query_by_label("Piste 1 / Beta").is_some());
+        // L'en-tête de la grille porte le même nom : le menu vient après.
+        h.query_all_by_label("Colonne 1").last().unwrap().click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetTrigTarget {
+                trig,
+                target: TrigTarget::Column(g.composition.columns()[0])
+            }]
+        );
+    }
+
+    #[test]
+    fn un_curseur_regle_la_zone() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let mut h = harness(&g.composition);
+        champ(&h, "niveau bas").set_value_accesskit(0.4);
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetTrigParam {
+                trig,
+                slot: TrigSlot::LevelMin,
+                value: 0.4
+            }]
+        );
+    }
+
+    #[test]
+    fn recaler_et_retirer_emettent_leurs_commandes() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Recaler").click();
+        h.run();
+        h.get_by_label("Retirer").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::ResetTrigCount(trig), Command::RemoveTrig(trig)]
+        );
+    }
+
+    #[test]
+    fn le_panneau_dit_d_ou_vient_le_son_et_se_masque() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        assert!(h.query_by_label("Micro — 48000 Hz").is_some());
+        h.state_mut().ui.show_audio = false;
+        h.run();
+        assert!(h.query_by_label("Spectre").is_none());
+    }
+
+    #[test]
+    fn un_trig_retire_ne_reste_pas_selectionne() {
+        let mut g = grille();
+        let (a, b) = (
+            g.composition.add_default_trig().unwrap(),
+            g.composition.add_default_trig().unwrap(),
+        );
+        g.composition.remove_trig(b);
+        let mut h = harness(&g.composition);
+        h.state_mut().ui.selected_trig = Some(b);
+        h.run();
+        assert!(h.query_by_label("Recaler").is_some(), "retombe sur {a:?}");
     }
 
     #[test]
