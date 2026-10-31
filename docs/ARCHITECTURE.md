@@ -1671,6 +1671,12 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
 | **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **Éditeur de nœuds maison** (§23.10) | `egui-snarl` demande egui 0.36, et un patch à maintenir à chaque version coûterait plus qu'un éditeur à nos conventions, testé par clics simulés |
+| **L'éditeur a sa fenêtre et son contexte egui** (§23.10) | le câblage se fait à côté de l'image, et ne coûte rien fermé |
+| **`Graph::rewire` plutôt que des `Param` exposés par le graphe** (§23.10) | un `Signal` reste opaque ; passer par sa `Spec` réutilise la table du format de fichier, et un seul endroit recalcule dépendances et cycles |
+| **Une cible unique, `ParamTarget`, pour toute destination** (§23.10) | brancher un `Param` de clip, de nœud ou de régie est le même geste : une commande de chaque par type aurait multiplié les cas |
+| **Les nœuds d'un trig se lisent mais ne se règlent pas** (§23.10) | `Trig` garde les versions de référence (§3bis.6) : les régler ailleurs les désynchroniserait |
+| **La place des nœuds n'est pas dans le fichier** (§23.10) | un patch décrit ce qui joue ; une mise en page changerait le fichier à chaque glissé |
 | **Un feedback est un clip, pas un effet de piste** (§6.1) | il hérite de la bibliothèque, des potentiomètres, des sources audio et de la sauvegarde ; un effet de piste aurait demandé un second chemin pour chacun |
 | **Le feedback relit l'image finale, copiée en fin de frame** (§6.1) | il donne des échos de toute la composition, avec un délai d'une frame exactement, sans lire et écrire la même texture |
 | **Réglages du feedback par seconde** (§6.1) | un réglage par frame changerait d'image avec la cadence, et casserait le rendu offline à une autre cadence |
@@ -3172,6 +3178,69 @@ deux trigs et un spectre simulé. Mesuré en release, en 1440 × 900 : 1,2 ms d'
 frame, 16,0 à 17,2 ms entre deux frames. **Pas encore essayés :** les gestes à la vraie
 souris, une scène sous 800 pixels à l'écran (elle n'est testée que par `stage_layout`), et
 une fenêtre sur un écran 4K.
+
+### 23.10 L'éditeur de nœuds
+
+> Tranché (choix A1, B2, C2). Raisons au §13.
+
+**Maison, sur egui.** `egui-snarl` 0.12 demande egui 0.36 et `egui_node_graph2` ne bouge plus
+depuis 2024 : patcher une crate tierce à chaque version d'egui coûterait plus qu'un éditeur
+qui suit nos conventions, s'affiche comme le reste et se teste par clics simulés.
+
+**Dans sa fenêtre.** Le menu `Affichage` l'ouvre ; sa croix la ferme, sans toucher ni au
+moteur ni à l'interface. Elle a son propre contexte egui, et ne coûte rien fermée. Le câblage
+se fait donc à côté de l'image, éventuellement sur un autre écran. `--nodes` l'ouvre au
+lancement, pour vérifier sans souris.
+
+**Deux graphes.** L'onglet `Clip` montre le graphe du clip choisi dans l'interface, l'onglet
+`Régie` celui de la composition, où vivent les trigs. Une source ne se branche que dans son
+propre graphe : c'est ce qui garde chaque clip déplaçable (§3).
+
+**Tout est une `Command`** (§23), donc testé sans fenêtre et prêt pour l'annulation :
+
+```rust
+pub enum GraphScope { Composition, Clip(ClipId) }
+
+pub enum ParamTarget {
+    ClipParam { clip: ClipId, slot: ParamSlot },
+    NodeParam { scope: GraphScope, node: NodeId, input: u8 },
+    LayerOpacity(LayerId),
+    ClipSpeed(ClipId),
+    Tempo,
+    AnalysisWindow,
+}
+
+// Dans `Command` :
+AddNode { scope: GraphScope, kind: NodeKind },
+RemoveNode { scope: GraphScope, node: NodeId },
+Connect { target: ParamTarget, source: NodeId },
+Disconnect { target: ParamTarget },
+SetTargetBase { target: ParamTarget, value: f32 },
+SetTargetDepth { target: ParamTarget, value: f32 },
+SetNodeValue { scope: GraphScope, node: NodeId, field: u8, value: NodeValue },
+AddEffect { clip: ClipId, kind: EffectKind },
+RemoveEffect { clip: ClipId, index: usize },
+```
+
+**Une entrée de nœud est un `Param` de sa `Spec`.** Un `Signal` reste opaque : pour changer un
+réglage, `composition` lit sa `Spec`, la modifie, reconstruit le `Signal` par la table qui
+quitte `patch` pour `composition`, et le pose par `Graph::rewire`. Celui-ci garde l'identifiant
+et l'état, recalcule les dépendances depuis les sources des `Param`, et refuse un cycle : le
+§3 tient donc aussi à l'édition. L'interface lit `Graph::can_connect` pour ne pas proposer un
+branchement refusé.
+
+**Retirer un nœud débranche d'abord ce qui le lit**, nœuds et destinations : chacun retombe
+sur sa base. Les nœuds d'un trig et la position d'un clip ne se retirent pas, et un trig ne se
+règle que depuis son panneau : le `Trig` garde les versions de référence (§3bis.6). Ses sorties
+se branchent, c'est tout leur intérêt : `flash` sur une opacité.
+
+**Le geste.** On tire d'une sortie vers une entrée ; un clic droit sur une entrée la débranche,
+sur le fond ajoute un nœud ou un effet, sur un titre retire le nœud. Le fond se déplace au
+glissé, chaque nœud aussi. Les destinations sont à droite : les `Param` du clip, ou le tempo,
+la durée d'analyse, l'opacité des pistes et la vitesse des clips actifs.
+
+**La place des nœuds n'est pas dans le fichier.** Elle se calcule par profondeur dans le graphe
+et se garde pour la session : un patch décrit ce qui joue, pas sa mise en page.
 
 ---
 
