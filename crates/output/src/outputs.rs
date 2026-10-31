@@ -35,6 +35,10 @@ impl fmt::Display for OutputError {
 
 impl std::error::Error for OutputError {}
 
+/// Désigne une sortie GPU, pour la retirer (§8.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuSinkId(u32);
+
 struct CpuTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -68,7 +72,8 @@ impl CpuTarget {
 /// [`CpuFanout`], écrite une fois.
 pub struct Outputs {
     conversion: ConversionPass,
-    gpu_sinks: Vec<Box<dyn GpuSink>>,
+    gpu_sinks: Vec<(GpuSinkId, Box<dyn GpuSink>)>,
+    next_gpu_id: u32,
     fanout: CpuFanout,
     /// Créée à la première relecture, recréée si la résolution change.
     cpu_target: Option<CpuTarget>,
@@ -80,6 +85,7 @@ impl Outputs {
         Self {
             conversion: ConversionPass::new(gpu, CPU_TARGET_FORMAT, ConversionMode::Straight),
             gpu_sinks: Vec::new(),
+            next_gpu_id: 0,
             fanout: CpuFanout::new(policy),
             cpu_target: None,
             next_index: 0,
@@ -88,10 +94,29 @@ impl Outputs {
 
     pub fn add(&mut self, sink: OutputSink) -> Result<(), OutputError> {
         match sink {
-            OutputSink::Gpu(sink) => self.gpu_sinks.push(sink),
+            OutputSink::Gpu(sink) => {
+                self.add_gpu(sink);
+            }
             OutputSink::Cpu(sink) => self.add_cpu(sink)?,
         }
         Ok(())
+    }
+
+    /// Ajoute une sortie GPU qu'on pourra retirer.
+    pub fn add_gpu(&mut self, sink: Box<dyn GpuSink>) -> GpuSinkId {
+        let id = GpuSinkId(self.next_gpu_id);
+        self.next_gpu_id += 1;
+        self.gpu_sinks.push((id, sink));
+        id
+    }
+
+    /// Retire une sortie GPU, entre deux frames : un geste de l'utilisateur,
+    /// jamais une réaction à `Failed` (§8.0, §8.4). Rend `false` si elle est
+    /// déjà retirée.
+    pub fn remove_gpu(&mut self, id: GpuSinkId) -> bool {
+        let avant = self.gpu_sinks.len();
+        self.gpu_sinks.retain(|(sink, _)| *sink != id);
+        self.gpu_sinks.len() != avant
     }
 
     fn add_cpu(&mut self, sink: Box<dyn CpuSink>) -> Result<(), OutputError> {
@@ -109,7 +134,8 @@ impl Outputs {
 
         let (width, height) = (texture.width(), texture.height());
         let lecture = self.fanout.has_active();
-        let actives = |s: &&mut Box<dyn GpuSink>| !matches!(s.status(), SinkStatus::Failed(_));
+        let actives =
+            |s: &&mut (GpuSinkId, Box<dyn GpuSink>)| !matches!(s.1.status(), SinkStatus::Failed(_));
 
         let mut encoder = gpu
             .device
@@ -117,7 +143,7 @@ impl Outputs {
                 label: Some("outputs"),
             });
         let frame = GpuFrame { texture, index, t };
-        for sink in self.gpu_sinks.iter_mut().filter(actives) {
+        for (_, sink) in self.gpu_sinks.iter_mut().filter(actives) {
             sink.encode(gpu, &mut encoder, &frame);
         }
         if lecture {
@@ -129,7 +155,7 @@ impl Outputs {
         }
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        for sink in self.gpu_sinks.iter_mut().filter(actives) {
+        for (_, sink) in self.gpu_sinks.iter_mut().filter(actives) {
             sink.after_submit(gpu);
         }
 
@@ -169,7 +195,7 @@ impl Outputs {
     pub fn statuses(&self) -> Vec<SinkStatus> {
         self.gpu_sinks
             .iter()
-            .map(|s| s.status())
+            .map(|(_, s)| s.status())
             .chain(self.fanout.statuses())
             .collect()
     }

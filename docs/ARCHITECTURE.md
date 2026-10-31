@@ -1084,10 +1084,14 @@ que lorsque `Preview` a quitté `Outputs` **et** que `app` a lâché le sien.
 sortie n'atteignent pas egui, sauf le clavier : si la sortie prend le focus par accident, 1
 à 8 et Espace doivent continuer de jouer.
 
-**Le focus reste à l'interface.** winit active de force une fenêtre créée en plein écran
-(`force_window_active`). La sortie est donc créée non active, puis passée en plein écran
-par `set_fullscreen`, qui n'active rien. Le curseur y est masqué. La taille vient ensuite de
-l'événement `Resized`, car winit positionne la fenêtre de façon asynchrone.
+**Le focus reste à l'interface.** Une fenêtre normale est créée non active. Un plein écran
+active toujours sa fenêtre sous Windows, et pas seulement à la création comme le laissait
+croire `force_window_active` : le `SetWindowPos` de `set_fullscreen` n'a pas
+`SWP_NOACTIVATE`. Une fenêtre sans bordure, sans drapeau de plein écran, y échapperait mais
+laisserait la barre des tâches passer devant l'image. Le plein écran rend donc le focus à
+l'interface dès l'événement `Focused(true)`, ce qui couvre aussi un clic accidentel sur la
+sortie. Le curseur y est masqué. La taille vient ensuite de l'événement `Resized`, car
+winit positionne la fenêtre de façon asynchrone.
 
 **Fermer ne tient qu'à un menu.** Aucune touche ne ferme la sortie, Échap compris. Alt+F4
 envoie `CloseRequested` : en plein écran, `app` l'ignore. Sur une fenêtre normale, sa croix
@@ -1116,9 +1120,29 @@ pub struct OutputView<'a> {
 pub enum OutputRequest { Open(usize), Close }
 ```
 
-**Vérifier.** `--output N` ouvre la sortie sur l'écran N dès le lancement : combiné à
-`--frames`, il prouve l'ouverture, la présentation et la fermeture sans souris. La
-fermeture et le retrait d'une sortie se testent sans fenêtre, sur des sorties factices.
+**Le coût.** Ouvrir ou fermer la sortie crée ou détruit une surface sur le thread du
+moteur : l'intervalle maximal est monté à 46 ms sur un enchaînement d'ouvertures, soit deux
+ou trois frames. Le geste reste rare, et le moteur ne prend pas de retard : une frame en
+retard ne se rattrape pas (§8.3). Hors de ces gestes, la seconde surface ne se voit pas
+dans les intervalles (16,2 à 17,4 ms en 1080p, interface 0,49 ms par frame).
+
+**Ce qui est vérifié, et comment.** `--output N` ouvre la sortie sur l'écran N dès le
+lancement : combiné à `--frames`, il prouve l'ouverture, la présentation et la fermeture
+sans souris. Le retrait d'une sortie se teste sur des sorties factices, le menu par clics
+simulés, les règles de `stage.rs` par fonctions pures. Sur trois écrans réels (Windows,
+Vulkan, RTX 4070 SUPER), chaque fenêtre a été relevée pendant l'exécution : le bon écran à
+sa taille exacte, 300 frames présentées sur 300, le focus resté à l'interface, et des
+couleurs identiques au pixel près entre la sortie et le monitor. Un écran en portrait
+(1050×1680) a confirmé le letterbox. `WM_CLOSE` est ignoré par le plein écran, et ferme une
+fenêtre normale sans quitter l'application. Un binaire temporaire a enchaîné ouverture,
+fermeture, déplacement sur chaque écran et perte d'écran simulée, le moteur tenant 59,8 fps
+sur 1080 frames.
+
+**Pas encore essayés :** le menu à la vraie souris (un clic posté n'atteint pas egui, §23.5),
+un vrai câble débranché, un projecteur, un écran à une autre fréquence que 60 Hz, et Linux
+et macOS. Sur ces deux systèmes, deux écrans de même nom se confondraient dans la détection
+d'un écran perdu. Si une surface n'offrait pas `Mailbox`, `Fifo` pourrait ralentir le moteur
+sur un écran lent : le cas ne s'est pas présenté ici.
 
 ---
 
@@ -1305,7 +1329,7 @@ couches complètes empilées.
 | 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
 | 7b | ✅ Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** — *fait* : `cargo run` |
 | 7c | ✅ Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | **une grille qu'on remplit soi-même** — *fait* : `cargo run`, glisser un clip sur une case |
-| 7d | Sortie plein écran sur un second écran (`Preview`, §8.4) | usage sur scène |
+| 7d | ✅ Sortie plein écran sur un second écran (`Preview`, §8.4) | **usage sur scène** — *fait* : `cargo run`, menu `Sortie` |
 | 7e | Sauvegarde des patchs (§19) | retrouver son travail |
 | 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) — *capture, spectre et trig faits, avant 7d et 7e à la demande de l'utilisateur (§3bis.6) ; restent le BPM calculé et les autres features* | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
@@ -1386,7 +1410,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Résolution de sortie fixe en 1080p pour la première version** (§8.4) | suivre l'écran réallouerait toutes les textures à l'ouverture, avec une saccade ; `Preview` sait déjà adapter l'image sans la déformer |
 | **Fenêtre normale sur l'écran de l'interface** (§8.4) | un plein écran y cacherait le menu qui le ferme ; avec un seul écran, on serait enfermé |
 | **Aucune touche ne ferme la sortie, `CloseRequested` ignoré en plein écran** (§8.4) | sur scène, une touche accidentelle couperait l'image |
-| **Sortie créée non active, plein écran posé ensuite** (§8.4) | winit active de force une fenêtre créée en plein écran : elle volerait le clavier à l'interface en plein jeu |
+| **Le plein écran rend le focus à l'interface** (§8.4) | sous Windows, `set_fullscreen` active toujours la fenêtre, qui volerait le clavier en plein jeu ; rendre le focus couvre aussi un clic accidentel, sur toutes les plateformes |
 | **Écran perdu : la sortie se ferme, le moteur continue** (§8.4) | un câble débranché ne doit couper ni l'interface ni le monitor ; laisser la fenêtre glisser sur l'écran restant pourrait recouvrir l'interface |
 | **`OutputRequest` distinct de `Command`** (§8.4) | une fenêtre n'est pas la grille : `Composition` n'a rien à en savoir, et `Command` ne concerne que ce qui s'applique entre deux frames du moteur |
 | **Seules les sorties GPU se retirent** (§8.4) | retirer une sortie CPU suppose d'arrêter son thread : l'enregistreur de l'étape 10 dira comment terminer un fichier proprement |
@@ -2684,9 +2708,7 @@ expose deux nœuds de même nom : en test, viser le champ numérique par son rô
 pas taper le tempo.
 
 **La fenêtre change de rôle.** Elle montre l'interface, et l'image passe dans un panneau.
-`Preview` n'y sert donc plus ; elle revient à l'étape 7d pour le plein écran. D'ici là,
-elle n'est couverte que par ses fonctions pures et par `PresentSurface`, qu'elle partage
-avec l'interface.
+`Preview` n'y sert donc plus : elle présente dans la fenêtre de sortie (§8.4).
 
 **Ce qui est vérifié, et comment.** `egui_kittest` couvre la logique des clics, et un
 test d'`Engine` prouve qu'un `SetParam` change l'image à la frame suivante. L'affichage

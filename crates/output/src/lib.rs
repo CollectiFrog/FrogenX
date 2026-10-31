@@ -34,7 +34,7 @@ pub mod sink;
 pub use conversion::{ConversionMode, ConversionPass, Rect};
 pub use fanout::{CpuFanout, DropPolicy, QUEUE_DEPTH};
 pub use monitor::{MonitorSink, MONITOR_FORMAT};
-pub use outputs::{OutputError, Outputs};
+pub use outputs::{GpuSinkId, OutputError, Outputs};
 pub use png_sequence::PngSequenceSink;
 pub use preview::{
     letterbox, pick_format, pick_present_mode, FormatPreference, PresentSurface, Preview,

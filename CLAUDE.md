@@ -55,10 +55,11 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 7c faites.** `cargo run` ouvre l'application : une interface egui sur la
+**Étapes 1 à 7d faites.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
-les colonnes et Espace pour taper. Rendus sans fenêtre : `cargo run -p frogenx-render
+les colonnes et Espace pour taper. Le menu `Sortie` envoie l'image en plein écran sur un
+autre écran (§8.4). Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
 sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p frogenx-app
 --example catalogue` (une planche du catalogue). Les tests GPU se sautent proprement
@@ -101,9 +102,10 @@ zone d'un **trig**, qui déclenche une colonne ou un clip une fois sur 1, 2, 4, 
   connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
+  `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés.
 
-**Prochaine étape : 7d, la sortie plein écran.** Première version visée, §12 : 7d sortie
-plein écran, 7e sauvegarde, 8 audio (BPM calculé, autres features ; capture, spectre et trig faits, §7).
+**Prochaine étape : 7e, la sauvegarde.** Première version visée, §12 : 7e sauvegarde, 8 audio
+(BPM calculé, autres features ; capture, spectre et trig faits, §7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

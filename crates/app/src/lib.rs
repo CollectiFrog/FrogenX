@@ -19,7 +19,9 @@ use frogenx_composition::{
 };
 use frogenx_core::{AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
 use frogenx_layer::{BlendParams, Gpu, RenderLayer, ShapeContent, ShapeRenderer};
-use frogenx_output::{DropPolicy, OutputError, OutputSink, Outputs, SinkStatus};
+use frogenx_output::{
+    DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs, SinkStatus,
+};
 use frogenx_render::{Compositor, LayerInput};
 use glam::UVec2;
 use std::time::{Duration, Instant};
@@ -197,6 +199,18 @@ impl Engine {
     /// Ajoute une sortie — régime d'édition, hors de la boucle (§18.1).
     pub fn add_output(&mut self, sink: OutputSink) -> Result<(), OutputError> {
         self.outputs.add(sink)
+    }
+
+    /// Ajoute une sortie GPU qu'on pourra retirer. `Engine` ne sait pas qu'elle
+    /// présente dans une fenêtre (§8.4).
+    pub fn add_gpu_output(&mut self, sink: Box<dyn GpuSink>) -> GpuSinkId {
+        self.outputs.add_gpu(sink)
+    }
+
+    /// Retire une sortie GPU, entre deux frames. Rend `false` si elle est déjà
+    /// retirée.
+    pub fn remove_gpu_output(&mut self, id: GpuSinkId) -> bool {
+        self.outputs.remove_gpu(id)
     }
 
     /// Met une commande en file. Elle s'applique au début de la frame suivante,

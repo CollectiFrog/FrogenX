@@ -6,7 +6,7 @@
 use frogenx_app::{describe_outputs, Engine};
 use frogenx_layer::Gpu;
 use frogenx_output::{FormatPreference, PresentSurface};
-use frogenx_ui::{theme, FrameView, Monitor, UiState};
+use frogenx_ui::{theme, FrameView, Monitor, OutputRequest, OutputView, UiState};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::event::WindowEvent;
@@ -80,7 +80,15 @@ impl Gui {
 
     /// Dessine l'interface d'après la dernière frame du moteur, et lui transmet
     /// les commandes émises. Elles s'appliqueront à la frame suivante (§23).
-    pub fn draw(&mut self, window: &Window, engine: &mut Engine, fps: f32, audio_status: &str) {
+    /// Rend ce que l'interface demande à la fenêtre de sortie (§8.4).
+    pub fn draw(
+        &mut self,
+        window: &Window,
+        engine: &mut Engine,
+        fps: f32,
+        audio_status: &str,
+        sortie: OutputView<'_>,
+    ) -> Option<OutputRequest> {
         let debut = Instant::now();
         let input = self.winit.take_egui_input(window);
         let sorties = describe_outputs(&engine.output_statuses());
@@ -92,16 +100,26 @@ impl Gui {
             monitor: Some(self.monitor),
             spectrum: &engine.audio().spectrum,
             audio_status,
+            output: sortie,
         };
         let mut commands = Vec::new();
         let mut placements = Vec::new();
+        let mut demande = None;
         let state = &mut self.state;
         let output = self.ctx.run_ui(input, |ui| {
             // egui peut rejouer une passe : seule la dernière compte, sinon
             // un clic se déclencherait deux fois.
             commands.clear();
             placements.clear();
-            frogenx_ui::draw(ui, state, &view, &mut commands, &mut placements);
+            demande = None;
+            frogenx_ui::draw(
+                ui,
+                state,
+                &view,
+                &mut commands,
+                &mut placements,
+                &mut demande,
+            );
         });
         self.winit
             .handle_platform_output(window, output.platform_output);
@@ -173,6 +191,7 @@ impl Gui {
             self.renderer.free_texture(&id);
         }
         self.spent += debut.elapsed();
+        demande
     }
 
     /// Seul `app` a la fenêtre : c'est donc lui qui recrée une surface perdue.

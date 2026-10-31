@@ -11,7 +11,9 @@ use frogenx_core::{
     AudioFeatures, Clock, Constant, Ctx, Graph, NodeState, Param, Signal, Spectrum, SPECTRUM_BANDS,
 };
 use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
-use frogenx_output::{CpuFrame, CpuSink, OutputError, OutputSink, PngSequenceSink, SinkStatus};
+use frogenx_output::{
+    CpuFrame, CpuSink, GpuFrame, GpuSink, OutputError, OutputSink, PngSequenceSink, SinkStatus,
+};
 use frogenx_shape::Rect;
 use glam::UVec2;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -519,6 +521,40 @@ fn le_moteur_ecrit_une_sequence_png() {
     std::fs::remove_dir_all(&dossier).unwrap();
     assert_eq!(fichiers, 4);
     assert!(derniere);
+}
+
+/// Compte les frames reçues : une sortie de scène, sans fenêtre.
+struct FramesVues(Arc<AtomicU32>);
+
+impl GpuSink for FramesVues {
+    fn encode(&mut self, _: &Gpu, _: &mut wgpu::CommandEncoder, _: &GpuFrame<'_>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn after_submit(&mut self, _: &Gpu) {}
+
+    fn status(&self) -> SinkStatus {
+        SinkStatus::Active
+    }
+}
+
+#[test]
+fn fermer_une_sortie_laisse_tourner_le_moteur_et_les_autres_sorties() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut moteur, recu) = moteur(gpu, composition);
+    let vues = Arc::new(AtomicU32::new(0));
+    let sortie = moteur.add_gpu_output(Box::new(FramesVues(Arc::clone(&vues))));
+
+    moteur.frame(0.0);
+    assert!(moteur.remove_gpu_output(sortie));
+    moteur.frame(0.0);
+    moteur.finish();
+
+    assert_eq!(vues.load(Ordering::Relaxed), 1);
+    assert_eq!(recu.0.lock().unwrap().len(), 2, "le moteur a continué");
+    assert_eq!(moteur.output_statuses(), vec![SinkStatus::Active]);
+    assert!(!moteur.remove_gpu_output(sortie));
 }
 
 #[test]

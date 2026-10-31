@@ -357,6 +357,58 @@ fn une_sortie_gpu_en_echec_n_est_plus_appelee_mais_reste_listee() {
 }
 
 #[test]
+fn une_sortie_gpu_retiree_n_est_plus_appelee_et_les_autres_continuent() {
+    let Some(gpu) = gpu() else { return };
+    let (retiree, gardee) = (
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossless);
+    let id = sorties.add_gpu(Box::new(JournalGpu {
+        journal: Arc::clone(&retiree),
+        fail: false,
+    }));
+    sorties.add_gpu(Box::new(JournalGpu {
+        journal: Arc::clone(&gardee),
+        fail: false,
+    }));
+
+    let texture = source(&gpu, 1, &[[F1, F1, F1, F1]]);
+    sorties.submit(&gpu, &texture, 0.0);
+    assert!(sorties.remove_gpu(id));
+    sorties.submit(&gpu, &texture, 0.0);
+
+    assert_eq!(*retiree.lock().unwrap(), vec!["encode 0", "after_submit"]);
+    assert_eq!(
+        *gardee.lock().unwrap(),
+        vec!["encode 0", "after_submit", "encode 1", "after_submit"],
+        "la numérotation ne saute pas"
+    );
+    assert_eq!(sorties.statuses(), vec![SinkStatus::Active]);
+}
+
+#[test]
+fn retirer_deux_fois_une_sortie_gpu_ne_retire_rien_d_autre() {
+    let Some(gpu) = gpu() else { return };
+    let journal = Arc::new(Mutex::new(Vec::new()));
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossless);
+    let id = sorties.add_gpu(Box::new(JournalGpu {
+        journal: Arc::clone(&journal),
+        fail: false,
+    }));
+    assert!(sorties.remove_gpu(id));
+    assert!(!sorties.remove_gpu(id));
+
+    // Un identifiant ne resert jamais : la nouvelle sortie n'est pas visée.
+    sorties.add_gpu(Box::new(JournalGpu {
+        journal,
+        fail: false,
+    }));
+    assert!(!sorties.remove_gpu(id));
+    assert_eq!(sorties.statuses(), vec![SinkStatus::Active]);
+}
+
+#[test]
 fn une_sortie_cpu_est_refusee_en_temps_reel() {
     let Some(gpu) = gpu() else { return };
     let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);

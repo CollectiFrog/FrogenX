@@ -3,9 +3,10 @@
 //! L'interface : une fonction de l'état — §23.5 de `docs/ARCHITECTURE.md`.
 //!
 //! [`draw`] lit la grille, dessine avec egui et remplit une liste de `Command`
-//! qu'`Engine` applique entre deux frames (§23), et une liste de [`Placement`]
-//! pour les clips glissés depuis la bibliothèque (§23.6). Elle ne mute rien
-//! d'autre que son [`UiState`].
+//! qu'`Engine` applique entre deux frames (§23), une liste de [`Placement`] pour
+//! les clips glissés depuis la bibliothèque (§23.6), et au plus un
+//! [`OutputRequest`] pour la sortie plein écran (§8.4). Elle ne mute rien d'autre
+//! que son [`UiState`].
 //!
 //! **Ne connaît ni wgpu ni `winit` :** `egui-wgpu` et `egui-winit` restent dans
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
@@ -32,6 +33,35 @@ pub struct Placement {
     pub layer: LayerId,
     pub column: ColumnId,
     pub preset: PresetId,
+}
+
+/// Un écran branché, déjà mis en mots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Screen {
+    pub label: String,
+    /// Celui de l'interface : la sortie s'y ouvre en fenêtre normale, un plein
+    /// écran y cacherait le menu qui le ferme (§8.4).
+    pub interface: bool,
+}
+
+/// L'état de la sortie plein écran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputView<'a> {
+    pub screens: &'a [Screen],
+    /// L'écran de la sortie ouverte : un indice dans `screens`.
+    pub open: Option<usize>,
+    /// Déjà mis en mots : ce qui s'affiche dans la barre.
+    pub status: &'a str,
+}
+
+/// Ce que l'interface demande à la fenêtre de sortie. Ce n'est pas une
+/// `Command` : la grille n'a rien à en savoir, et seul `app` possède les
+/// fenêtres (§8.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputRequest {
+    /// Ouvre la sortie sur cet écran, en la déplaçant si elle est déjà ouverte.
+    Open(usize),
+    Close,
 }
 
 /// Ce que l'interface se rappelle d'une frame à l'autre.
@@ -85,17 +115,19 @@ pub struct FrameView<'a> {
     pub spectrum: &'a Spectrum,
     /// L'état de l'entrée audio, déjà mis en mots.
     pub audio_status: &'a str,
+    pub output: OutputView<'a>,
 }
 
-/// Dessine toute l'interface et remplit `commands` et `placements`.
+/// Dessine toute l'interface et remplit `commands`, `placements` et `output`.
 pub fn draw(
     ui: &mut Ui,
     state: &mut UiState,
     view: &FrameView<'_>,
     commands: &mut Vec<Command>,
     placements: &mut Vec<Placement>,
+    output: &mut Option<OutputRequest>,
 ) {
-    egui::Panel::top("menu").show(ui, |ui| menu(ui, state));
+    egui::Panel::top("menu").show(ui, |ui| menu(ui, state, &view.output, output));
     if state.show_grid {
         egui::Panel::top("grille")
             .resizable(true)
@@ -128,7 +160,12 @@ pub fn draw(
     }
 }
 
-fn menu(ui: &mut Ui, state: &mut UiState) {
+fn menu(
+    ui: &mut Ui,
+    state: &mut UiState,
+    view: &OutputView<'_>,
+    output: &mut Option<OutputRequest>,
+) {
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button("Affichage", |ui| {
             ui.checkbox(&mut state.show_grid, "Grille");
@@ -137,7 +174,36 @@ fn menu(ui: &mut Ui, state: &mut UiState) {
             ui.checkbox(&mut state.show_audio, "Audio");
             ui.checkbox(&mut state.show_library, "Bibliothèque");
         });
+        ui.menu_button("Sortie", |ui| output_menu(ui, view, output));
     });
+}
+
+/// Un écran par ligne. Celui de la sortie porte la sélection, et le recliquer
+/// ne fait rien : rouvrir la fenêtre couperait l'image pour rien.
+fn output_menu(ui: &mut Ui, view: &OutputView<'_>, output: &mut Option<OutputRequest>) {
+    if view.screens.is_empty() {
+        ui.label(RichText::new("Aucun écran détecté").color(theme::TEXT_DIM));
+    }
+    for (i, screen) in view.screens.iter().enumerate() {
+        let ouverte = view.open == Some(i);
+        let libelle = if screen.interface {
+            format!("{} : en fenêtre", screen.label)
+        } else {
+            screen.label.clone()
+        };
+        if ui.selectable_label(ouverte, libelle).clicked() {
+            if !ouverte {
+                *output = Some(OutputRequest::Open(i));
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    let fermer = Button::new("Fermer la sortie");
+    if ui.add_enabled(view.open.is_some(), fermer).clicked() {
+        *output = Some(OutputRequest::Close);
+        ui.close();
+    }
 }
 
 /// Une cellule : l'accent n'y désigne que le clip actif (§23.1).
@@ -294,6 +360,8 @@ fn toolbar(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
         ui.label(RichText::new(format!("{:.0} fps", view.fps)).color(theme::TEXT_DIM));
         ui.separator();
         ui.label(RichText::new(view.outputs).color(theme::TEXT_DIM));
+        ui.separator();
+        ui.label(RichText::new(view.output.status).color(theme::TEXT_DIM));
     });
 }
 
@@ -454,14 +522,26 @@ mod tests {
         ui: UiState,
         commands: Vec<Command>,
         placements: Vec<Placement>,
+        output: Option<OutputRequest>,
     }
 
     /// Une interface sans écran, qui garde les commandes émises.
     fn harness(composition: &Composition) -> Harness<'_, Etat> {
+        harness_sortie(composition, Vec::new(), None, "Sortie fermée")
+    }
+
+    /// Le même, avec un état de la sortie.
+    fn harness_sortie<'a>(
+        composition: &'a Composition,
+        ecrans: Vec<Screen>,
+        ouverte: Option<usize>,
+        statut: &'a str,
+    ) -> Harness<'a, Etat> {
         let etat = Etat {
             ui: UiState::default(),
             commands: Vec::new(),
             placements: Vec::new(),
+            output: None,
         };
         let spectre = Spectrum::default();
         Harness::builder()
@@ -476,6 +556,11 @@ mod tests {
                         monitor: None,
                         spectrum: &spectre,
                         audio_status: "Micro — 48000 Hz",
+                        output: OutputView {
+                            screens: &ecrans,
+                            open: ouverte,
+                            status: statut,
+                        },
                     };
                     draw(
                         ui,
@@ -483,6 +568,7 @@ mod tests {
                         &view,
                         &mut etat.commands,
                         &mut etat.placements,
+                        &mut etat.output,
                     );
                 },
                 etat,
@@ -577,6 +663,100 @@ mod tests {
                 opacity: Param::fixed(0.5)
             }]
         );
+    }
+
+    /// L'interface sur son écran, et un projecteur.
+    fn deux_ecrans() -> Vec<Screen> {
+        vec![
+            Screen {
+                label: "Écran 1".into(),
+                interface: true,
+            },
+            Screen {
+                label: "Écran 2".into(),
+                interface: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn le_menu_sortie_ouvre_la_sortie_sur_l_ecran_choisi() {
+        let g = grille();
+        let mut h = harness_sortie(&g.composition, deux_ecrans(), None, "Sortie fermée");
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Écran 2").click();
+        h.run();
+
+        assert_eq!(h.state().output, Some(OutputRequest::Open(1)));
+        assert!(h.state().commands.is_empty(), "la grille n'en sait rien");
+    }
+
+    #[test]
+    fn le_menu_dit_que_l_ecran_de_l_interface_ouvre_une_fenetre() {
+        let g = grille();
+        let mut h = harness_sortie(&g.composition, deux_ecrans(), None, "Sortie fermée");
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Écran 1 : en fenêtre").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::Open(0)));
+    }
+
+    #[test]
+    fn un_autre_ecran_deplace_la_sortie_et_le_meme_ne_la_rouvre_pas() {
+        let g = grille();
+        let mut h = harness_sortie(&g.composition, deux_ecrans(), Some(1), "Sortie : Écran 2");
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Écran 2").click();
+        h.run();
+        assert_eq!(h.state().output, None, "le rouvrir couperait l'image");
+
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Écran 1 : en fenêtre").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::Open(0)));
+    }
+
+    #[test]
+    fn fermer_la_sortie_passe_par_le_menu() {
+        let g = grille();
+        let mut h = harness_sortie(&g.composition, deux_ecrans(), Some(1), "Sortie : Écran 2");
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Fermer la sortie").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::Close));
+    }
+
+    #[test]
+    fn une_sortie_fermee_ne_se_ferme_pas_une_seconde_fois() {
+        let g = grille();
+        let mut h = harness_sortie(&g.composition, deux_ecrans(), None, "Sortie fermée");
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Fermer la sortie").click();
+        h.run();
+        assert_eq!(h.state().output, None);
+    }
+
+    #[test]
+    fn sans_ecran_le_menu_le_dit() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Sortie").click();
+        h.run();
+        assert!(h.query_by_label("Aucun écran détecté").is_some());
+    }
+
+    #[test]
+    fn la_barre_dit_ce_que_devient_la_sortie() {
+        let g = grille();
+        let statut = "Sortie fermée : écran débranché";
+        let h = harness_sortie(&g.composition, deux_ecrans(), None, statut);
+        assert!(h.query_by_label(statut).is_some());
     }
 
     #[test]
