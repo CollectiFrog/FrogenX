@@ -139,7 +139,7 @@ Composition
  ├─ Deck[]            un jeu complet de layers, interchangeable à chaud
  │   └─ LayerGroup[]  pilote plusieurs layers comme un seul objet
  │       └─ Layer[]   piste verticale : vidéo + audio, blend, autopilot
- │           └─ Clip[]  source + effets + transport, pilotable par son Graph
+ │           └─ cases[]  une par colonne, vide ou portant un Clip
  └─ Column[]          déclenche la même tranche sur tous les layers à la fois
 ```
 
@@ -154,6 +154,22 @@ déclenche le même instant dramaturgique (« scène 3 ») sur tous les layers s
 — un déclenchement par layer ne peut pas exprimer ça sans dupliquer la logique de
 synchronisation sur chaque layer. C'est le même besoin qu'une scène sur un contrôleur
 d'éclairage : une colonne, canaux multiples.
+
+**Une cellule est une case de sa piste (étape 7c).** `Layer` porte une case par colonne
+(`Vec<Option<ClipId>>`), à l'index de la colonne dans la grille ; `Column` ne porte plus
+rien et ne vaut que par sa position. Déclencher la colonne `k`, c'est déclencher la case
+`k` de chaque piste du deck actif ; une case vide laisse sa piste inchangée. Cela remplace
+`Column.slots`, qui visait les pistes par leur rang : ajouter ou réordonner une piste
+aurait décalé toutes les colonnes, et une piste qui n'était qu'une liste de clips ne
+savait pas représenter une case vide. Les colonnes restent partagées entre les decks,
+comme les scènes d'un conducteur.
+
+**La grille se modifie entre deux frames.** `place_clip` remplit une case ; si la case
+remplacée jouait, le nouveau clip prend sa place et repart de zéro, pour que l'image ne
+s'éteigne pas sous un geste d'édition. Retirer une colonne ou une piste libère ses clips,
+et un clip retiré cesse de jouer ; les identifiants restants se périment sans danger
+(§16.5). `add_clip` reste pour construire une grille par code : il prend la première case
+libre et ajoute une colonne s'il n'y en a plus.
 
 **Représentation : une arena par niveau, pas une arena unique pour toute la
 hiérarchie.** Même principe que `core::Graph` (§3) — `Vec<T>` + identifiant à
@@ -200,6 +216,7 @@ pub struct Clip {
     pub effects: Vec<ShapeOp>,    // ou son équivalent vidéo/3D — chaîne en place (§16.3 bis)
     pub transport: Transport,     // Timeline ou BpmSync (§3bis.3)
     pub transition: ClipTransition,
+    pub speed: Param,             // vitesse du clip, résolue dans le graphe de composition
 }
 ```
 
@@ -232,6 +249,15 @@ générateur, de chaque effet et de son style, et désigne chacun par un `ParamS
 `Clip::set_param` écrit par ce même `ParamSlot`. L'interface n'a ainsi besoin de
 connaître aucun type de forme (§16.3 ter). Les `Param` du graphe de modulation interne
 du clip n'y figurent pas : ils arriveront avec l'éditeur de nœuds.
+
+**La vitesse d'un clip multiplie son `dt` (étape 7c).** `Engine` évalue le graphe du clip
+avec `dt * speed` : un seul réglage accélère tout ce qui s'y accumule, LFO, bruit et
+position de lecture, sans savoir ce que le clip contient. C'est possible parce qu'aucun
+`Signal` ni aucune forme ne lit `t` : tout s'intègre sur `dt`. Un module qui lirait `t`
+directement échapperait à ce réglage. `speed` est un `Param` résolu dans le **graphe de
+composition**, comme le mélange d'une piste : il doit être connu avant d'évaluer le graphe
+du clip, et la régie pourra le moduler. Saturé à la lecture dans `[0, 4]`, une valeur non
+finie valant 1 (§18.4).
 
 **Seul le clip actif vit.** Un clip inactif n'est pas évalué : le coût d'une frame suit
 ce qui est à l'écran, pas la taille de la grille. **Déclencher un clip le fait repartir
@@ -948,7 +974,7 @@ place en dernier.
 ## 10. Structure des crates
 
 Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
-`composition`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+`composition`, `library`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -959,10 +985,11 @@ frogenx/
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, features → Signal
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Command ✅ (core, shape)
+├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
-├── ui/        # egui : grille, tempo, monitor, réglages ; rend des Command ✅ (composition, core, egui)
+├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ✅ (library, composition, core, egui)
 └── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit, egui-wgpu, egui-winit ✅
 ```
 
@@ -992,7 +1019,7 @@ aucun.
 
 **Conséquence sur l'ordre de la chaîne de dépendance (§0, en-tête du document) :**
 `composition` se place après `shape`, pas après `core` directement —
-`core → osc → shape → composition → audio → layer → render → output → ui → app`. `audio`
+`core → osc → shape → composition → audio → library → layer → render → output → ui → app`. `audio`
 reste indépendant de `composition` (une feature audio est un `Signal`, peu importe où
 il est consommé) ; son déplacement dans la liste est seulement pour lire la chaîne de
 gauche à droite dans l'ordre réel des flèches.
@@ -1001,6 +1028,12 @@ gauche à droite dans l'ordre réel des flèches.
 Un clip et une piste les portent, et `composition` ne peut pas dépendre de `layer` sans
 tirer wgpu. Ce sont quatre `Param` et une énumération : rien en eux ne touche au GPU.
 `layer` les réexporte.
+
+**`library` est du contenu, pas de la mécanique.** `composition` décrit ce qu'est une
+grille ; un clip prédéfini est une œuvre qui s'en sert, en assemblant des LFO et des
+formes. Le catalogue vit donc à part, au-dessus d'`osc` et de `composition`, sans GPU ni
+carte son, et se teste entièrement en CI. Placée après `audio`, `library` pourra proposer
+des clips audio-réactifs.
 
 **`app` dépend de `composition`** : `Engine` tient la grille et la traduit en couches.
 `composition` ne connaît toujours rien du rendu.
@@ -1085,7 +1118,7 @@ couches complètes empilées.
 | 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
 | 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
 | 7b | ✅ Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** — *fait* : `cargo run` |
-| 7c | Clips prédéfinis : une bibliothèque de formes réglables | une grille qu'on remplit soi-même |
+| 7c | Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | une grille qu'on remplit soi-même |
 | 7d | Sortie plein écran sur un second écran (`Preview`) | usage sur scène |
 | 7e | Sauvegarde des patchs (§19) | retrouver son travail |
 | 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) | **visuel audio-réactif** |
@@ -1162,6 +1195,10 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Grille de clips (Deck/LayerGroup/Layer/Column) comme structure d'organisation** (§3bis) | répond à « quoi joue, quand » ; un patch modulaire unique ne permet pas de changer de répertoire de visuels à chaud en live |
 | **Un `Graph` par `Clip`, pas un graphe global** (§3) | un clip reste déplaçable, dupliquable, sérialisable seul ; la modulation inter-clips est une extension explicite, pas le cas par défaut |
 | **`Column` transversal**, pas une propriété de `Layer` (§3bis.1) | un déclenchement par layer ne peut pas exprimer une scène synchronisée sur tous les layers sans dupliquer la logique |
+| **Une case par colonne dans `Layer`**, plus de `Column.slots` (§3bis.1) | une colonne qui visait les pistes par leur rang se décalait dès qu'on ajoutait une piste ; une liste de clips ne représentait pas une case vide |
+| **La vitesse d'un clip multiplie son `dt`** (§3bis.2) | un seul réglage accélère tout le clip sans connaître son contenu, puisque tout s'intègre sur `dt` |
+| **Clips prédéfinis en code, dans une crate `library`** (§10, §23.6) | le format de fichier n'arrive qu'à l'étape 7e ; le contenu reste séparé de la mécanique de la grille et se teste sans GPU |
+| **L'interface demande un clip prédéfini par identifiant, `app` le construit** (§23.6) | `Command` reste `Copy` et comparable, donc testable ; `Clip` porte des `Box<dyn ...>` et ne le peut pas |
 | **`TempoController` au-dessus de `Clock`**, pas une redéfinition (§3bis.3) | `Clock` répond à l'heure pour le déterminisme ; le tempo répond à la durée d'un beat, partagée et modifiable en live (tap, resync) |
 | **`Transport.position` est un `Signal` accumulateur**, pas un `Param` (§3bis.3) | une valeur qui avance seule à chaque frame est le rôle d'un `Signal` (§16.1), pas d'un `Param` — l'écrire via `Command::SetParam` à 60 fps détournerait un mécanisme pensé pour l'édition ponctuelle |
 | **Une arena par niveau de la grille** (`DeckId`/`LayerGroupId`/`LayerId`/`ColumnId`/`ClipId`), pas une arena unique (§3bis.1) | un identifiant typé par niveau rend une confusion détectable à la compilation, pas à l'exécution ; même idiome que `core::Graph` |
@@ -1499,6 +1536,10 @@ plage.
 la valeur ; sur un `Modulated`, il remplace `base` et garde `depth` et `source`. Un
 curseur ne doit pas couper une modulation sans le dire.
 
+**`Param::set_depth` règle l'amplitude d'une modulation (étape 7c).** Il rend `false` sur
+un `Fixed` : il n'y a pas d'amplitude sans câble. C'est le seul accès au mouvement d'un
+clip prédéfini tant que son graphe interne n'est pas exposé.
+
 ### 16.4 `Param`
 
 ```rust
@@ -1737,7 +1778,7 @@ patch venu d'une version plus récente ne peut pas être deviné.
  1. Clock          → t, dt                     (Realtime ou Fixed)
  2. Audio          → lecture du triple buffer  (non bloquante)
  3. Ctx            → construction              (une fois)
- 4. Graphes        → composition d'abord (tempo), puis clips actifs seulement
+ 4. Graphes        → composition d'abord (tempo, vitesse des clips), puis clips actifs seulement
  5. Formes         → generate() dans les buffers réutilisés
  6. Tessellation   → polylignes → triangles (lyon)
  7. Couches        → chacune rend vers sa texture
@@ -2155,10 +2196,12 @@ Les commandes de **câblage** sont validées (détection de cycle, §3) et peuve
 
 **Ce qui existe depuis l'étape 7.** Les commandes de **pilotage** de la grille, dans
 `composition`, donc testées sans GPU : déclencher un clip ou une colonne, vider une
-piste, régler son opacité, changer de deck, fixer le BPM, taper le tempo.
+piste, régler son opacité, changer de deck, fixer le BPM, taper le tempo. L'étape 7c y
+ajoute la structure de la grille : ajouter ou retirer une colonne ou une piste, retirer un
+clip, et deux réglages de clip, son amplitude de modulation et sa vitesse.
 `Composition::apply` rend un `bool` : une commande sur un identifiant périmé est refusée
 sans panique. `Engine` les applique entre deux frames. Tout pilote passe par là : les
-touches 1 à 4 aujourd'hui, l'interface, le MIDI et l'OSC ensuite. Les commandes de
+touches 1 à 8 aujourd'hui, l'interface, le MIDI et l'OSC ensuite. Les commandes de
 câblage ci-dessus arriveront avec l'éditeur de nœuds.
 
 ### 23.1 Charte graphique de référence — Resolume Arena
@@ -2318,27 +2361,26 @@ deux frames (§23). Seul le choix du clip affiché dans le panneau de réglages 
 appartient (`UiState`).
 
 ```
-┌───────────────────────────────────────────────┐
-│ Menu : Affichage (masquer un panneau)         │
-├───────────────────────────────────────────────┤
-│ Grille : pistes × colonnes                    │
-├───────────────────────────────────────────────┤
-│ Barre : BPM, tap, fps, statut des sorties     │
-├────────────────┬──────────────────────────────┤
-│ Monitor        │ Réglages : piste, puis clip  │
-└────────────────┴──────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Menu : Affichage (masquer un panneau)                    │
+├──────────────────────────────────────────────────────────┤
+│ Grille : pistes × colonnes                               │
+├──────────────────────────────────────────────────────────┤
+│ Barre : BPM, tap, fps, statut des sorties                │
+├─────────────┬─────────────────────────────┬──────────────┤
+│ Monitor     │ Réglages : clip, puis piste │ Bibliothèque │
+└─────────────┴─────────────────────────────┴──────────────┘
 ```
 
 **Grille.** Une ligne par piste, la plus haute en haut, comme dans la pile de
 composition. Un clic sur une cellule déclenche le clip et l'affiche dans les réglages ;
 un clic sur un en-tête déclenche la colonne. Le clip actif porte l'accent cyan (§23.1) ;
-il n'y a **pas de vignette**, qui évaluerait tous les clips. Une ligne montre les clips
-de la piste dans leur ordre d'ajout : la colonne `k` et la cellule `k` ne correspondent
-que si la grille a été construite ainsi, ce qui reste à resserrer quand on pourra
-construire la grille depuis l'interface.
+il n'y a **pas de vignette**, qui évaluerait tous les clips. Chaque ligne montre une case
+par colonne, vide ou non (§3bis.1).
 
-**Réglages.** Les groupes de `Clip::params` (§3bis.2), puis l'opacité de la piste. Chaque
-curseur émet `Command::SetParam`, qui passe par `Param::set_base` (§16.3 ter).
+**Réglages.** La vitesse du clip, les groupes de `Clip::params` (§3bis.2), puis l'opacité
+de la piste. Chaque curseur émet `Command::SetParam`, qui passe par `Param::set_base`
+(§16.3 ter). Un paramètre modulé a un second curseur pour son amplitude.
 
 **Le thread.** egui tourne sur le thread principal, dans la boucle du moteur (§20.2) :
 la frame d'abord, l'interface ensuite, puis une présentation, à chaque échéance. Une
@@ -2375,9 +2417,41 @@ signale la sortie du pointeur quand le vrai curseur est ailleurs, sans que cela 
 redimensionnement, la réduction et la récupération d'une surface perdue n'ont pas été
 essayés.
 
-**Non couvert.** Le navigateur de sources, les onglets et la modification de la grille
-viennent avec l'étape 7c et l'éditeur de nœuds. Les couleurs du style sont réglables par
-curseurs, canal par canal ; un sélecteur de couleur viendra après.
+**Non couvert.** Les onglets et l'ajout d'effets à un clip viennent avec l'éditeur de
+nœuds. Les couleurs du style sont réglables par curseurs, canal par canal ; un sélecteur
+de couleur viendra après.
+
+### 23.6 La bibliothèque de clips (étape 7c)
+
+**`library` tient un catalogue statique.** Chaque entrée porte un nom, une famille et une
+fonction qui construit le clip : 24 clips, en quatre familles (fonds, formes, traits,
+motifs). Tous sont écrits en code, parce que le format de fichier n'arrive qu'à l'étape
+7e. Une sauvegarde décrira ensuite le clip lui-même, jamais son entrée de catalogue : un
+clip réglé n'est plus celui du catalogue.
+
+**Tous sont calés sur le tempo et tous bougent**, sauf le fond uni `Nuit`. Sinon, ni
+l'amplitude ni la vitesse n'auraient d'effet sur eux.
+
+**Le geste.** Le panneau liste le catalogue par famille. On glisse une entrée sur une
+case, vide ou occupée ; un clic droit sur une case retire le clip, un clic droit sur un
+en-tête de colonne ou un nom de piste retire la colonne ou la piste. Retirer passe par un
+menu, jamais par un bouton direct : sur scène, un clic raté ne doit pas supprimer un clip.
+
+**L'interface ne construit pas de clip.** `Command` reste `Copy` et comparable, ce qui
+rend les tests d'interface possibles, alors qu'un `Clip` porte des `Box<dyn ...>`. `draw`
+remplit donc une seconde liste de `Placement { layer, column, preset }`, et `app` construit
+le clip entre deux frames avant de le remettre à `Engine::place`. Un refus se compte comme
+une commande refusée.
+
+**Démarrage.** `library::starter` construit trois pistes et huit colonnes : le fond, les
+formes, les traits. Elle remplace la grille de démonstration de `app`, et sert aussi à
+l'exemple `sequence` et aux tests d'`Engine`. Sans sauvegarde, c'est ce qu'on retrouve à
+chaque lancement jusqu'à l'étape 7e.
+
+**Ce qui vérifie le catalogue.** Un test parcourt chaque entrée sans GPU : le clip se
+construit, porte le nom du catalogue, dessine quelque chose et produit un `Path` valide et
+fini sur 240 frames, avec des `Diagnostics` nuls. L'exemple `catalogue` rend une planche
+de toutes les entrées, pour les regarder : un test ne dit pas si une forme est belle.
 
 ---
 

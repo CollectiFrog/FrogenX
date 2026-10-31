@@ -31,7 +31,8 @@ dépendance du §10 de `docs/ARCHITECTURE.md`, et elle existe pour ça.
 | **Tessellation** | aire couverte, contour ouvert jamais rempli, contours disjoints sans triangle à cheval, dégénérés sans panique |
 | **Couches** | pixels relus en quelques points, comparés à une référence CPU (`srgb_to_linear`, `blend_premul`) |
 | **Audio** | features sur signaux **synthétiques** : sinus pur → centroïde connu, silence → RMS nul |
-| **Interface** | `egui_kittest` : un clic simulé produit la bonne `Command`, sans GPU ni écran. Un curseur se vise par `Role::SpinButton` |
+| **Interface** | `egui_kittest` : un clic simulé produit la bonne `Command`, sans GPU ni écran. Un curseur se vise par `Role::SpinButton` ; un glisser-déposer se joue par `drag_at`, `hover_at`, `drop_at`, un clic droit par `click_secondary` |
+| **Catalogue** | chaque clip de `library` : se construit, dessine, `Path` valide et fini sur 240 frames, `Diagnostics` nuls |
 | **Pilotage** | `Command` testées sans GPU sur `Composition` ; un refus ne touche à rien. `Engine` : clip inactif jamais évalué (`Signal` compteur), changement de clip sans résidu |
 | **Sorties** | `CpuSink` factice lent : indices contigus en `Fixed`, pertes comptées sans ralentir la boucle en `Realtime` ; relecture seulement si une sortie CPU est active ; `GpuSink` factice : `after_submit` une fois par frame, après `encode` (§8.0) |
 | **Patchs** | chaque fixture d'ancienne version se migre et se charge (§19.2) |
@@ -138,9 +139,10 @@ passe de sortie : `conversion.wgsl` suit `linear_premul_to_srgb8`, à 1/255 prè
 une cible `Unorm` comme `*Srgb`
 (`la_passe_suit_sa_reference_cpu_quel_que_soit_le_format_de_la_cible`).
 
-**Tester le chemin complet par une image déjà connue.** `first_image` et la frame
-d'indice 79 de `sequence` montrent le même instant par deux chemins de conversion : si
-elles divergent de plus de 1/255, l'un d'eux encode deux fois ou pas du tout.
+**Tester le chemin complet par des images reproductibles.** `first_image` garde sa propre
+scène, `sequence` rend la grille de départ : elles ne se comparent plus entre elles. Le
+test `une_colonne_de_la_grille_de_depart_change_l_image_et_reste_reproductible` rend deux
+fois la même séquence et compare chaque octet.
 
 Les snapshots d'image entière avec **tolérance perceptuelle** (§24.2) viendront quand
 les images seront trop riches pour quelques points — jamais d'égalité stricte, qui
