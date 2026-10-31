@@ -87,9 +87,9 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`. La grille de `demo` est
   provisoire : la bibliothèque de clips la remplacera.
 
-**Prochaine étape : l'interface egui** (grille, monitor, paramètres). Le §12 ne contient
-pas encore cette étape. Première version visée : interface, clips prédéfinis, sortie
-plein écran, sauvegarde, puis audio (capture, BPM calculé, déclenchements, §7).
+**Prochaine étape : 7b, l'interface egui** (§23.5). Première version visée, §12 : 7b
+interface, 7c clips prédéfinis, 7d sortie plein écran, 7e sauvegarde, 8 audio (capture,
+BPM calculé, déclenchements, §7).
 Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version

@@ -24,7 +24,7 @@ crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← cor
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
                      à venir : NDI / Spout / Syphon / recorder
-crates/ui/           egui : grille de clips, rack, câblage, monitoring
+crates/ui/           egui : grille, tempo, monitor, réglages ; rend des Command ← core, composition, egui
 crates/app/          Engine (sans fenêtre) + binaire `frogenx` (`cargo run`) ← tout le reste, winit ✅
 ```
 
@@ -70,7 +70,7 @@ Déclarées dans `[workspace.dependencies]` à la racine, référencées par
 | GPU, utilitaires | `bytemuck`, `pollster` | ✅ (layer, render) |
 | Image | `png` | ✅ (render) |
 | Fenêtrage | `winit` **0.30** | ✅ (app seulement) — version imposée par `egui-wgpu` (§11) |
-| UI | `egui`, `egui-wgpu` 0.36+ | à venir — demandera Rust 1.95 (§11) |
+| UI | `egui`, `egui-wgpu`, `egui-winit` **0.37** | ui (egui seul), app (le reste) — Rust 1.95 minimum (§11) |
 | Audio | `cpal`, `rustfft` | à venir |
 | Lock-free | `rtrb`, `triple_buffer` | à venir |
 

@@ -72,6 +72,10 @@ Les deux lisent le cache et n'évaluent rien. La seconde existe parce que le gra
 le `NodeState` du nœud courant pendant `eval` et ne peut pas se prêter en entier
 (§16.2) — un `Signal` voit les valeurs de ses dépendances, jamais la topologie.
 
+**Une forme déclare ses `Param` à la macro `params!`** (§16.3 ter). Un champ `Param`
+oublié dans cette liste est invisible pour l'interface, la sauvegarde et le MIDI : le
+test `chaque_forme_declare_tous_ses_param` compare les deux.
+
 ## 4. Conventions numériques (§17)
 
 | Grandeur | Convention |

@@ -195,6 +195,7 @@ engageait un vrai contrat.
 
 ```rust
 pub struct Clip {
+    pub name: String,             // ce qu'affiche sa cellule dans la grille (§23.5)
     pub source: ClipSource,       // Shape { graph, generator, style } | Scene3d(Graph) | Video(VideoTrack)
     pub effects: Vec<ShapeOp>,    // ou son équivalent vidéo/3D — chaîne en place (§16.3 bis)
     pub transport: Transport,     // Timeline ou BpmSync (§3bis.3)
@@ -225,6 +226,12 @@ textures et les buffers ; à chaque frame, le clip actif lui prête son contenu
 (`ShapeContent`, §22.1). Une `ShapeLayer` par clip coûterait environ 80 Mo de textures
 par clip en 1080p avec le MSAA 4× — 8 Go pour une grille de 100 clips, dont un seul par
 piste s'affiche.
+
+**Un clip sait décrire ses réglages.** `Clip::params` réunit en groupes ceux de son
+générateur, de chaque effet et de son style, et désigne chacun par un `ParamSlot` ;
+`Clip::set_param` écrit par ce même `ParamSlot`. L'interface n'a ainsi besoin de
+connaître aucun type de forme (§16.3 ter). Les `Param` du graphe de modulation interne
+du clip n'y figurent pas : ils arriveront avec l'éditeur de nœuds.
 
 **Seul le clip actif vit.** Un clip inactif n'est pas évalué : le coût d'une frame suit
 ce qui est à l'écran, pas la taille de la grille. **Déclencher un clip le fait repartir
@@ -891,6 +898,18 @@ choix, testée). Jamais `Immediate`, qui déchire l'image sur un projecteur.
 | `Outdated` | reconfigure, saute la frame |
 | `Lost` | compte la frame ; `app` recrée la surface et la lui rend |
 
+**`PresentSurface` : le tableau ci-dessus, écrit une seule fois.** La preview et la
+fenêtre de l'interface (§23.5) présentent toutes deux sur une surface : acquisition,
+reconfiguration et perte vivent dans ce type de `output`, qui leur est commun. Il suit
+une préférence de format : `*Srgb` pour la preview, `Unorm` pour l'interface.
+
+**`MonitorSink` : l'image dans l'interface.** Un `GpuSink` qui écrit la frame dans une
+texture `Rgba8Unorm` de taille réduite, par la passe de conversion en mode `OverBlack` ;
+le shader encode le sRGB (§8.3, encodage). `Rgba8Unorm` est imposé par egui
+(`register_native_texture`), qui lit cette texture sans la décoder. Donner à egui la
+texture du compositeur serait faux deux fois : elle est linéaire en 16 bits, et change
+d'une frame à l'autre (ping-pong, §22).
+
 **`PreviewHandle`.** `Outputs` possède la preview, mais c'est `app` qui connaît la
 fenêtre : `Preview::new` rend aussi une poignée, par laquelle `app` signale une nouvelle
 taille, voit qu'une surface est perdue et en fournit une autre. Tout s'applique au début
@@ -943,7 +962,7 @@ frogenx/
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
 ├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, Preview, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
-├── ui/        # egui : grille de clips, rack par clip, monitoring
+├── ui/        # egui : grille, tempo, monitor, réglages ; rend des Command (composition, core, egui)
 └── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit ✅
 ```
 
@@ -986,6 +1005,10 @@ tirer wgpu. Ce sont quatre `Param` et une énumération : rien en eux ne touche 
 **`app` dépend de `composition`** : `Engine` tient la grille et la traduit en couches.
 `composition` ne connaît toujours rien du rendu.
 
+**`ui` ne connaît ni wgpu ni `winit`.** Elle lit la grille et rend des `Command` ;
+`egui-wgpu` et `egui-winit` restent dans `app`, seul à posséder la fenêtre. C'est ce qui
+permet de la tester par des clics simulés, sans GPU ni écran (`egui_kittest`).
+
 **`scene3d` suit la même règle que `shape`.** Primitives 3D (maillages, caméra,
 lumières) et opérateurs, sans connaître wgpu ni l'audio — exactement le rôle que
 `shape` jouait pour le 2D, étendu à la 3D plutôt que remplacé. `Clip.effects` pourra,
@@ -1015,7 +1038,7 @@ maintenable à mesure qu'il grossit.
 | Maths | `glam` ✅ | vecteurs, matrices |
 | Rendu | `wgpu` 30 | GPU multiplateforme (étape 5) |
 | Fenêtrage | `winit` 0.30 ✅ | fenêtre et boucle d'événements, dans `app` seulement (§8.3) |
-| UI | `egui` | grille de clips, rack de modules, câblage — `egui-wgpu` 0.36+ pour wgpu 30 |
+| UI | `egui` 0.37 | grille de clips, réglages (`ui`) ; `egui-wgpu`, `egui-winit` dans `app` ; `egui_kittest` en test |
 | Bruit | interne à `osc` ✅ | value noise et fBm à graine explicite — pas la crate `noise` (§13, §20.3) |
 | Tessellation | `lyon_tessellation` | `Path` → triangles, remplissage et trait (étape 5) |
 | GPU, utilitaires | `bytemuck`, `pollster` | octets des buffers de sommets ; attente synchrone de l'adaptateur (étape 5) |
@@ -1040,9 +1063,8 @@ qu'à la compilation chez celui qui a la vieille toolchain.
 
 **`winit` est épinglé en 0.30 parce qu'`egui` l'impose** : `egui-wgpu` 0.36 et 0.37, les
 seules versions pour wgpu 30, demandent `winit ^0.30.13`, et la 0.31 est encore en bêta
-à la date de ce choix. **L'étape UI relèvera `rust-version`** : ces mêmes versions
-d'`egui-wgpu` exigent Rust 1.95, contre 1.87 aujourd'hui. Vérifié sur crates.io ; à
-revérifier à l'étape UI.
+à la date de ce choix. **`rust-version` passe à 1.95**, le minimum d'egui 0.37, qui
+dépasse désormais celui de wgpu. Vérifié sur crates.io.
 
 ---
 
@@ -1062,7 +1084,11 @@ couches complètes empilées.
 | 5 | ✅ `RenderLayer` + `ShapeLayer` + compositeur, offscreen | **première image** (écrite en PNG — la fenêtre arrive à l'étape 6) — *fait* : `cargo run -p frogenx-render --example first_image` |
 | 6 | ✅ `OutputSink` (`GpuSink`/`CpuSink`, contrat au §8.0) + étage `Outputs` + preview | pipeline de sortie en place, **première fenêtre** — *fait* : `cargo run` ouvre l'application ; `cargo run -p frogenx-app --example sequence` rend le **premier clip** |
 | 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
-| 8 | Audio → features → `Signal` | **visuel audio-réactif** |
+| 7b | Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** |
+| 7c | Clips prédéfinis : une bibliothèque de formes réglables | une grille qu'on remplit soi-même |
+| 7d | Sortie plein écran sur un second écran (`Preview`) | usage sur scène |
+| 7e | Sauvegarde des patchs (§19) | retrouver son travail |
+| 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
 | 11 | NDI, puis Spout / Syphon | intégration VJ |
@@ -1072,6 +1098,13 @@ couches complètes empilées.
 | 15 | Scripting Lua (`mlua`) sur `Command` (§23.4) | logique de composition scriptable |
 | 16 | Shaders d'effets custom en WGSL natif (§23.4) | effets utilisateur sans recompiler FrogenX |
 | 17 | Entrées MIDI/OSC, `Param3d::Bind` sur `scene3d` (§22bis.1) | pilotage live de l'interface et des effets par surface de contrôle externe |
+
+**Première version utilisable : jusqu'à l'étape 8 incluse.** Les étapes 7b à 7e ont été
+insérées quand le plan a révélé qu'aucune étape ne couvrait l'interface. On y ouvre
+l'application, on déclenche des clips dans une grille, on règle leurs paramètres, on
+envoie l'image sur un projecteur, on retrouve son travail, et le son pilote l'image.
+L'éditeur de nœuds, l'enregistrement, NDI, Spout, la vidéo, la 3D et le MIDI/OSC
+viennent ensuite.
 
 **Les étapes clés :** la 4 (la grille devient le squelette organisationnel, avant même
 le rendu — tout ce qui suit s'y raccroche), la 5 (première image), la 7 (le concept
@@ -1165,6 +1198,13 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
 | **Le tempo est dans `Ctx`, d'une source unique** (§3bis.3, §16.2) | tap et BPM audio écrivent au même endroit, tous les clips lisent au même endroit ; câbler chaque clip serait à refaire pour tout nouveau clip |
 | **Un graphe de composition, en plus du graphe de chaque clip** (§3) | l'opacité d'une piste et le tempo survivent aux changements de clip ; les mettre dans un clip les ferait sauter |
+| **`ui` ne connaît ni wgpu ni `winit`** : elle lit la grille et rend des `Command` (§10, §23.5) | testable par clics simulés, sans GPU ni écran ; `egui-wgpu` et `egui-winit` restent dans `app` |
+| **Panneaux egui, pas `egui_dock`** (§23.5) | `egui_dock` s'arrête à egui 0.36 ; garder egui à jour vaut mieux que des panneaux déplaçables pour la première version. Report du §23.2, pas abandon |
+| **Monitor par un `GpuSink` en `Rgba8Unorm`** (§8.3) | imposé par egui ; la texture du compositeur est linéaire en 16 bits et change à chaque frame |
+| **`PresentSurface` commun à la preview et à l'interface** (§8.3) | le tableau des réponses de la surface n'existe qu'une fois |
+| **`params(&self)` + `param_mut(i)`**, pas une seule méthode en `&mut` (§16.3 ter) | l'interface lit à chaque frame : une méthode en `&mut` lui ferait emprunter toute la grille en écriture ; une macro écrit les deux depuis une seule liste |
+| **Un réglage passe par `Command::SetParam`**, qui écrit la base d'un `Param` (§16.3 ter, §23.5) | §23 : l'interface ne mute pas pendant l'évaluation ; garder la modulation sous un curseur évite de la perdre sans le voir, et l'annulation restera possible |
+| **Cellule de grille : nom et état, pas de vignette** (§23.5) | une vignette vivante évaluerait tous les clips, contre la décision « seul le clip actif vit » |
 | **`Command` dès l'étape 7, avant l'interface** (§23) | déclencher depuis un clavier, une interface ou le MIDI passe par le même chemin, testé sans GPU ; des appels directs seraient à réécrire |
 | **Remplissage en règle non nulle**, contours fermés seulement (§22.1) | les copies d'une répétition radiale qui se chevauchent restent pleines au lieu de se trouer ; un contour ouvert n'a pas d'intérieur |
 | **Formules de mélange en double : WGSL + référence CPU testée** (§22.1) | un shader ne se teste pas seul ; la version Rust sert d'oracle aux tests de pixels, mode par mode |
@@ -1222,6 +1262,7 @@ concrètement, par étage du §1 :
 | **Tessellation** | sans GPU : un contour fermé produit des triangles qui couvrent son aire, un contour ouvert n'est jamais rempli, plusieurs contours restent disjoints (pas de triangle à cheval), un contour dégénéré (moins de 3 points, points confondus, non-fini) rend zéro triangle sans paniquer |
 | **Couches** | par relecture de pixels, sur un GPU s'il existe : un carré plein au centre donne au pixel central la couleur **linéaire prémultipliée** attendue et laisse le coin transparent ; conversion sRGB → linéaire vérifiée sans GPU sur des valeurs de référence |
 | **Sorties** | sans GPU ni fenêtre, avec des `CpuSink` factices : en `Fixed`, une sortie lente reçoit les indices `0, 1, 2, …` sans trou ; en `Realtime`, elle perd des frames, les compte dans `Degraded { dropped }`, et la boucle ne ralentit pas ; une relecture n'a lieu que si une sortie CPU est active ; une sortie `Failed` n'est plus alimentée mais reste listée. Sur GPU s'il existe : la passe de conversion 8 bits suit sa référence CPU (`linear_premul_to_srgb8`), à 1/255 près, sur cible `Unorm` comme `*Srgb` ; deux sorties CPU partagent le même `Arc` (une seule relecture) ; un `GpuSink` factice voit `after_submit` appelé une fois par frame, après `encode` |
+| **Interface** | sans GPU ni écran, par `egui_kittest` : un clic sur une cellule, un en-tête de colonne, le bouton tap ou un curseur produit la bonne `Command`. Sans GPU : `set_param` écrit le bon champ et garde la modulation ; chaque type de forme expose ses `Param` et `param_mut` atteint le même que `params`. Sur GPU : `MonitorSink` suit la référence CPU |
 | **Pilotage de la grille** | sans GPU : un déclenchement remet l'état du clip à zéro, un refus n'y touche pas ; l'ordre des pistes suit la hiérarchie ; `BeatRate` suit le tempo ; le tap tempo oublie après 2 s ; une `Command` invalide est refusée sans panique. Sur GPU : un clip inactif n'est pas évalué, changer de clip change l'image, une piste vide ne contribue pas, l'opacité d'une piste se résout dans le graphe de composition |
 | **Grille de composition** | construction/suppression dans la hiérarchie sans invalider les identifiants des niveaux non touchés (§3bis.1) ; une `Column` déclenche bien la même tranche sur tous les `Layer` (§3bis.1) ; `TempoController::tap` calcule un BPM correct sur une séquence d'événements synthétiques ; `CrossFader.phase` à 0/0.5/1 produit les `BlendParams::opacity` attendus sur les deux groupes (§3bis.4) ; `PositionSignal` avance déterministiquement à un `t`/`dt` injecté, jamais l'horloge système (§3bis.3) |
 
@@ -1424,6 +1465,39 @@ précédent — exactement l'allocation par frame que le §16.3 cherche à évit
 Un opérateur travaille donc **en place**. Une chaîne de dix opérateurs n'alloue rien.
 `Chain` assemble un générateur et une suite d'opérateurs, et implémente lui-même
 `ShapeGenerator` — la composition reste donc transparente pour l'appelant.
+
+### 16.3 ter Décrire ses paramètres
+
+```rust
+pub struct ParamDesc {
+    pub name: &'static str,
+    pub min: f32,                // plage du curseur, pas une saturation
+    pub max: f32,
+    pub value: Param,            // copie : `Param` est `Copy`
+}
+
+// Sur `ShapeGenerator` et sur `ShapeOp` :
+fn kind(&self) -> &'static str;                            // « Ellipse », « Deform »
+fn params(&self) -> Vec<ParamDesc>;
+fn param_mut(&mut self, index: usize) -> Option<&mut Param>;
+```
+
+Un clip tient ses formes dans des `Box<dyn ...>` : sans ceci, ses `Param` sont
+inatteignables de l'extérieur. L'interface en a besoin, et le format de patch (§19) comme
+le pilotage MIDI/OSC en auront besoin pour les mêmes raisons.
+
+**Deux méthodes, pas une.** L'interface lit à chaque frame et n'écrit que rarement, entre
+deux frames. Une seule méthode en `&mut` lui ferait emprunter toute la grille en
+écriture pour afficher un curseur. La macro `params!` écrit les deux depuis une seule
+liste, ce qui garantit que `param_mut(i)` désigne le `i`-ème de `params()`.
+
+**La plage n'est pas une saturation.** `min` et `max` bornent le geste de l'utilisateur.
+La saturation reste chez le consommateur (§18.4) : une modulation peut sortir de la
+plage.
+
+**`Param::set_base` règle un paramètre sans le débrancher.** Sur un `Fixed`, il remplace
+la valeur ; sur un `Modulated`, il remplace `base` et garde `depth` et `source`. Un
+curseur ne doit pas couper une modulation sans le dire.
 
 ### 16.4 `Param`
 
@@ -2143,6 +2217,9 @@ redimensionné ou déplacé, pour les mêmes raisons qui ont fait ce choix chez 
 poste de VJ tourne sur des configurations d'écran très variées (un moniteur, deux,
 une sortie dédiée à la régie).
 
+**Reporté :** la première interface a des panneaux redimensionnables et masquables, mais
+pas déplaçables (§23.5).
+
 **Correspondance avec le modèle FrogenX :** la grille haute est `Deck`/`LayerGroup`/
 `Layer`/`Column`/`Clip` (§3bis.1) ; le dashboard contextuel affiche les `Param` de
 l'objet sélectionné à n'importe quel niveau de la hiérarchie ; le panneau Clip affiche
@@ -2231,6 +2308,54 @@ frontend de compilation isolé, sans toucher au pipeline d'effets natif.
 - Compilation/validation du shader se fait en régime **édition** (§18.1), jamais en
   frame — un shader qui ne compile pas est refusé au chargement, pas découvert à
   l'exécution.
+
+### 23.5 La première interface (étape 7b)
+
+**`ui` est une fonction de l'état.** À chaque frame, `app` lui prête la grille en
+lecture et une vue de ce qui se passe (tempo, fps, statut des sorties, texture du
+monitor) ; elle dessine et remplit une liste de `Command`, que `Engine` appliquera entre
+deux frames (§23). Seul le choix du clip affiché dans le panneau de réglages lui
+appartient (`UiState`).
+
+```
+┌───────────────────────────────────────────────┐
+│ Menu : Affichage (masquer un panneau)         │
+├───────────────────────────────────────────────┤
+│ Grille : pistes × colonnes                    │
+├───────────────────────────────────────────────┤
+│ Barre : BPM, tap, fps, statut des sorties     │
+├────────────────┬──────────────────────────────┤
+│ Monitor        │ Réglages : piste, puis clip  │
+└────────────────┴──────────────────────────────┘
+```
+
+**Grille.** Une ligne par piste, la plus haute en haut, comme dans la pile de
+composition. Un clic sur une cellule déclenche le clip et l'affiche dans les réglages ;
+un clic sur un en-tête déclenche la colonne. Le clip actif porte l'accent cyan (§23.1) ;
+il n'y a **pas de vignette**, qui évaluerait tous les clips. Une ligne montre les clips
+de la piste dans leur ordre d'ajout : la colonne `k` et la cellule `k` ne correspondent
+que si la grille a été construite ainsi, ce qui reste à resserrer quand on pourra
+construire la grille depuis l'interface.
+
+**Réglages.** Les groupes de `Clip::params` (§3bis.2), puis l'opacité de la piste. Chaque
+curseur émet `Command::SetParam`, qui passe par `Param::set_base` (§16.3 ter).
+
+**Le thread.** egui tourne sur le thread principal, dans la boucle du moteur (§20.2) :
+la frame d'abord, l'interface ensuite, puis une présentation, à chaque échéance. Une
+interface lente ralentirait le rendu ; son temps est mesuré et affiché dans le bilan de
+`--frames`. Un thread de rendu séparé reste possible si cette mesure le réclame.
+
+**Le clavier** reste actif, sauf quand egui veut la saisie : Espace dans un champ ne doit
+pas taper le tempo.
+
+**La fenêtre change de rôle.** Elle montre l'interface, et l'image passe dans un panneau.
+`Preview` n'y sert donc plus ; elle revient à l'étape 7d pour le plein écran. D'ici là,
+elle n'est couverte que par ses fonctions pures et par `PresentSurface`, qu'elle partage
+avec l'interface.
+
+**Non couvert.** Le navigateur de sources, les onglets et la modification de la grille
+viennent avec l'étape 7c et l'éditeur de nœuds. Les couleurs du style sont réglables par
+curseurs, canal par canal ; un sélecteur de couleur viendra après.
 
 ---
 
