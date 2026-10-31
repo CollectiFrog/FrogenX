@@ -1046,6 +1046,81 @@ des sorties factices, la passe hors écran, les fonctions pures. Un mode `--fram
 ouvre la fenêtre, présente N frames et quitte : il prouve l'ouverture et la présentation,
 hors CI puisqu'il faut un écran. La fluidité reste une vérification à l'œil.
 
+### 8.4 La sortie plein écran (étape 7d)
+
+> Tranché avant l'étape 7d (choix A1, B1, C1, D1). Raisons au §13.
+
+**Le geste.** Le menu `Sortie` liste les écrans branchés. Un clic ouvre la sortie sur
+l'écran choisi, un clic sur un autre l'y déplace, `Fermer la sortie` la ferme. Rien ne
+s'ouvre au lancement : une image qui part seule sur un mauvais écran serait pire que pas
+d'image. Le statut se lit dans la barre.
+
+**Une fenêtre sans bordure, pas de plein écran exclusif.** Le mode vidéo de l'écran ne
+change pas : pas de noir à l'ouverture, et l'interface garde la main sur l'autre écran.
+
+**1920×1080 fixe.** La sortie ne suit pas l'écran : le compositeur ne réalloue rien, et
+`Preview` applique son letterbox (§8.3). Un projecteur 16:10 reçoit des bandes noires, un
+écran 4K une image agrandie. Choisir la résolution viendra après la première version.
+
+**Sur l'écran de l'interface, une fenêtre normale.** Un plein écran y cacherait le menu qui
+le ferme. Elle sert aussi à travailler avec un seul écran.
+
+**Retirer une sortie.** `Failed` ne retire jamais une sortie (§8.0), parce que seul
+l'utilisateur en décide : fermer est précisément ce geste. Seules les sorties GPU se
+retirent pour l'instant ; une sortie CPU suppose d'arrêter son thread, ce que l'enregistreur
+de l'étape 10 décidera. Cela se fait entre deux frames, en régime d'édition :
+
+```rust
+impl Outputs {
+    pub fn add_gpu(&mut self, sink: Box<dyn GpuSink>) -> GpuSinkId;
+    pub fn remove_gpu(&mut self, id: GpuSinkId) -> bool;   // false : déjà retirée
+}
+```
+
+`Engine` les expose en `add_gpu_output` et `remove_gpu_output`, et ne sait toujours rien
+d'une fenêtre. La `wgpu::Surface` tient un `Arc<Window>` : la fenêtre ne se ferme vraiment
+que lorsque `Preview` a quitté `Outputs` **et** que `app` a lâché le sien.
+
+**Deux fenêtres, une boucle.** `app` aiguille les événements par `WindowId`. Ceux de la
+sortie n'atteignent pas egui, sauf le clavier : si la sortie prend le focus par accident, 1
+à 8 et Espace doivent continuer de jouer.
+
+**Le focus reste à l'interface.** winit active de force une fenêtre créée en plein écran
+(`force_window_active`). La sortie est donc créée non active, puis passée en plein écran
+par `set_fullscreen`, qui n'active rien. Le curseur y est masqué. La taille vient ensuite de
+l'événement `Resized`, car winit positionne la fenêtre de façon asynchrone.
+
+**Fermer ne tient qu'à un menu.** Aucune touche ne ferme la sortie, Échap compris. Alt+F4
+envoie `CloseRequested` : en plein écran, `app` l'ignore. Sur une fenêtre normale, sa croix
+ferme la sortie, jamais l'application.
+
+**Un écran qui disparaît.** Windows déplace alors la fenêtre sur un écran restant, donc
+potentiellement par-dessus l'interface. winit 0.30 n'a pas d'événement pour cela : `app`
+relit la liste des écrans chaque seconde, et aussitôt si la sortie est déplacée ou
+redimensionnée. Si l'écran manque, la sortie se ferme, le moteur continue, et la barre dit
+`Sortie fermée : écran débranché`. Elle ne se rouvre pas seule au retour de l'écran. Un
+écran s'identifie par son nom (`\\.\DISPLAY2` sous Windows), plus stable qu'un `HMONITOR`.
+
+**L'interface ne connaît pas winit.** `app` lui prête la liste des écrans déjà mise en mots
+et reçoit un `OutputRequest`, qui n'est pas une `Command` : il concerne la fenêtre, pas la
+grille.
+
+```rust
+pub struct Screen { pub label: String, pub interface: bool }
+
+pub struct OutputView<'a> {
+    pub screens: &'a [Screen],
+    pub open: Option<usize>,   // indice dans `screens`
+    pub status: &'a str,
+}
+
+pub enum OutputRequest { Open(usize), Close }
+```
+
+**Vérifier.** `--output N` ouvre la sortie sur l'écran N dès le lancement : combiné à
+`--frames`, il prouve l'ouverture, la présentation et la fermeture sans souris. La
+fermeture et le retrait d'une sortie se testent sans fenêtre, sur des sorties factices.
+
 ---
 
 ## 9. Portabilité
@@ -1229,7 +1304,7 @@ couches complètes empilées.
 | 7 | ✅ La grille pilote le rendu : `ShapeRenderer` par piste, `Command`, tempo dans `Ctx` | **le modulaire prend vie dans la grille** — *fait* : `cargo run`, touches 1 à 4, Espace pour taper le tempo |
 | 7b | ✅ Interface egui : grille cliquable, tempo, monitor, réglages du clip (§23.5) | **l'application se pilote à la souris** — *fait* : `cargo run` |
 | 7c | ✅ Clips prédéfinis : grille à cases, `library`, glisser-déposer, vitesse et amplitude (§23.6) | **une grille qu'on remplit soi-même** — *fait* : `cargo run`, glisser un clip sur une case |
-| 7d | Sortie plein écran sur un second écran (`Preview`) | usage sur scène |
+| 7d | Sortie plein écran sur un second écran (`Preview`, §8.4) | usage sur scène |
 | 7e | Sauvegarde des patchs (§19) | retrouver son travail |
 | 8 | Audio → features → `Signal`, BPM calculé, déclenchements (§7) — *capture, spectre et trig faits, avant 7d et 7e à la demande de l'utilisateur (§3bis.6) ; restent le BPM calculé et les autres features* | **visuel audio-réactif** |
 | 9 | `FeedbackLayer` | traînées, échos, complexité organique |
@@ -1305,6 +1380,15 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Le moteur a sa propre échéance**, pas la synchro de l'écran (§8.3) | wgpu répond `Occluded` sur une fenêtre masquée : réduire la preview ne doit pas arrêter NDI ni l'enregistrement |
 | **Tests GPU exécutés un par un** (§24.3) | des devices wgpu ouverts en parallèle bloquent environ 3 % des exécutions, défaut antérieur à l'étape 6 et de cause non identifiée ; un réglage unique évite qu'un futur test GPU l'oublie |
 | **`Mailbox`, sinon `Fifo`, jamais `Immediate`** (§8.3) | `Immediate` déchire l'image sur un projecteur ; `Fifo` existe partout |
+| **Sortie plein écran : fenêtre sans bordure** (§8.4) | le mode vidéo ne change pas : pas de noir à l'ouverture, et l'interface reste utilisable sur l'autre écran ; le plein écran exclusif ferait risquer une perte à chaque changement de fenêtre, sur scène |
+| **Sortie ouverte depuis un menu, jamais au lancement** (§8.4) | on choisit l'écran en direct, et un branchement imprévu n'envoie pas l'image au mauvais endroit |
+| **Résolution de sortie fixe en 1080p pour la première version** (§8.4) | suivre l'écran réallouerait toutes les textures à l'ouverture, avec une saccade ; `Preview` sait déjà adapter l'image sans la déformer |
+| **Fenêtre normale sur l'écran de l'interface** (§8.4) | un plein écran y cacherait le menu qui le ferme ; avec un seul écran, on serait enfermé |
+| **Aucune touche ne ferme la sortie, `CloseRequested` ignoré en plein écran** (§8.4) | sur scène, une touche accidentelle couperait l'image |
+| **Sortie créée non active, plein écran posé ensuite** (§8.4) | winit active de force une fenêtre créée en plein écran : elle volerait le clavier à l'interface en plein jeu |
+| **Écran perdu : la sortie se ferme, le moteur continue** (§8.4) | un câble débranché ne doit couper ni l'interface ni le monitor ; laisser la fenêtre glisser sur l'écran restant pourrait recouvrir l'interface |
+| **`OutputRequest` distinct de `Command`** (§8.4) | une fenêtre n'est pas la grille : `Composition` n'a rien à en savoir, et `Command` ne concerne que ce qui s'applique entre deux frames du moteur |
+| **Seules les sorties GPU se retirent** (§8.4) | retirer une sortie CPU suppose d'arrêter son thread : l'enregistreur de l'étape 10 dira comment terminer un fichier proprement |
 | **Sorties CPU refusées en `Realtime` avant l'étape 10** (§8.0) | sans l'anneau, seule la relecture synchrone existe : l'accepter en live effondrerait le framerate en silence ; un refus à l'ajout est clair |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
@@ -2486,7 +2570,7 @@ appartient (`UiState`).
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Menu : Affichage (masquer un panneau)                    │
+│ Menu : Affichage (masquer un panneau), Sortie (§8.4)     │
 ├──────────────────────────────────────────────────────────┤
 │ Grille : pistes × colonnes                               │
 ├──────────────────────────────────────────────────────────┤
