@@ -283,19 +283,29 @@ frame. C'est exactement le rôle de `PositionSignal` (§3bis.3) — réutilisé 
 que réinventé, et l'état de progression vit dans le `NodeState` du `Graph` du clip,
 pas dans `ClipTransition` lui-même, qui reste sans champ mutable (§2.3).
 
-**Portée livrée à l'étape 7 : `Cut` seul.** `Fade` viendra après l'interface, `Wipe`
-après la première version : mélanger deux clips exige qu'une piste en dessine deux à la
-fois pendant la transition. `Fade`/`Wipe` sont dans l'énum dès
-maintenant pour fixer la forme du contrat, mais leur logique de rendu (mélanger deux
-clips pendant la transition) dépend du compositeur de couches qui n'existe qu'à partir
-de l'étape 5. Les construire avant aurait anticipé une dépendance que `composition` ne
-doit pas avoir (§10 : testable sans GPU). **Ce n'est pas un report silencieux** : le
-type existe et `composition` n'a **aucun** code de rendu — ni pour `Cut`, ni pour
-`Fade`/`Wipe`. C'est le compositeur qui lira la transition du clip et mélangera les
-deux couches ; tant qu'il n'existe pas, rien ne peut produire une valeur fausse qui
-passerait un test par accident. (Une version antérieure de ce paragraphe annonçait un
-`todo!()` : il n'a jamais été écrit, et il aurait été une panique en évaluation,
-interdite par le §18.1.)
+**Le rendu des transitions, avec la première version.** `Layer` retient, le temps d'une
+transition, le clip sortant et sa progression. C'est la transition du clip **qui entre** qui
+s'applique, et elle se déclenche quand un autre clip jouait déjà : redéclencher le même clip le
+fait repartir sans transition, et vider une piste reste une coupure. Déclencher pendant une
+transition en commence une nouvelle depuis le clip qui entrait.
+
+**Une durée en battements.** `phase.speed` vaut `1 / battements` : une transition suit le tempo
+comme tout le reste, sur l'horloge de la régie. La vitesse d'un clip ne la change pas : à zéro,
+elle ne doit pas rester bloquée à mi-chemin.
+
+**La progression n'est pas dans un graphe.** Elle vit dans `Layer`, comme le clip actif. Un nœud
+ajouté puis retiré à chaque transition finirait dans un fichier enregistré au mauvais moment. Elle
+ne se sauvegarde pas : annuler ou ouvrir un fichier la termine net.
+
+**Mélanger avant le compositeur.** Pendant une transition, les deux clips sont évalués, et la piste
+en dessine deux. `TransitionMix` les mélange en une seule texture, qui rejoint le compositeur avec le
+mode et l'opacité de la piste. Deux couches d'opacités croisées laisseraient voir un creux à
+mi-fondu : à 50 %, deux images opaques ne couvrent que 75 %. Un `Fade` mélange linéairement, en
+prémultiplié (§21). Un `Wipe` découvre l'image selon sa direction, avec un bord adouci de 2 % pour
+ne pas crénelier. `WipeDirection::Left` signifie que le clip entrant avance vers la gauche.
+
+**Le coût.** Deux renderers de plus sur une piste au premier fondu, gardés ensuite : environ 80 Mo en
+1080p pour une forme (§13), rien sur une piste qui n'en fait jamais.
 
 ### 3bis.3 Transport et tempo
 
@@ -1681,6 +1691,8 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
 | **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **Une transition mélange deux clips avant le compositeur** (§3bis.2) | deux couches d'opacités croisées creusent l'image à mi-fondu ; une texture mélangée rejoint le compositeur comme un seul clip, avec le mode de la piste |
+| **La durée d'une transition est en battements, hors de la vitesse du clip** (§3bis.2) | elle suit le tempo, et un clip à vitesse nulle ne doit pas la bloquer |
 | **Annuler par images de la grille, pas par commandes inverses** (§23.11) | une image coûte 1 ms et couvre d'office toute nouvelle commande ; un inverse faux corromprait la grille sans le dire |
 | **Une grille restaurée reprend ce qui joue** (§23.11) | sans cela, annuler ferait repartir les LFO et les compteurs de trig, et l'image sauterait en plein jeu |
 | **Un pas d'annulation est un geste** (§23.11) | un potentiomètre émet une commande par frame : il faudrait des dizaines de Ctrl+Z pour un seul geste |
