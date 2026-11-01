@@ -108,6 +108,23 @@ fn chaque_coup_passe_dans_la_feature_de_transitoires() {
     assert!((14..=34).contains(&coups), "{coups} coups");
 }
 
+/// La phase d'une boucle dont on connaît les temps : le premier tombe à zéro.
+#[test]
+fn une_boucle_de_batterie_donne_la_place_de_son_temps() {
+    for sr in [44_100.0, 48_000.0] {
+        for bpm in [100.0, 120.0, 128.0, 140.0] {
+            let secondes = 13.37;
+            let f = analyse(&boucle(bpm, sr, secondes), sr);
+            let battement = 60.0 / bpm;
+            let vraie = (secondes % battement) / battement;
+            let ecart = (f.beat_phase - vraie + 0.5).rem_euclid(1.0) - 0.5;
+            let ms = ecart * battement * 1000.0;
+            assert!(ms.abs() < 15.0, "{sr} Hz, {bpm} BPM : {ms:.1} ms");
+            assert!(f.beat_confidence > 0.3, "{}", f.beat_confidence);
+        }
+    }
+}
+
 /// Reproductible : la même entrée donne les mêmes valeurs, au bit près (§20.3).
 #[test]
 fn la_meme_entree_donne_le_meme_tempo() {

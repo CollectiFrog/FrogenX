@@ -20,12 +20,13 @@ pub mod theme;
 pub mod widgets;
 
 use egui::{
-    Align, Button, CornerRadius, Label, Layout, Margin, Pos2, Rect, Response, RichText, Sense,
-    Stroke, Ui, UiBuilder,
+    Align, Button, CornerRadius, Label, Layout, Margin, Pos2, Rect, Response, RichText, Role,
+    Sense, Stroke, Ui, UiBuilder, WidgetInfo,
 };
 use frogenx_composition::IdMap;
 use frogenx_composition::{
-    Clip, ClipId, ColumnId, Command, Composition, LayerId, ParamSlot, PlayMode, Transport, TrigId,
+    Clip, ClipId, ColumnId, Command, Composition, LayerId, ParamSlot, PlayMode, Quantize,
+    Transport, TrigId,
 };
 use frogenx_core::{Spectrum, SPECTRUM_BANDS};
 use frogenx_library::{presets, Family, PresetId};
@@ -40,6 +41,8 @@ const CELL_SIZE: egui::Vec2 = egui::vec2(110.0, 34.0);
 const PROGRESS_HEIGHT: f32 = 3.0;
 /// La largeur laissée au nom du fichier, au milieu de l'en-tête.
 const TITLE_WIDTH: f32 = 420.0;
+/// L'écart gardé entre le tempo et le nom du fichier.
+const TITLE_GAP: f32 = 16.0;
 /// Les proportions de la scène quand aucune image ne les donne.
 const STAGE_ASPECT: f32 = 16.0 / 9.0;
 /// La taille du texte d'état, à côté du nom du fichier.
@@ -294,8 +297,8 @@ pub struct FrameView<'a> {
     pub audio_status: &'a str,
     pub output: OutputView<'a>,
     pub file: FileView<'a>,
-    /// L'instant de la dernière frame, en secondes.
-    pub time: f64,
+    /// La position de la grille des temps, en battements (§3bis.3).
+    pub beat: f64,
     /// Le tempo détecté dans le son, `0` s'il n'y en a pas (§7.1).
     pub detected_bpm: f32,
     pub history: HistoryView,
@@ -353,12 +356,15 @@ pub fn draw(
         .show(ui, |ui| stage(ui, state, view, commands));
 }
 
-/// La pulsation du tempo : 1 sur le temps, puis elle retombe. Elle dit le tempo,
-/// pas la place dans la mesure : rien ne recale encore la phase (§3bis.3).
-pub fn beat_pulse(time: f64, bpm: f32) -> f32 {
-    let battements = time * bpm.max(0.0) as f64 / 60.0;
-    let phase = battements - battements.floor();
-    (1.0 - phase as f32).powi(3)
+/// Le centre du nom du fichier : celui de la fenêtre, sauf si le tempo, à gauche,
+/// passerait dessous.
+fn title_center(window_center: f32, width: f32, left_limit: f32) -> f32 {
+    window_center.max(left_limit + width * 0.5)
+}
+
+/// La pulsation du tempo : 1 sur le temps de la grille, puis elle retombe.
+pub fn beat_pulse(beat: f64) -> f32 {
+    (1.0 - beat.rem_euclid(1.0) as f32).powi(3)
 }
 
 /// Le nom, comme le haut de Pro-Q : d'un seul trait, l'accent à la fin.
@@ -393,6 +399,13 @@ fn tempo(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
     if ui.button("Tap").clicked() {
         commands.push(Command::TapTempo);
     }
+    if ui
+        .button("Temps 1")
+        .on_hover_text("Cet instant est le premier temps de la mesure (touche R).")
+        .clicked()
+    {
+        commands.push(Command::ResyncBeat);
+    }
     let suit = view.composition.tempo_follow;
     if ui.selectable_label(suit, "Suivre").clicked() {
         commands.push(Command::SetTempoFollow(!suit));
@@ -403,7 +416,7 @@ fn tempo(ui: &mut Ui, view: &FrameView<'_>, commands: &mut Vec<Command>) {
             .size(11.5),
     );
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-    let pulsation = beat_pulse(view.time, view.bpm);
+    let pulsation = beat_pulse(view.beat);
     ui.painter().circle_filled(rect.center(), 4.0, theme::IDLE);
     ui.painter()
         .circle_filled(rect.center(), 4.0, theme::ACCENT.gamma_multiply(pulsation));
@@ -454,9 +467,14 @@ fn header(
             let petit = egui::FontId::proportional(STATUS_SIZE);
             total += ui.spacing().item_spacing.x + largeur(view.file.status, petit);
         }
+        let total = total.clamp(1.0, TITLE_WIDTH);
+        let limite = ui.cursor().left() + TITLE_GAP;
         let centre = Rect::from_center_size(
-            Pos2::new(entete.center().x, ui.max_rect().center().y),
-            egui::vec2(total.clamp(1.0, TITLE_WIDTH), ui.max_rect().height()),
+            Pos2::new(
+                title_center(entete.center().x, total, limite),
+                ui.max_rect().center().y,
+            ),
+            egui::vec2(total, ui.max_rect().height()),
         );
         let ligne = Layout::left_to_right(Align::Center);
         ui.scope_builder(UiBuilder::new().max_rect(centre).layout(ligne), |ui| {
@@ -674,7 +692,7 @@ pub fn loop_progress(clip: &Clip) -> Option<f32> {
 
 /// Une cellule : l'accent n'y désigne que le clip actif (§23.1), et son bas
 /// montre où en est sa boucle, comme le spectre montre le son.
-fn cell(ui: &mut Ui, name: &str, active: bool, progress: Option<f32>) -> Response {
+fn cell(ui: &mut Ui, name: &str, active: bool, waiting: bool, progress: Option<f32>) -> Response {
     let couleur = if active {
         theme::ON_ACCENT
     } else {
@@ -695,6 +713,12 @@ fn cell(ui: &mut Ui, name: &str, active: bool, progress: Option<f32>) -> Respons
     };
     ui.painter()
         .set(fond, egui::Shape::rect_filled(rect, rayon, surface));
+    if waiting {
+        // Un contour seul : la case joue encore ce qu'elle jouait.
+        let trait_ = Stroke::new(1.5, theme::ACCENT);
+        ui.painter()
+            .rect_stroke(rect, 6.0, trait_, egui::StrokeKind::Inside);
+    }
     if active {
         // La lumière d'un pad allumé, sans bouger ses voisins.
         ui.painter().rect_stroke(
@@ -762,7 +786,7 @@ fn grid(
     c.layers_in_order(&mut pistes);
     egui::ScrollArea::both().show(ui, |ui| {
         egui::Grid::new("grille_clips").show(ui, |ui| {
-            ui.label("");
+            quantize_menu(ui, c.quantize, commands);
             for (i, column) in c.columns().iter().enumerate() {
                 let titre = RichText::new(format!("Colonne {}", i + 1))
                     .size(11.5)
@@ -772,7 +796,7 @@ fn grid(
                     .min_size(egui::vec2(CELL_SIZE.x, 0.0));
                 let entete = ui.add(bouton);
                 if entete.clicked() {
-                    commands.push(Command::TriggerColumn { column: *column });
+                    commands.push(Command::LaunchColumn { column: *column });
                 }
                 let retire = Command::RemoveColumn { column: *column };
                 remove_menu(&entete, "Retirer la colonne", retire, commands);
@@ -798,9 +822,10 @@ fn grid(
                         Some((id, clip)) => {
                             let actif = piste.active_clip() == Some(id);
                             let boucle = loop_progress(clip).filter(|_| actif);
-                            let reponse = cell(ui, &clip.name, actif, boucle);
+                            let attend = c.is_waiting(*layer, id);
+                            let reponse = cell(ui, &clip.name, actif, attend, boucle);
                             if reponse.clicked() {
-                                commands.push(Command::TriggerClip {
+                                commands.push(Command::LaunchClip {
                                     layer: *layer,
                                     clip: id,
                                 });
@@ -831,6 +856,23 @@ fn grid(
             ui.end_row();
         });
     });
+}
+
+/// Ce qu'un lancement attend, dans le coin de la grille : c'est elle qu'il règle.
+fn quantize_menu(ui: &mut Ui, current: Quantize, commands: &mut Vec<Command>) {
+    let liste = egui::ComboBox::from_id_salt("lancement")
+        .width(60.0)
+        .selected_text(RichText::new(current.label()).size(11.5))
+        .show_ui(ui, |ui| {
+            for q in Quantize::ALL {
+                if ui.selectable_label(q == current, q.label()).clicked() && q != current {
+                    commands.push(Command::SetQuantize(q));
+                }
+            }
+        });
+    liste
+        .response
+        .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, "Lancement"));
 }
 
 /// Le catalogue, par famille. Une entrée se glisse sur une case.
@@ -1057,7 +1099,7 @@ mod tests {
                         fps: 60.0,
                         outputs: "Monitor : actif",
                         monitor: None,
-                        time: 0.0,
+                        beat: 0.0,
                         spectrum: &spectre,
                         audio_status: "Micro — 48000 Hz",
                         output: OutputView {
@@ -1109,7 +1151,7 @@ mod tests {
 
         assert_eq!(
             h.state().commands,
-            vec![Command::TriggerClip {
+            vec![Command::LaunchClip {
                 layer: g.piste,
                 clip: g.clips[1]
             }]
@@ -1125,7 +1167,7 @@ mod tests {
         h.run();
         assert_eq!(
             h.state().commands,
-            vec![Command::TriggerColumn {
+            vec![Command::LaunchColumn {
                 column: g.colonnes[0]
             }]
         );
@@ -2504,6 +2546,36 @@ mod tests {
     }
 
     #[test]
+    fn le_nom_du_fichier_reste_centre_tant_que_le_tempo_le_laisse() {
+        assert_eq!(title_center(700.0, 200.0, 500.0), 700.0);
+        assert_eq!(title_center(700.0, 400.0, 560.0), 760.0);
+    }
+
+    #[test]
+    fn temps_1_recale_la_grille() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Temps 1").click();
+        h.run();
+        assert_eq!(h.state().commands, vec![Command::ResyncBeat]);
+    }
+
+    #[test]
+    fn la_quantification_se_choisit_dans_le_coin_de_la_grille() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Lancement")
+            .click();
+        h.run();
+        h.get_by_label("4 temps").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetQuantize(Quantize::Bar)]
+        );
+    }
+
+    #[test]
     fn le_spectrogramme_s_ouvre_sous_le_spectre_sans_commande() {
         let g = grille();
         let mut h = harness(&g.composition);
@@ -2715,16 +2787,19 @@ mod tests {
     #[test]
     fn la_pulsation_tombe_sur_le_temps_et_retombe() {
         // À 120 BPM, un temps toutes les 0.5 s.
-        assert_eq!(beat_pulse(0.0, 120.0), 1.0);
-        assert_eq!(beat_pulse(1.0, 120.0), 1.0);
-        assert!(beat_pulse(0.25, 120.0) < 0.2);
-        assert!(beat_pulse(0.05, 120.0) > beat_pulse(0.1, 120.0));
+        assert_eq!(beat_pulse(0.0), 1.0);
+        assert_eq!(beat_pulse(2.0), 1.0);
+        assert!(beat_pulse(0.5) < 0.2);
+        assert!(beat_pulse(0.1) > beat_pulse(0.2));
     }
 
     #[test]
     fn la_pulsation_ne_panique_pas_sans_tempo() {
-        assert!(beat_pulse(3.0, 0.0).is_finite());
-        assert!(beat_pulse(3.0, -5.0).is_finite());
+        assert!(
+            beat_pulse(-0.25).is_finite(),
+            "juste avant le premier temps"
+        );
+        assert!(beat_pulse(-0.25) < 0.1);
     }
 
     #[test]
@@ -2810,7 +2885,7 @@ mod tests {
     }
 
     #[test]
-    fn le_nom_du_fichier_est_au_milieu_de_la_fenetre() {
+    fn le_nom_du_fichier_ne_passe_jamais_sous_le_tempo() {
         let g = grille();
         let h = harness(&g.composition);
         // Le nom et l'état du fichier, ensemble.
@@ -2819,8 +2894,9 @@ mod tests {
             .get_by_label("Enregistré : concert.frogenx")
             .rect()
             .right();
-        let milieu = (debut + fin) * 0.5;
-        assert!((milieu - 700.0).abs() < 6.0, "got {milieu}");
+        let tempo = h.get_by_label("son : 127.5").rect().right();
+        assert!(debut > tempo, "{debut} contre {tempo}");
+        assert!((debut + fin) * 0.5 >= 694.0, "au moins au milieu");
     }
 
     #[test]

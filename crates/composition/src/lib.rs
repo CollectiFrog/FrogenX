@@ -34,6 +34,7 @@
 //! - L'effet de `PlayMode` : rien ne le lit encore (§3bis.3).
 
 pub mod analysis;
+pub mod beat;
 pub mod clip;
 pub mod command;
 pub mod continuity;
@@ -47,6 +48,7 @@ pub mod trig;
 pub mod wiring;
 
 pub use analysis::AudioAnalysis;
+pub use beat::{BeatGrid, Quantize};
 pub use clip::{
     sanitize_speed, Clip, ClipParam, ClipSource, ClipTransition, ParamGroup, ParamSlot,
     TransitionKind, WipeDirection, DEFAULT_TRANSITION_BEATS, MAX_CLIP_SPEED,

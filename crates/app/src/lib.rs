@@ -589,12 +589,15 @@ impl Engine {
         self.composition.graph_mut().set_audio(self.audio.clone());
         self.composition.graph_mut().eval_frame(t, dt);
         self.bpm = self.composition.bpm();
+        // Le tempo que voient les clips : poussé tant qu'ils rejoignent le temps,
+        // et avant eux, pour qu'un clip quantifié parte dans sa frame (§3bis.3).
+        let tempo_joue = self.composition.advance_beat(dt, self.bpm);
         // Une commande ne s'applique qu'entre deux frames (§23) : un trig agit
         // donc à la frame suivante, une de retard sur le spectre.
         self.composition.trig_commands(&mut self.commands);
         self.composition.trig_values(&mut self.trigs);
         self.composition.layers_in_order(&mut self.order);
-        self.composition.advance_transitions(dt, self.bpm);
+        self.composition.advance_transitions(dt, tempo_joue);
         for layer in &self.order {
             let actif = self.composition.layer(*layer).and_then(|l| l.active_clip());
             // Un clip qui sort continue de jouer jusqu'à la fin de la transition.
@@ -616,7 +619,7 @@ impl Engine {
                 };
                 if let Some(clip) = self.composition.clip_mut(id) {
                     let graph = clip.graph_mut();
-                    graph.set_bpm(self.bpm);
+                    graph.set_bpm(tempo_joue);
                     graph.set_audio(self.audio.clone());
                     graph.set_trigs(&self.trigs);
                     graph.eval_frame(t, sens * dt * vitesse as f64);
@@ -626,7 +629,7 @@ impl Engine {
         self.composition.apply_play_modes();
         self.sync_tracks();
 
-        let ctx = Ctx::new(dt, self.clock.frame(), &self.audio).with_bpm(self.bpm);
+        let ctx = Ctx::new(dt, self.clock.frame(), &self.audio).with_bpm(tempo_joue);
         let composition = &self.composition;
         let mut couches: Vec<(ClipLayer, &Graph)> = Vec::with_capacity(self.tracks.len());
         for track in &mut self.tracks {

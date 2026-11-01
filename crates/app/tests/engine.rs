@@ -6,7 +6,7 @@
 use frogenx_app::Engine;
 use frogenx_composition::{
     Clip, ClipId, Command, Composition, GraphScope, LayerId, NodeKind, ParamSlot, ParamTarget,
-    PlayMode, TransitionKind, Transport, TrigSlot, TrigTarget, WipeDirection,
+    PlayMode, Quantize, TransitionKind, Transport, TrigSlot, TrigTarget, WipeDirection,
 };
 use frogenx_core::{
     AnalysisMethod, AnalysisSettings, AudioFeatures, Clock, Constant, Ctx, FeatureKind, FreqScale,
@@ -1197,6 +1197,60 @@ fn frames(moteur: &mut Engine, n: usize) {
     for _ in 0..n {
         moteur.frame(0.0);
     }
+}
+
+#[test]
+fn un_clip_quantifie_part_dans_la_frame_de_son_temps() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, _) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    m.push(Command::SetQuantize(Quantize::Beat));
+    frames(&mut m, 5);
+    m.push(Command::LaunchClip {
+        layer: piste,
+        clip: rouge,
+    });
+    m.frame(0.0);
+    let actif = |m: &Engine| m.composition().layer(piste).unwrap().active_clip();
+    let mut attente = 0;
+    while actif(&m).is_none() {
+        assert!(m.composition().is_waiting(piste, rouge));
+        m.frame(0.0);
+        attente += 1;
+        assert!(attente < 60, "le temps n'arrive pas");
+    }
+    let dans_le_temps = m.composition().beat().played().rem_euclid(1.0);
+    assert!(dans_le_temps < 0.05, "{dans_le_temps}");
+    m.finish();
+}
+
+#[test]
+fn un_recalage_rejoint_le_temps_sans_toucher_au_tempo_ni_au_fichier() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    frames(&mut m, 15);
+    m.push(Command::ResyncBeat);
+    frames(&mut m, 1);
+    assert!(m.composition().beat().error().abs() > 0.2);
+    frames(&mut m, 180);
+    assert!(m.composition().beat().error().abs() < 0.01);
+    assert_eq!(m.bpm(), 120.0);
+    assert!(!m.is_dirty());
+    m.finish();
+}
+
+#[test]
+fn annuler_garde_le_temps() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, _, _) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    m.push(Command::AddColumn);
+    frames(&mut m, 20);
+    let avant = m.composition().beat().played();
+    m.undo().expect("un pas à annuler");
+    assert_eq!(m.composition().beat().played(), avant);
+    m.finish();
 }
 
 /// Un clip rouge joue, un bleu lui succède par `kind`, en 2 temps à 120 BPM : une

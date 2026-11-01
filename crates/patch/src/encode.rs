@@ -344,6 +344,7 @@ pub(crate) fn patch(c: &Composition) -> Result<FilePatch, PatchError> {
         },
         tempo: param(c.tempo.tempo, &positions)?,
         tempo_follow: c.tempo_follow,
+        quantize: c.quantize.word().to_string(),
         analysis: FileAnalysis {
             method: c.analysis.method.word().to_string(),
             freq_scale: c.analysis.freq_scale.word().to_string(),

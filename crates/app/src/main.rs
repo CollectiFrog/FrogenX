@@ -118,6 +118,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
 enum Action {
     Column(usize),
     Tap,
+    FirstBeat,
 }
 
 fn key_action(key: KeyCode) -> Option<Action> {
@@ -131,6 +132,7 @@ fn key_action(key: KeyCode) -> Option<Action> {
         KeyCode::Digit7 | KeyCode::Numpad7 => Some(Action::Column(6)),
         KeyCode::Digit8 | KeyCode::Numpad8 => Some(Action::Column(7)),
         KeyCode::Space => Some(Action::Tap),
+        KeyCode::KeyR => Some(Action::FirstBeat),
         _ => None,
     }
 }
@@ -393,10 +395,11 @@ impl Running {
         match key_action(key) {
             Some(Action::Column(i)) => {
                 if let Some(column) = self.engine.composition().columns().get(i).copied() {
-                    self.engine.push(Command::TriggerColumn { column });
+                    self.engine.push(Command::LaunchColumn { column });
                 }
             }
             Some(Action::Tap) => self.engine.push(Command::TapTempo),
+            Some(Action::FirstBeat) => self.engine.push(Command::ResyncBeat),
             None => {}
         }
     }
@@ -676,6 +679,7 @@ mod tests {
         assert_eq!(key_action(KeyCode::Numpad5), Some(Action::Column(4)));
         assert_eq!(key_action(KeyCode::Digit9), None);
         assert_eq!(key_action(KeyCode::Space), Some(Action::Tap));
+        assert_eq!(key_action(KeyCode::KeyR), Some(Action::FirstBeat));
         assert_eq!(key_action(KeyCode::KeyA), None);
     }
 

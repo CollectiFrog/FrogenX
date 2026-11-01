@@ -496,7 +496,19 @@ la grille, le clavier, plus tard le MIDI. `TriggerClip` et `TriggerColumn` reste
 un trig tient son rythme du son, et le retarder le décalerait. Le lancement a lieu dans la frame où
 `played` franchit la limite, avant l'évaluation des clips : il a au plus une frame de retard.
 
-**Non couvert.** `Once` termine en coupure : la transition du clip suivant ne s'applique pas à une
+**Ce qui est vérifié, et comment.** Sans GPU : le rattrapage sans saut et sans dépasser 12 %, le
+plus court chemin, les trois recalages, la main qui garde la phase, l'attente, le dernier geste,
+une colonne, une case retirée pendant l'attente, le trig immédiat. Dans le moteur : un clip qui
+part dans la frame de son temps, le tempo et le fichier intacts après un recalage, une annulation
+qui garde le temps. La phase traverse la vraie analyse sur des boucles de synthèse. Une capture
+de la vraie fenêtre montre le bouton et le menu en place. **Pas encore essayés :** la phase sur de
+la vraie musique, le glissement regardé à l'écran, le contour d'une case qui attend, et la
+touche `R` au vrai clavier.
+
+**Non couvert.** Le retard de la carte son n'est pas compensé : le temps détecté arrive tard de
+sa latence. Un trig ou une transition ne sont pas décalés par la quantification.
+
+**Non couvert non plus.** `Once` termine en coupure : la transition du clip suivant ne s'applique pas à une
 piste qui se vide. La durée ne se module pas depuis l'interface, et une boucle ne fait pas repartir
 le clip de zéro : c'est sa barre qui repart.
 
@@ -993,11 +1005,17 @@ saut de tempo que confirmé deux fois de suite, et rend `0` sans signal rythmiqu
 8 derniers battements sur la période du tempo : la place où la force s'accumule le plus est le
 temps, et le contraste de ce repli donne `beat_confidence`. Entre deux réestimations, la phase
 avance avec les analyses : `beat_phase`, `0` sur le temps, ne saute qu'une fois par seconde, et
-de peu. Un retard constant, mesuré sur des boucles de synthèse, corrige le décalage de la
-transitoire dans la fenêtre d'analyse. La latence de la carte son n'est pas corrigée. Rendre
-`0` à `beat_confidence` veut dire : aucune phase, la grille garde la sienne. La force la plus
-haute gagne : une grosse caisse l'emporte sur le charleston du contretemps, mais sans grosse
-caisse le temps peut tomber sur le contretemps. `Temps 1` est là pour ça.
+de peu. `0` à `beat_confidence` veut dire : aucune phase, la grille garde la sienne.
+
+**Le temps se lit dans les graves.** Dans la force totale, un charleston à contretemps pèse plus
+lourd qu'une grosse caisse : le premier essai tombait une demi-période à côté. Le repli se fait
+donc sur la force sous 250 Hz, et ne revient à la force totale que si les graves n'ont pas de
+place franche. Sans grosse caisse, le temps peut donc tomber sur le contretemps : `Temps 1` est
+là pour ça.
+
+**Le retard.** La force d'un coup arrive 17 ms après lui en moyenne, parce que la transitoire
+doit entrer dans la fenêtre d'analyse : `ONSET_LAG` rend 1,5 analyse. Il reste moins de 15 ms
+d'écart sur des boucles de 100 à 140 BPM, à 44,1 et 48 kHz. La latence de la carte son n'y est pas.
 
 **Ce qui distingue un rythme d'un son tenu : le contraste, pas le niveau.** Une note tenue
 produit une force minuscule, mais régulière, qui donnait un faux tempo avec une fiabilité
@@ -1819,6 +1837,7 @@ qui les livre (skill `doc-sync`).
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
+| Recalage du tempo | temps posé au geste ou par le son, rattrapé sans saut, lancement quantifié au temps ou à la mesure (§3bis.3, §7.1) |
 | Annuler et rétablir | 100 pas, un par geste, sans faire sauter l'image, Ctrl+Z et menu `Édition` (§23.11) |
 | Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
 
@@ -1840,7 +1859,7 @@ qui les livre (skill `doc-sync`).
 
 | Point | État |
 |---|---|
-| BPM, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
+| BPM, phase, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
 | Menus `Sortie`, `Fichier` et `Édition`, clic droit des potentiomètres, fils de l'éditeur, Ctrl+Z, à la vraie souris et au vrai clavier | validés par clics simulés seulement |
 | Un flux entre deux machines, sur un vrai réseau, et sa latence jusqu'à l'écran | essayé en boucle locale seulement (§8.5) |
 | Projecteur, câble débranché, écran à une autre fréquence | jamais essayés (§8.4) |
@@ -2585,7 +2604,8 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
 Le format réel commence à la version 1. La version 2 ajoute `tempo_follow` (§7.1) : un
 fichier v1 se migre en le mettant à `false`, ce qu'il faisait déjà sans le dire. La version
 3 ajoute les clips de feedback (§6.1) : `generator` et `style` deviennent facultatifs, et un
-fichier v2 n'a rien à changer.
+fichier v2 n'a rien à changer. La version 4 donne un canal à chaque trig (§3bis.6). La version 5
+ajoute `quantize` (§3bis.3) : un fichier v4 lançait au clic, il reçoit `off`.
 
 Migrations **en chaîne**, une fonction par saut de version. Un patch v1 traverse
 `1→2→3` — on n'écrit jamais de migration directe `1→3`, qui doublerait le travail à
@@ -3513,13 +3533,14 @@ qu'une interface se lit mieux quand tout s'y manipule de la même façon.
 **L'en-tête** remplace la barre de menu et la barre d'outils : une seule ligne, comme le
 haut de Pro-Q. À gauche le nom, les menus et le tempo, au plus près parce que c'est ce
 qu'on touche le plus sur scène ; au milieu le fichier, centré sur la fenêtre et non sur la
-place laissée par les menus ; à droite l'état de la machine. Le nom du fichier, ses refus,
+place laissée par les menus, sauf quand le tempo passerait dessous (`title_center`) ; à droite l'état de la machine. Le nom du fichier, ses refus,
 et l'état de la sortie y restent toujours lisibles (§8.4, §23.8). La pastille du tempo
 pulse à chaque temps de la grille, celui que suivent les clips (§3bis.3).
 
 **Le tempo** a trois gestes de plus : `Temps 1`, `Suivre`, et à côté ce que le son en dit,
-`son : 128.0` ou `son : —` (§7.1). `Lancement`, sous la grille, choisit la quantification : elle
-agit sur la grille, et l'en-tête n'a plus la place à côté du fichier.
+`son : 128.0` ou `son : —` (§7.1). La quantification se choisit dans le coin vide de la grille,
+au-dessus du nom des pistes : c'est elle qu'elle règle, et l'en-tête n'a plus la place à côté du
+fichier.
 
 **La scène.** L'image est calée à gauche, entière. **Le panneau du clip ne la couvre pas :
 c'est la seule entorse au modèle du spectre, et elle est voulue.** Un spectre se lit encore

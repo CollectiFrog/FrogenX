@@ -13,6 +13,8 @@ pub struct FilePatch {
     pub tempo: FileParam,
     /// Le tempo suit le BPM détecté (§7.1).
     pub tempo_follow: bool,
+    /// Ce qu'un lancement attend (§3bis.3).
+    pub quantize: String,
     pub analysis: FileAnalysis,
     pub columns: usize,
     pub active_deck: Option<usize>,

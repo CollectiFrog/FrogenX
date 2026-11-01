@@ -38,6 +38,9 @@ const ONSET_FLOOR: f32 = 0.02;
 const ONSET_GAP: f32 = 0.05;
 /// La retombée de `onset`, en secondes.
 const ONSET_RELEASE: f32 = 0.12;
+/// De combien d'analyses la force d'un coup arrive après lui : mesuré sur des
+/// boucles de synthèse (`tests/tempo.rs`). La latence de la carte son n'y est pas.
+const ONSET_LAG: f32 = 1.5;
 
 fn hann(length: usize) -> Vec<f32> {
     (0..length)
@@ -183,6 +186,8 @@ impl FeatureAnalyzer {
         out.chroma = self.chroma;
         out.bpm = self.tempo.bpm();
         out.bpm_confidence = self.tempo.confidence();
+        out.beat_phase = self.tempo.beat_phase(ONSET_LAG);
+        out.beat_confidence = self.tempo.beat_confidence();
     }
 
     fn analyze(&mut self) {
@@ -219,9 +224,9 @@ impl FeatureAnalyzer {
             }
         }
 
-        let force = self.flux();
+        let (force, graves) = self.flux();
         self.track_onset(force);
-        self.tempo.push(force);
+        self.tempo.push_with_bass(force, graves);
     }
 
     fn mean_frequency(&self) -> f32 {
@@ -240,14 +245,28 @@ impl FeatureAnalyzer {
 
     /// La montée du spectre, case par case : ce qu'un coup a de propre, et ce
     /// qu'une note tenue n'a pas.
-    fn flux(&mut self) -> f32 {
-        let mut somme = 0.0;
-        for (avant, m) in self.previous.iter_mut().zip(&self.short.magnitudes) {
+    /// La force de la transitoire, sur tout le spectre puis sur les graves seuls.
+    fn flux(&mut self) -> (f32, f32) {
+        let derniere_grave = (BASS_TOP / self.short.bin_hz) as usize;
+        let (mut somme, mut graves) = (0.0, 0.0);
+        for (i, (avant, m)) in self
+            .previous
+            .iter_mut()
+            .zip(&self.short.magnitudes)
+            .enumerate()
+        {
             let comprime = (1.0 + FLUX_COMPRESSION * m).ln();
-            somme += (comprime - *avant).max(0.0);
+            let montee = (comprime - *avant).max(0.0);
+            somme += montee;
+            if i <= derniere_grave {
+                graves += montee;
+            }
             *avant = comprime;
         }
-        somme / self.previous.len() as f32
+        (
+            somme / self.previous.len() as f32,
+            graves / (derniere_grave + 1) as f32,
+        )
     }
 
     fn track_onset(&mut self, force: f32) {

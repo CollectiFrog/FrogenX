@@ -4,7 +4,7 @@
 //! Si un test échoue ici, le format a changé : il faut une nouvelle version, sa
 //! migration et sa fixture, pas une fixture réécrite.
 
-use frogenx_composition::{ClipSource, Composition, TrigTarget};
+use frogenx_composition::{ClipSource, Composition, Quantize, TrigTarget};
 use frogenx_core::FeatureKind;
 use frogenx_patch::{from_json, to_json, CURRENT_VERSION};
 use serde_json::Value;
@@ -13,6 +13,7 @@ const V1: &str = include_str!("fixtures/patch_v1.json");
 const V2: &str = include_str!("fixtures/patch_v2.json");
 const V3: &str = include_str!("fixtures/patch_v3.json");
 const V4: &str = include_str!("fixtures/patch_v4.json");
+const V5: &str = include_str!("fixtures/patch_v5.json");
 
 fn pistes(c: &Composition) -> Vec<String> {
     let mut ids = Vec::new();
@@ -90,11 +91,27 @@ fn la_fixture_v4_garde_le_canal_et_le_trig_d_un_clip() {
     assert_eq!(clip.params()[0].params[0].trig, Some(0));
 }
 
-/// Tant que `CURRENT_VERSION` vaut 4, relire puis réécrire la fixture rend le
+#[test]
+fn un_fichier_v4_lance_au_clic() {
+    assert_eq!(from_json(V4).unwrap().quantize, Quantize::Off);
+}
+
+#[test]
+fn la_fixture_v5_garde_sa_quantification() {
+    assert_eq!(from_json(V5).unwrap().quantize, Quantize::Bar);
+}
+
+#[test]
+fn une_quantification_inconnue_est_refusee() {
+    let texte = V5.replace("\"quantize\": \"bar\"", "\"quantize\": \"demi\"");
+    assert!(from_json(&texte).is_err());
+}
+
+/// Tant que `CURRENT_VERSION` vaut 5, relire puis réécrire la fixture rend le
 /// même contenu. Sinon, le format a changé sans changer de version.
 #[test]
 fn le_format_n_a_pas_change_sans_changer_de_version() {
-    if CURRENT_VERSION != 4 {
+    if CURRENT_VERSION != 5 {
         return;
     }
     let sans_meta = |texte: &str| {
@@ -102,6 +119,6 @@ fn le_format_n_a_pas_change_sans_changer_de_version() {
         v.as_object_mut().unwrap().remove("meta");
         v
     };
-    let reecrit = to_json(&from_json(V4).unwrap()).unwrap();
-    assert_eq!(sans_meta(&reecrit), sans_meta(V4));
+    let reecrit = to_json(&from_json(V5).unwrap()).unwrap();
+    assert_eq!(sans_meta(&reecrit), sans_meta(V5));
 }

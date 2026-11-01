@@ -8,7 +8,8 @@ use crate::file::*;
 use crate::{PatchError, MAX_COLUMNS};
 use frogenx_composition::{
     signal_from_spec, AudioAnalysis, Clip, ClipTransition, ColumnId, Composition, FadeCurve,
-    LayerId, PlayMode, PositionSignal, RestoredTrig, Transport, TrigTarget, WipeDirection,
+    LayerId, PlayMode, PositionSignal, Quantize, RestoredTrig, Transport, TrigTarget,
+    WipeDirection,
 };
 use frogenx_core::{AmpScale, AnalysisMethod, FreqScale, Graph, NodeId, Param, Spec, SpecValue};
 use frogenx_osc::{Divider, SpectrumZone};
@@ -288,6 +289,8 @@ pub(crate) fn patch(file: FilePatch) -> Result<Composition, PatchError> {
     let (nodes, specs) = graph(&file.graph, c.graph_mut())?;
     c.tempo.tempo = param(file.tempo, &nodes)?;
     c.tempo_follow = file.tempo_follow;
+    c.quantize = Quantize::from_word(&file.quantize)
+        .ok_or_else(|| invalid(format!("quantification {}", file.quantize)))?;
     c.analysis = analysis(&file.analysis, &nodes)?;
     let colonnes: Vec<_> = (0..file.columns).map(|_| c.add_column()).collect();
 

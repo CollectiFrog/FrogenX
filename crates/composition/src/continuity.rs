@@ -81,6 +81,9 @@ impl Composition {
             ..Default::default()
         };
 
+        // Le temps ne saute pas. Ce qui attendait visait les anciens identifiants.
+        self.beat = ancienne.beat;
+
         // Le compte des trigs et les phases de la régie.
         self.graph_mut().adopt_state(ancienne.graph());
         if self.trigs().len() == ancienne.trigs().len() {

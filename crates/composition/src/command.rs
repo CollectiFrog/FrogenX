@@ -3,6 +3,7 @@
 //! Tout pilote passe par là : clavier, interface, MIDI, OSC. Elles s'appliquent
 //! entre deux frames, jamais pendant l'évaluation, et se testent sans GPU.
 
+use crate::beat::{Launch, Quantize};
 use crate::clip::{ParamSlot, TransitionKind};
 use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, DeckId, LayerId, TrigId};
@@ -15,13 +16,24 @@ use frogenx_shape::EffectKind;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
-    /// Rend un clip actif sur sa piste, et le fait repartir de zéro.
+    /// Rend un clip actif sur sa piste, et le fait repartir de zéro. Immédiat :
+    /// c'est ce que fait un trig, dont le rythme vient du son (§3bis.3).
     TriggerClip {
         layer: LayerId,
         clip: ClipId,
     },
-    /// Déclenche une colonne sur les pistes du deck actif.
+    /// Déclenche une colonne sur les pistes du deck actif, tout de suite.
     TriggerColumn {
+        column: ColumnId,
+    },
+    /// Le geste de lancer un clip : il attend le temps si la quantification le
+    /// demande.
+    LaunchClip {
+        layer: LayerId,
+        clip: ClipId,
+    },
+    /// Le geste de lancer une colonne.
+    LaunchColumn {
         column: ColumnId,
     },
     /// Vide une piste : elle ne contribue plus à l'image.
@@ -67,6 +79,10 @@ pub enum Command {
     SetBpm(f32),
     /// Un tap, à l'instant où la commande s'applique.
     TapTempo,
+    /// Cet instant est le premier temps de la mesure (§3bis.3).
+    ResyncBeat,
+    /// Ce qu'un lancement attend.
+    SetQuantize(Quantize),
     /// Ajoute un trig sur les graves, sans cible (§3bis.6).
     AddTrig,
     /// Ajoute un trig sur une zone tracée à la souris, sans cible.
@@ -162,9 +178,12 @@ impl Command {
     /// Son nom dans le menu `Édition` (§23.11).
     pub fn label(&self) -> &'static str {
         match self {
-            Self::TriggerClip { .. } | Self::TriggerColumn { .. } | Self::ClearLayer { .. } => {
-                "Jeu"
-            }
+            Self::TriggerClip { .. }
+            | Self::TriggerColumn { .. }
+            | Self::LaunchClip { .. }
+            | Self::LaunchColumn { .. }
+            | Self::ClearLayer { .. } => "Jeu",
+            Self::SetQuantize(_) => "Quantification",
             Self::ResetTrigCount(_) => "Recalage",
             Self::SetLayerOpacity { .. }
             | Self::SetParam { .. }
@@ -179,7 +198,9 @@ impl Command {
             Self::RemoveLayer { .. } => "Retrait d'une piste",
             Self::RemoveClip { .. } => "Retrait d'un clip",
             Self::SetActiveDeck(_) => "Changement de deck",
-            Self::SetBpm(_) | Self::TapTempo | Self::SetTempoFollow(_) => "Tempo",
+            Self::SetBpm(_) | Self::TapTempo | Self::ResyncBeat | Self::SetTempoFollow(_) => {
+                "Tempo"
+            }
             Self::AddTrig | Self::AddTrigAt { .. } => "Ajout d'un trig",
             Self::RemoveTrig(_) => "Retrait d'un trig",
             Self::SetTrigParam { .. } | Self::SetTrigTarget { .. } => "Réglage d'un trig",
@@ -205,7 +226,10 @@ impl Command {
         match self {
             Self::TriggerClip { .. }
             | Self::TriggerColumn { .. }
+            | Self::LaunchClip { .. }
+            | Self::LaunchColumn { .. }
             | Self::ClearLayer { .. }
+            | Self::ResyncBeat
             | Self::ResetTrigCount(_) => false,
             Self::SetLayerOpacity { .. }
             | Self::SetParam { .. }
@@ -219,6 +243,7 @@ impl Command {
             | Self::SetActiveDeck(_)
             | Self::SetBpm(_)
             | Self::TapTempo
+            | Self::SetQuantize(_)
             | Self::AddTrig
             | Self::AddTrigAt { .. }
             | Self::RemoveTrig(_)
@@ -259,7 +284,12 @@ impl Composition {
                 self.layers_in_order(&mut layers);
                 self.trigger_column(column, &layers)
             }
-            Command::ClearLayer { layer } => self.clear_layer(layer),
+            Command::LaunchClip { layer, clip } => self.launch(Launch::Clip { layer, clip }),
+            Command::LaunchColumn { column } => self.launch(Launch::Column(column)),
+            Command::ClearLayer { layer } => {
+                self.cancel_launch(layer);
+                self.clear_layer(layer)
+            }
             Command::SetLayerOpacity { layer, opacity } => match self.layer_mut(layer) {
                 Some(l) => {
                     l.blend.opacity = opacity;
@@ -302,6 +332,14 @@ impl Composition {
                 self.tempo_follow = false;
                 true
             }
+            Command::ResyncBeat => {
+                self.beat.first_beat();
+                true
+            }
+            Command::SetQuantize(quantize) => {
+                self.quantize = quantize;
+                true
+            }
             Command::SetClipTransition { clip, kind, beats } => self
                 .clip_mut(clip)
                 .is_some_and(|c| c.set_transition(kind, beats)),
@@ -324,6 +362,9 @@ impl Composition {
             Command::RemoveEffect { clip, index } => self.remove_effect(clip, index),
             Command::SetTempoFollow(suivre) => {
                 self.tempo_follow = suivre;
+                if suivre {
+                    self.beat.listen();
+                }
                 true
             }
             Command::SetAudioModulation {

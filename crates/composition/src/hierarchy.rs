@@ -10,6 +10,7 @@
 //! ```
 
 use crate::analysis::AudioAnalysis;
+use crate::beat::{BeatGrid, Launch, Quantize};
 use crate::clip::Clip;
 use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 use crate::transport::{sanitize_bpm, PlayMode, TempoController};
@@ -91,7 +92,7 @@ impl Layer {
         self.cells.get(column).copied().flatten()
     }
 
-    fn holds(&self, clip: ClipId) -> bool {
+    pub(crate) fn holds(&self, clip: ClipId) -> bool {
         self.cells.contains(&Some(clip))
     }
 
@@ -156,6 +157,12 @@ pub struct Composition {
     pub analysis: AudioAnalysis,
     /// Le tempo suit le BPM détecté dans le son (§7.1).
     pub tempo_follow: bool,
+    /// Ce qu'un lancement attend (§3bis.3).
+    pub quantize: Quantize,
+    /// Où tombe le temps. Un état de jeu, absent des fichiers.
+    pub(crate) beat: BeatGrid,
+    /// Les lancements qui attendent leur temps.
+    pub(crate) waiting: Vec<Launch>,
     taps: Vec<f64>,
     active_deck: Option<DeckId>,
 }
@@ -182,6 +189,9 @@ impl Composition {
             tempo: TempoController::new(DEFAULT_BPM),
             analysis: AudioAnalysis::default(),
             tempo_follow: false,
+            quantize: Quantize::Off,
+            beat: BeatGrid::default(),
+            waiting: Vec::new(),
             taps: Vec::new(),
             active_deck: None,
         }
@@ -207,6 +217,9 @@ impl Composition {
     pub fn follow_tempo(&mut self, audio: &AudioFeatures) {
         if self.tempo_follow && audio.bpm > 0.0 && audio.bpm_confidence >= MIN_TEMPO_CONFIDENCE {
             self.tempo.tempo.set_base(audio.bpm);
+            if audio.beat_confidence >= MIN_TEMPO_CONFIDENCE {
+                self.beat.follow(audio.beat_phase);
+            }
         }
     }
 
@@ -214,6 +227,11 @@ impl Composition {
     pub fn tap(&mut self, t: f64) {
         if self.taps.last().is_some_and(|last| t - last > TAP_TIMEOUT) {
             self.taps.clear();
+        }
+        if self.taps.is_empty() {
+            self.beat.first_beat();
+        } else {
+            self.beat.snap();
         }
         self.taps.push(t);
         if self.taps.len() > TAP_MEMORY {

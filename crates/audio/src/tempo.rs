@@ -33,11 +33,19 @@ const SILENCE: f32 = 1e-5;
 /// minuscule mais régulière, qui ressemblerait sinon à un rythme.
 const MIN_CREST: f32 = 5.0;
 
+/// Les battements repliés pour trouver le temps : assez pour qu'un coup isolé ne
+/// décide pas, assez peu pour suivre un morceau qui bouge.
+const PHASE_BEATS: usize = 8;
+/// Le contraste du repli sous lequel le temps n'a pas de place franche.
+const MIN_BEAT_CONTRAST: f32 = 0.4;
+
 /// Le tempo détecté dans un flux de force de transitoires.
 pub struct TempoTracker {
     /// Analyses par seconde.
     rate: f32,
     history: Vec<f32>,
+    /// La même force, sur les graves seuls : c'est là que se lit le temps.
+    bass: Vec<f32>,
     write: usize,
     filled: usize,
     since_estimate: usize,
@@ -45,6 +53,9 @@ pub struct TempoTracker {
     confidence: f32,
     /// Un tempo très différent de `bpm`, en attente de confirmation.
     pending: Option<f32>,
+    /// Analyses depuis le dernier temps.
+    since_beat: f32,
+    beat_confidence: f32,
 }
 
 impl TempoTracker {
@@ -53,12 +64,15 @@ impl TempoTracker {
         Self {
             rate,
             history: vec![0.0; (HISTORY * rate).ceil() as usize],
+            bass: vec![0.0; (HISTORY * rate).ceil() as usize],
             write: 0,
             filled: 0,
             since_estimate: 0,
             bpm: 0.0,
             confidence: 0.0,
             pending: None,
+            since_beat: 0.0,
+            beat_confidence: 0.0,
         }
     }
 
@@ -72,12 +86,35 @@ impl TempoTracker {
         self.confidence
     }
 
+    /// La fiabilité de la phase, `[0, 1]`. `0` : le temps n'a pas de place franche.
+    pub fn beat_confidence(&self) -> f32 {
+        self.beat_confidence
+    }
+
+    /// Où on en est dans le battement, `lag` analyses plus tard, `[0, 1)`. La
+    /// force d'un coup arrive après lui : `lag` rattrape ce retard.
+    pub fn beat_phase(&self, lag: f32) -> f32 {
+        if self.bpm <= 0.0 {
+            return 0.0;
+        }
+        let periode = 60.0 * self.rate / self.bpm;
+        ((self.since_beat + lag) / periode).rem_euclid(1.0)
+    }
+
     pub fn push(&mut self, strength: f32) {
-        let strength = if strength.is_finite() { strength } else { 0.0 };
-        self.history[self.write] = strength;
+        self.push_with_bass(strength, 0.0);
+    }
+
+    /// `bass` : la force des graves seuls, qui place le temps quand elle est
+    /// franche. Sinon, c'est `strength`.
+    pub fn push_with_bass(&mut self, strength: f32, bass: f32) {
+        let fini = |v: f32| if v.is_finite() { v } else { 0.0 };
+        self.history[self.write] = fini(strength);
+        self.bass[self.write] = fini(bass);
         self.write = (self.write + 1) % self.history.len();
         self.filled = (self.filled + 1).min(self.history.len());
         self.since_estimate += 1;
+        self.since_beat += 1.0;
         if self.since_estimate as f32 >= ESTIMATE_EVERY * self.rate
             && self.filled as f32 >= MIN_HISTORY * self.rate
         {
@@ -129,6 +166,60 @@ impl TempoTracker {
             tempo(meilleur),
         );
         self.report(bpm, fiabilite);
+        self.locate_beat();
+    }
+
+    /// Replie les derniers battements de `force` sur la période : elle s'accumule
+    /// là où tombe le temps. Rend sa place, en analyses, et le contraste du repli.
+    fn fold(&self, force: &[f32], periode: f32) -> (usize, f32) {
+        let n = force.len();
+        let lire = |a: usize| force[(self.write + 2 * n - 1 - a % n) % n];
+        let il_y_a = |age: f32| {
+            let i = age as usize;
+            lire(i) + (lire(i + 1) - lire(i)) * age.fract()
+        };
+        let plein = (self.filled as f32 / periode) as usize;
+        let battements = PHASE_BEATS.min(plein.saturating_sub(1)).max(1);
+        let notes: Vec<f32> = (0..periode.ceil() as usize)
+            .map(|place| {
+                (0..battements)
+                    .map(|k| il_y_a(place as f32 + k as f32 * periode))
+                    .sum()
+            })
+            .collect();
+        let (mut meilleure, mut plus_haut) = (0, 0.0);
+        for (i, note) in notes.iter().enumerate() {
+            if *note > plus_haut {
+                (meilleure, plus_haut) = (i, *note);
+            }
+        }
+        let moyenne = notes.iter().sum::<f32>() / notes.len() as f32;
+        let contraste = if plus_haut > 0.0 {
+            1.0 - moyenne / plus_haut
+        } else {
+            0.0
+        };
+        (meilleure, contraste)
+    }
+
+    /// Les graves d'abord : un charleston à contretemps pèse plus lourd que la
+    /// grosse caisse dans la force totale. Elle ne sert que s'ils se taisent.
+    fn locate_beat(&mut self) {
+        self.beat_confidence = 0.0;
+        if self.bpm <= 0.0 {
+            return;
+        }
+        let periode = 60.0 * self.rate / self.bpm;
+        let graves = self.fold(&self.bass, periode);
+        let (place, contraste) = if graves.1 >= MIN_BEAT_CONTRAST {
+            graves
+        } else {
+            self.fold(&self.history, periode)
+        };
+        if contraste >= MIN_BEAT_CONTRAST {
+            self.since_beat = place as f32;
+            self.beat_confidence = contraste;
+        }
     }
 
     /// Le plus long retard utile : quatre périodes du tempo le plus lent.
@@ -157,6 +248,7 @@ impl TempoTracker {
         self.bpm = 0.0;
         self.confidence = 0.0;
         self.pending = None;
+        self.beat_confidence = 0.0;
     }
 }
 
@@ -297,6 +389,84 @@ mod tests {
             t.push(f32::NAN);
         }
         assert_eq!(t.bpm(), 0.0);
+    }
+
+    /// L'écart entre deux phases, le plus court, en battements.
+    fn ecart(a: f32, b: f32) -> f32 {
+        (a - b + 0.5).rem_euclid(1.0) - 0.5
+    }
+
+    #[test]
+    fn le_temps_se_trouve_a_une_analyse_pres() {
+        for attendu in [90.0, 120.0, 128.0, 150.0] {
+            let mut t = TempoTracker::new(RATE);
+            impulsions(&mut t, attendu, 12.0);
+            // La dernière valeur reçue est la numéro `n - 1` ; la période vaut
+            // `60 * RATE / bpm`.
+            let periode = 60.0 * RATE / attendu;
+            let n = (12.0 * RATE) as usize;
+            let vraie = ((n - 1) as f32 % periode) / periode;
+            let e = ecart(t.beat_phase(0.0), vraie).abs() * periode;
+            assert!(e <= 2.0, "{attendu} : {e} analyses");
+            assert!(t.beat_confidence() > 0.4, "{}", t.beat_confidence());
+        }
+    }
+
+    #[test]
+    fn les_graves_placent_le_temps_quand_le_contretemps_pese_plus_lourd() {
+        let mut t = TempoTracker::new(RATE);
+        let periode = 0.5 * RATE;
+        let total = (12.0 * RATE) as usize;
+        for i in 0..total {
+            let phase = (i as f32 % periode) / periode;
+            let temps = (1.0 - phase * 8.0).max(0.0);
+            let contre = (1.0 - ((phase + 0.5) % 1.0) * 8.0).max(0.0);
+            t.push_with_bass(temps + 3.0 * contre, temps);
+        }
+        let vraie = ((total - 1) as f32 % periode) / periode;
+        assert!(ecart(t.beat_phase(0.0), vraie).abs() < 0.05);
+    }
+
+    #[test]
+    fn la_phase_avance_entre_deux_estimations() {
+        let mut t = TempoTracker::new(RATE);
+        impulsions(&mut t, 120.0, 12.0);
+        let avant = t.beat_phase(0.0);
+        for _ in 0..10 {
+            t.push(0.0);
+        }
+        let attendu = avant + 10.0 / (0.5 * RATE);
+        assert!(ecart(t.beat_phase(0.0), attendu).abs() < 1e-3);
+    }
+
+    #[test]
+    fn le_retard_d_un_coup_se_rattrape_en_analyses() {
+        let mut t = TempoTracker::new(RATE);
+        impulsions(&mut t, 120.0, 12.0);
+        let attendu = t.beat_phase(0.0) + 4.3 / (0.5 * RATE);
+        assert!(ecart(t.beat_phase(4.3), attendu).abs() < 1e-3);
+    }
+
+    #[test]
+    fn sans_tempo_il_n_y_a_pas_de_phase() {
+        let mut t = TempoTracker::new(RATE);
+        impulsions(&mut t, 120.0, 12.0);
+        for _ in 0..(13.0 * RATE) as usize {
+            t.push(0.0);
+        }
+        assert_eq!(t.beat_phase(1.0), 0.0);
+        assert_eq!(t.beat_confidence(), 0.0);
+    }
+
+    #[test]
+    fn une_force_sans_place_franche_ne_donne_pas_de_phase() {
+        let mut t = TempoTracker::new(RATE);
+        t.bpm = 120.0;
+        t.filled = t.history.len();
+        t.history.iter_mut().for_each(|v| *v = 1.0);
+        t.beat_confidence = 0.9;
+        t.locate_beat();
+        assert_eq!(t.beat_confidence(), 0.0);
     }
 
     #[test]

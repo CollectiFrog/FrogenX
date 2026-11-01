@@ -32,6 +32,10 @@ pub struct AudioFeatures {
     pub bpm: f32,
     /// Sa fiabilité, `[0, 1]`.
     pub bpm_confidence: f32,
+    /// Où on en est dans le battement, `0` sur le temps, `[0, 1)` (§7.1).
+    pub beat_phase: f32,
+    /// Sa fiabilité, `[0, 1]`. `0` : le son ne dit pas où tombe le temps.
+    pub beat_confidence: f32,
 }
 
 /// Tempo tant qu'aucune composition n'en a fixé un.

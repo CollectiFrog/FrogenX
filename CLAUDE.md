@@ -58,7 +58,8 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 **Étapes 1 à 9 faites : la première version est là, et le feedback avec.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
-les colonnes et Espace pour taper. Le menu `Sortie` envoie l'image en plein écran sur un
+les colonnes, Espace pour taper et R pour poser le premier temps. Les clips peuvent attendre le
+prochain temps (`Quantize`), et la grille des temps se recale sans saut (`BeatGrid`, §3bis.3). Le menu `Sortie` envoie l'image en plein écran sur un
 autre écran (§8.4) et publie des flux Spout que KyberFrog porte sur le réseau, à la résolution et
 à la cadence de chacun (§8.5), le menu `Fichier` enregistre et rouvre son travail (§23.8), et le
 dernier fichier revient au lancement. Rendus sans fenêtre : `cargo run -p frogenx-render
@@ -87,7 +88,7 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   `Chain`). Le style y vit aussi (`ColorParam`, `ShapeStyle`, `BlendParams`) : un clip le
   porte, et `composition` ne connaît pas wgpu.
 - `crates/composition` : la grille (§3bis) — `Deck`/`LayerGroup`/`Layer`/`Column`/
-  `Clip`, `CrossFader`, `TempoController`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
+  `Clip`, `CrossFader`, `TempoController`, `BeatGrid`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
   de composition. Dépend de `core` et `shape`.
 - `crates/audio` : capture `cpal`, analyse en 128 bandes (crête, énergie, multi-résolution),
   features fixes et BPM (`features.rs`, `tempo.rs`, §7.1). Seul
