@@ -62,7 +62,7 @@ version = "0.1.0"
 edition = "2021"
 # Minimum d'egui 0.37, qui dépasse celui de wgpu 30 (docs/ARCHITECTURE.md §11).
 rust-version = "1.95"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-or-later"
 
 [profile.release]
 lto = "thin"

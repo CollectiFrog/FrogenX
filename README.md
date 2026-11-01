@@ -28,3 +28,8 @@ Deux règles non négociables, détaillées dans
 
 La première version fonctionne : `cargo run` ouvre l'application. Ce qui est livré et ce qui
 reste à faire sont dans le [backlog](docs/ARCHITECTURE.md#121-le-backlog-des-features).
+
+## Licence
+
+[AGPL-3.0 ou ultérieure](LICENSE), comme KyberFrog. Sauf mention contraire, une contribution est
+proposée sous cette licence.
