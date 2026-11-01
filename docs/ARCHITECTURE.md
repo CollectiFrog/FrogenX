@@ -795,7 +795,7 @@ ambigu. Les implémentations gardent leur nom (`ShapeLayer`, `FeedbackLayer`,
 1. **`ShapeLayer`** — rasterise des formes tessellées. C'est déjà l'architecture.
 2. **`FeedbackLayer`** — réinjecte la frame précédente, transformée. Presque gratuit
    (deux textures qu'on échange), et visuellement très rentable.
-3. **`VideoLayer`** — le vrai morceau (§9.3).
+3. **`VideoRenderer`** — le vrai morceau (§9.3).
 4. **`Scene3dLayer`** — rend une scène 3D (`scene3d`, §10) dans sa propre texture ;
    rejoint le compositeur exactement comme les autres, le point de rencontre décrit
    plus haut ne change pas en passant de 2D à 3D. Arrive en dernier (§12, étape 13) :
@@ -1664,17 +1664,90 @@ taille de buffer fixe. Sur Linux, compiler `cpal` demande les en-têtes ALSA
 (`libasound2-dev`), en CI comme sur un poste. Seul Windows a été essayé à ce jour.
 
 ### 9.3 Vidéo
-Le décodage est le morceau le plus lourd du projet : thread de décodage dédié, buffer
-de frames, upload GPU, synchronisation avec `Clock`, scrubbing et boucle, conversion
-YUV → RGB en shader. Plusieurs jours de travail, **indépendants du reste** — d'où sa
-place en dernier.
+
+> Tranché avant l'étape 12 (ffmpeg et tampon, tempo au choix par clip, son ignoré). Raisons au §13.
+
+Un clip vidéo est un clip : il se déclenche, se quantifie, passe par une transition et se
+mélange comme une forme. **Son son est ignoré** : FrogenX mixe de l'image, et le son de la salle
+arrive par l'entrée audio (§7).
+
+**Le décodage : ffmpeg en pipe, dans une crate à part.** Le binaire du `PATH`, comme l'enregistreur
+(§8.2) : il lit tout ce que ffmpeg lit, H.264, ProRes, HAP, DXV, avec le décodage matériel de la
+machine, sans dépendance de compilation. `crates/video` ne connaît ni wgpu ni `Graph` : elle se teste
+sur de vraies vidéos fabriquées par ffmpeg, sans GPU, et ces tests se sautent sans lui.
+
+**Le problème : ouvrir ou repositionner un décodeur prend environ 150 ms**, et un clip doit partir
+au clic. **La réponse : le début de chaque clip reste en mémoire.**
+
+```
+          tampon de tête, 0,5 s, décodé d'avance        flux ffmpeg, lancé au déclenchement
+temps  0 ├──────────────────────────────────┤ 0,5 s ├──────────────────────────────▶ fin
+         └─ le départ est immédiat          └─ le flux a eu 0,5 s pour arriver
+```
+
+Dès qu'un clip est posé, un thread décode ses 0,5 premières secondes. Au déclenchement, la lecture
+part de ce tampon pendant qu'un ffmpeg s'ouvre à `0,5 s` : il a le temps d'arriver avant que le
+tampon s'épuise. Une boucle repasse par la même porte. Un clip qui ne joue pas ne garde que son
+tampon, sans processus : environ 46 Mo en 1080p30.
+
+```rust
+pub struct VideoInfo { pub width: u32, pub height: u32, pub fps: f32, pub duration: f64 }
+
+pub struct Frame { pub time: f64, pub width: u32, pub height: u32, pub data: Arc<[u8]> } // YUV 4:2:0
+
+impl VideoPlayer {
+    pub fn frame_at(&mut self, t: f64) -> Option<Arc<Frame>>;          // ne bloque jamais
+    pub fn frame_at_blocking(&mut self, t: f64) -> Option<Arc<Frame>>; // rendu offline
+}
+```
+
+**`frame_at` ne bloque jamais.** Elle sert la frame la plus proche de `t`. Si rien n'est prêt, elle
+rend la précédente : l'image se fige un instant, le moteur ne décroche pas. Le choix (tampon, flux
+ou repositionnement) est une fonction pure, `plan`, qui se teste sans ffmpeg. Un rendu offline
+attend chaque frame : l'horloge fixe (§4) reste déterministe.
+
+**La lecture va vers l'avant.** Un pipe ne remonte pas. Une position hors du flux, en arrière ou
+loin devant, le relance à ce point, au plus quatre fois par seconde : la marche arrière et l'aller-
+retour fonctionnent, mais par à-coups. Cette limite a été choisie : tout garder en mémoire coûterait
+2,5 Go par minute en 720p30.
+
+**Le temps : `position` est le temps de la vidéo, en secondes.** La position reste une
+`PositionSignal` (§3bis.3), et un seul `Signal` de plus règle sa vitesse :
+
+```rust
+pub struct VideoRate { pub duration: f32, pub beats: Param }
+// beats <= 0 : 1, sa vitesse réelle. Sinon : duration * bpm / 60 / beats.
+```
+
+Calée sur `N` temps, la boucle tombe donc sur le tempo, et suit ses changements et le recalage
+(§3bis.3) sans rien en savoir. La vitesse du clip et le sens de l'aller-retour agissent déjà par son
+`dt`, et `PlayMode` s'applique comme à une forme, la durée de la vidéo remplaçant `duration_beats`.
+
+**Le dessin.** `crates/layer` reçoit des plans Y, U et V en trois textures, et convertit en shader :
+BT.709 plage limitée vers sRGB, puis linéaire, comme toute couche (§21). Envoyer du 4:2:0 coûte 62 %
+de moins que du RGBA. L'image tient entière dans la cible, sans déformation ; `échelle`, `rotation`,
+`position x` et `position y` sont quatre `Param` (`VideoParams`, dans `shape` comme
+`FeedbackParams`), qui se modulent comme les autres. Le décodage ne dépasse jamais la résolution de
+rendu. Les effets de forme n'agissent pas : ils transforment des `Path`.
+
+**Les gestes.** Clic droit sur une case vide : `Importer une vidéo…`. Un fichier lâché sur la
+fenêtre va dans la première case vide de la piste choisie : winit ne donne pas la position d'un
+glissé venu de l'explorateur. Le panneau du clip porte `Lecture` (mode) et `Caler sur … temps`.
+Un fichier introuvable laisse la case en place, dit pourquoi dans le panneau, et ne fait rien
+sauter : le chemin reste dans le fichier, et le clip revient quand le fichier revient.
+
+**Le fichier.** Version 7 : un clip porte `generator` et `style`, ou `feedback`, ou `video`, avec son
+chemin absolu, sa durée, son mode et ses `Param`.
+
+**Non couvert.** Un chemin relatif au patch : déplacer un dossier demande de réimporter. Les effets
+de forme sur une vidéo. Les points d'entrée et de sortie dans le fichier. Le canal alpha.
 
 ---
 
 ## 10. Structure des crates
 
 Les crates vivent sous `crates/`, le workspace est à la racine. `core`, `osc`, `shape`,
-`composition`, `audio`, `library`, `patch`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
+`composition`, `audio`, `video`, `library`, `patch`, `layer`, `render`, `output`, `ui` et `app` existent à ce jour ; les suivantes sont créées au fil de la feuille de
 route (§12).
 
 ```
@@ -1838,7 +1911,7 @@ couches complètes empilées.
 | 9 | ✅ Feedback : un clip qui relit l'image finale (§6.1) | **traînées, échos, complexité organique** — *fait* : `cargo run`, famille `Échos` de la bibliothèque |
 | 10 | ✅ Enregistrement (readback + ffmpeg) | fichier vidéo — *fait* |
 | 11 | ✅ Flux réseau par Spout et KyberFrog (§8.5), à la place de NDI ; Syphon reste à faire | intégration VJ |
-| 12 | `VideoLayer` | clips vidéo comme couches |
+| 12 | ✅ Clips vidéo : `crates/video`, `VideoRenderer` (§9.3) | clips vidéo comme couches — *fait* |
 | 13 | `scene3d` : maillages, caméra, lumières, culling | scène 3D comme source de clip |
 | 14 | Art-Net / DMX en sortie | pilotage d'éclairage physique |
 | 15 | Scripting Lua (`mlua`) sur `Command` (§23.4) | logique de composition scriptable |
@@ -1906,12 +1979,11 @@ qui les livre (skill `doc-sync`).
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
 | 1 | Syphon, copie directe vers Spout | macOS, moins de latence vers Kyber | grande |
-| 2 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 3 | Scène 3D, étape 13 | | très grande |
-| 4 | Art-Net / DMX, étape 14 | | moyenne |
-| 5 | Scripting Lua, étape 15 | | moyenne |
-| 6 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 7 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 2 | Scène 3D, étape 13 | | très grande |
+| 3 | Art-Net / DMX, étape 14 | | moyenne |
+| 4 | Scripting Lua, étape 15 | | moyenne |
+| 5 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 6 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -1995,6 +2067,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Le plein écran rend le focus à l'interface** (§8.4) | sous Windows, `set_fullscreen` active toujours la fenêtre, qui volerait le clavier en plein jeu ; rendre le focus couvre aussi un clic accidentel, sur toutes les plateformes |
 | **Écran perdu : la sortie se ferme, le moteur continue** (§8.4) | un câble débranché ne doit couper ni l'interface ni le monitor ; laisser la fenêtre glisser sur l'écran restant pourrait recouvrir l'interface |
 | **`OutputRequest` distinct de `Command`** (§8.4) | une fenêtre n'est pas la grille : `Composition` n'a rien à en savoir, et `Command` ne concerne que ce qui s'applique entre deux frames du moteur |
+| **La vidéo se décode par ffmpeg en pipe, avec un tampon de tête** (§9.3) | un clip part au clic alors qu'un décodeur met 150 ms à s'ouvrir ; garder 0,5 s d'avance couvre ce délai, sans bindings ni tout charger en mémoire |
+| **`position` d'une vidéo est son temps, réglé par `VideoRate`** (§9.3) | un seul `Signal` de plus suffit au calage sur le tempo : la quantification, le recalage, la vitesse et `PlayMode` s'appliquent sans cas particulier |
+| **Le son d'une vidéo est ignoré** (§9.3) | FrogenX mixe de l'image ; une sortie audio serait un chantier à elle seule, avec un risque de larsen |
 | **L'enregistreur est un flux, et ffmpeg un binaire du `PATH`** (§8.2) | la relecture, la cadence et la perte existent déjà ; pas de bindings, pas de codec à livrer, et un ffmpeg absent n'empêche rien d'autre |
 | **Une frame perdue se répète dans le fichier** (§8.2) | le flux brut n'a pas d'horloge : sans cela, la vidéo raccourcit et glisse devant son son |
 | **Le son s'écrit à part, en mono, et s'assemble à l'arrêt** (§8.2) | deux entrées dans un seul ffmpeg demanderaient des tubes nommés par plateforme ; et si l'assemblage échoue, la prise reste |
@@ -2910,9 +2985,9 @@ boucle de rendu — jamais pendant une frame.
 frame N-1 pendant qu'on écrit la N. Lire et écrire la même texture est interdit et
 produit un résultat indéfini selon le backend.
 
-**`VideoLayer`** ne décode pas dans le thread principal. Le décodeur pousse des frames
-prêtes dans une file ; `render` prend la plus proche de `t` et **ne bloque jamais**. Si
-aucune frame n'est prête, on réaffiche la précédente.
+**`VideoRenderer`** ne décode pas dans le thread principal. Le décodeur pousse des frames
+prêtes dans une file ; le moteur prend la plus proche de `t` et **ne bloque jamais**. Si
+aucune frame n'est prête, on réaffiche la précédente (§9.3).
 
 **Pool de textures scratch réutilisables, un pool par format.** Inspiré d'une lecture
 du crate `darkly` (compositeur wgpu open source) : plutôt que d'allouer une texture
