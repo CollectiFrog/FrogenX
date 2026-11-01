@@ -104,12 +104,9 @@ pub struct VideoRenderer {
     view: wgpu::TextureView,
     planes: Option<Planes>,
     /// L'image envoyée : son adresse et son instant.
-    sent: Option<(*const u8, u64)>,
+    sent: Option<(usize, u64)>,
     visible: bool,
 }
-
-// `sent` n'est qu'une étiquette : l'adresse n'est jamais lue.
-unsafe impl Send for VideoRenderer {}
 
 impl VideoRenderer {
     pub fn new(gpu: &Gpu, size: UVec2) -> Self {
@@ -256,7 +253,7 @@ impl VideoRenderer {
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         self.visible = true;
 
-        let etiquette = (image.data.as_ptr(), image.time.to_bits());
+        let etiquette = (image.data.as_ptr() as usize, image.time.to_bits());
         if self.sent == Some(etiquette) {
             return;
         }
