@@ -1845,15 +1845,14 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
-| 2 | Enregistrement, étape 10 | un fichier vidéo | grande |
-| 3 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
-| 4 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 5 | Scène 3D, étape 13 | | très grande |
-| 6 | Art-Net / DMX, étape 14 | | moyenne |
-| 7 | Scripting Lua, étape 15 | | moyenne |
-| 8 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 9 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Enregistrement, étape 10 | un fichier vidéo | grande |
+| 2 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
+| 3 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 4 | Scène 3D, étape 13 | | très grande |
+| 5 | Art-Net / DMX, étape 14 | | moyenne |
+| 6 | Scripting Lua, étape 15 | | moyenne |
+| 7 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 8 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -1994,7 +1993,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`Graph::rewire` plutôt que des `Param` exposés par le graphe** (§23.10) | un `Signal` reste opaque ; passer par sa `Spec` réutilise la table du format de fichier, et un seul endroit recalcule dépendances et cycles |
 | **Une cible unique, `ParamTarget`, pour toute destination** (§23.10) | brancher un `Param` de clip, de nœud ou de régie est le même geste : une commande de chaque par type aurait multiplié les cas |
 | **Les nœuds d'un trig se lisent mais ne se règlent pas** (§23.10) | `Trig` garde les versions de référence (§3bis.6) : les régler ailleurs les désynchroniserait |
-| **La place des nœuds n'est pas dans le fichier** (§23.10) | un patch décrit ce qui joue ; une mise en page changerait le fichier à chaque glissé |
+| **La place d'un nœud est dans le `Graph`, donc dans le fichier** (§23.10) | un graphe rangé à la main fait partie du travail ; écrite à côté du nœud, elle suit les identifiants et l'annulation sans table à tenir |
+| **Déplacer un nœud modifie le fichier, sans pas d'annulation** (§23.10) | Ctrl+Z ne doit pas défaire un rangement avant un vrai réglage ; `Command::is_step` le dit sans cas particulier dans `Engine` |
+| **Le zoom est une transformation de couche** (§23.10) | les champs restent de vrais widgets, et aucun dessin ne connaît le zoom |
 | **Un feedback est un clip, pas un effet de piste** (§6.1) | il hérite de la bibliothèque, des potentiomètres, des sources audio et de la sauvegarde ; un effet de piste aurait demandé un second chemin pour chacun |
 | **Le feedback relit l'image finale, copiée en fin de frame** (§6.1) | il donne des échos de toute la composition, avec un délai d'une frame exactement, sans lire et écrire la même texture |
 | **Réglages du feedback par seconde** (§6.1) | un réglage par frame changerait d'image avec la cadence, et casserait le rendu offline à une autre cadence |
@@ -2605,7 +2606,9 @@ Le format réel commence à la version 1. La version 2 ajoute `tempo_follow` (§
 fichier v1 se migre en le mettant à `false`, ce qu'il faisait déjà sans le dire. La version
 3 ajoute les clips de feedback (§6.1) : `generator` et `style` deviennent facultatifs, et un
 fichier v2 n'a rien à changer. La version 4 donne un canal à chaque trig (§3bis.6). La version 5
-ajoute `quantize` (§3bis.3) : un fichier v4 lançait au clic, il reçoit `off`.
+ajoute `quantize` (§3bis.3) : un fichier v4 lançait au clic, il reçoit `off`. La version 6 ajoute
+`place` aux nœuds, facultative (§23.10) : un fichier v5 n'a rien à changer, ses nœuds restent
+placés d'office.
 
 Migrations **en chaîne**, une fonction par saut de version. Un patch v1 traverse
 `1→2→3` — on n'écrit jamais de migration directe `1→3`, qui doublerait le travail à
@@ -3635,8 +3638,29 @@ sur le fond ajoute un nœud ou un effet, sur un titre retire le nœud. Le fond s
 glissé, chaque nœud aussi. Les destinations sont à droite : les `Param` du clip, ou le tempo,
 la durée d'analyse, l'opacité des pistes et la vitesse des clips actifs.
 
-**La place des nœuds n'est pas dans le fichier.** Elle se calcule par profondeur dans le graphe
-et se garde pour la session : un patch décrit ce qui joue, pas sa mise en page.
+**La place d'un nœud est dans le fichier.** Un graphe rangé à la main fait partie du travail.
+Tant qu'on n'y touche pas, elle se calcule par profondeur ; une fois déplacé, le nœud garde la
+sienne, écrite dans le `Graph`, à côté du nœud : elle suit ainsi les identifiants, l'annulation
+et un clip copié sans table à tenir, et disparaît avec lui. C'est le seul champ de `core` qui
+ne sert pas à l'évaluation : deux nombres, que rien ne lit en jouant.
+
+Lâcher un nœud émet une seule `Command::SetNodePlace` : pendant le glissé, la place vit dans
+l'éditeur. Elle marque le fichier comme modifié, mais n'est pas un pas d'annulation
+(`Command::is_step`) : Ctrl+Z ne doit pas défaire un rangement avant le dernier vrai réglage.
+Les destinations, à droite, n'ont pas de nœud : elles restent placées d'office.
+
+**Le zoom.** La molette, ou Ctrl et la molette, zoome de 25 à 200 % autour du pointeur, et un
+bouton dans la barre d'onglets revient à 100 %. C'est une transformation de la couche
+(`set_transform_layer`), comme `egui::Scene`, pas un facteur dans chaque dessin : les champs des
+boîtes restent de vrais widgets, sans qu'aucun ne connaisse le zoom, et un glissé se lit déjà
+en coordonnées du canevas. Le zoom et le déplacement appartiennent à la session, pas au fichier :
+ils disent où on regarde, pas ce qu'on a rangé.
+
+**L'ordre des effets.** Les effets s'appliquent dans l'ordre, et déformer puis répéter n'est pas
+répéter puis déformer. `Command::MoveEffect` le change : deux flèches sur chaque carte d'effet du
+panneau du clip, `Avancer` et `Reculer` au clic droit du titre dans l'éditeur. Une flèche au bout
+de la chaîne est grisée. Une modulation vit dans le `Param` de l'effet : elle le suit. C'est un pas
+d'annulation, nommé « Ordre des effets ».
 
 **Brancher ne touche pas à la base.** Une source s'ajoute à la base du `Param` : une opacité à
 `1` modulée par un `flash` reste à `1`. Pour qu'un coup allume une piste, on met sa base à `0`
@@ -3658,8 +3682,7 @@ toucher à l'application. L'affichage de l'onglet `Régie` a été regardé sur 
 **Pas encore essayés :** tirer un fil à la vraie souris, le menu du fond, et l'onglet `Clip` sur
 une capture. Le fil s'y dessine par clics simulés seulement.
 
-**Non couvert.** La place des nœuds se perd à la fermeture de l'application. Le déplacement d'un
-effet dans la chaîne, le zoom du canevas et l'annulation ne sont pas faits. Une opacité ou une
+**Non couvert.** Une opacité ou une
 vitesse ne reçoit qu'une source de la régie, jamais d'un clip : c'est le §3.
 
 ### 23.11 Annuler et rétablir
