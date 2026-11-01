@@ -3166,9 +3166,22 @@ signale la sortie du pointeur quand le vrai curseur est ailleurs, sans que cela 
 redimensionnement, la réduction et la récupération d'une surface perdue n'ont pas été
 essayés.
 
+**Le sélecteur de couleur.** Une pastille sur le titre d'une carte de couleur montre la couleur
+**telle qu'elle joue**, modulation comprise. Un clic ouvre le sélecteur en tête du panneau, un
+second le ferme. Trois décisions :
+
+- **Il s'ajoute aux potentiomètres, il ne les remplace pas.** Eux seuls portent le clic droit et la
+  profondeur de modulation (§7.1) ; une couleur reste quatre `Param` (§21), et le sélecteur n'émet
+  que des `SetParam`. Sur un canal modulé, il règle la base, comme le potentiomètre.
+- **Dans le panneau, jamais par-dessus.** Une fenêtre surgissante pourrait couvrir le monitor
+  (§23.9). Il occupe une rangée entière, parce que les cartes se plient d'après leur nombre de
+  potentiomètres (`wrap_cards`).
+- **Le RVB seul.** L'alpha garde son potentiomètre : passer par `Color32`, prémultiplié, l'abîmerait
+  à faible opacité. Un canal que le geste n'a pas changé n'émet rien : le choix se fait sur 8 bits,
+  et réécrire les autres canaux leur ferait perdre leur précision.
+
 **Non couvert.** Les onglets et l'ajout d'effets à un clip sont dans l'éditeur de
-nœuds (§23.10). Les couleurs du style sont réglables par curseurs, canal par canal ; un sélecteur
-de couleur viendra après.
+nœuds (§23.10). Le sélecteur n'a ni palette ni saisie hexadécimale.
 
 ### 23.6 La bibliothèque de clips (étape 7c)
 
