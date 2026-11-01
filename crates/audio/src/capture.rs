@@ -5,7 +5,7 @@ use crate::analysis::Analysis;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ErrorKind, FromSample, SampleFormat, SizedSample};
 use frogenx_core::{AnalysisSettings, AudioFeatures};
-use rtrb::{Producer, RingBuffer};
+use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -108,6 +108,20 @@ impl AudioInput {
     /// Change l'analyse, sans bloquer : à appeler à chaque frame (§7).
     pub fn configure(&mut self, settings: AnalysisSettings) {
         self.analysis.configure(settings);
+    }
+
+    /// Branche le fil d'une prise, sur le son mono (§8.2).
+    pub fn tap(&mut self) -> Option<Consumer<f32>> {
+        self.analysis.tap()
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Les échantillons qu'une prise a perdus.
+    pub fn tap_lost(&self) -> u64 {
+        self.analysis.tap_lost()
     }
 
     /// L'état de l'entrée, en mots : ce que lit l'interface.

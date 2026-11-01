@@ -32,14 +32,17 @@ re-rendre exactement n'est pas un POC, c'est un accident.
 
 ## Encodage
 
-À terme (étape 10) : pipe vers le binaire `ffmpeg` (§8.2) — pas de bindings, et ffmpeg
-choisit lui-même l'encodeur matériel de la plateforme. **Ce pipe n'existe pas encore** ;
-d'ici là, passer par la séquence PNG ci-dessus.
-
-Pour une diffusion générale (H.264, compatible partout), la cible du pipe :
+Le pipe vers le binaire `ffmpeg` existe (§8.2) : `sequence --video` rend directement une vidéo,
+sans passer par des PNG, avec NVENC si la machine en a, sinon x264 ; une extension `.mov` donne du
+ProRes 422 HQ.
 ```bash
-ffmpeg -f rawvideo -pix_fmt rgba -s 1920x1080 -r 60 -i - \
-       -c:v libx264 -pix_fmt yuv420p -crf 18 -preset slow out.mp4
+cargo run --release -p frogenx-app --example sequence -- --video target/sequence.mp4 [frames] [colonne]
+```
+
+Pour une qualité maximale sur des dégradés, la séquence PNG reste possible :
+```bash
+ffmpeg -framerate 60 -i target/sequence/frame_%06d.png \
+       -c:v libx264 -pix_fmt yuv420p -crf 15 -preset slow out.mp4
 ```
 
 `-pix_fmt yuv420p` est **obligatoire** pour la lecture hors ffmpeg — sans lui, beaucoup

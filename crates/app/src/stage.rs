@@ -6,7 +6,7 @@
 
 use frogenx_app::Engine;
 use frogenx_output::{GpuSinkId, Preview, PreviewHandle};
-use frogenx_ui::{OutputView, Screen};
+use frogenx_ui::{OutputView, RecordingView, Screen};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::dpi::{LogicalSize, PhysicalSize};
@@ -120,6 +120,7 @@ impl Stage {
             streams_available: false,
             render: (0, 0),
             rate: 0,
+            recording: RecordingView::default(),
         }
     }
 

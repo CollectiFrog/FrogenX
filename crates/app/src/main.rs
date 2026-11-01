@@ -22,6 +22,7 @@ mod stage;
 
 use files::{Files, Reaction};
 use frogenx_app::last_patch::config_dir;
+use frogenx_app::recording::{clock_label, Recording};
 use frogenx_app::settings::{MachineSettings, DEFAULT_RENDER};
 use frogenx_app::streams::{open_spout, Streams, STREAMS_AVAILABLE};
 use frogenx_app::{next_deadline, Engine, FrameRate};
@@ -29,14 +30,16 @@ use frogenx_audio::AudioInput;
 use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
-use frogenx_output::{MonitorSink, OutputSink, StreamFormat};
-use frogenx_ui::{HistoryRequest, OutputRequest, OutputView};
+use frogenx_output::{MonitorSink, OutputSink, RecordPreset, StreamFormat};
+use frogenx_ui::{HistoryRequest, OutputRequest, OutputView, RecordingView};
 use glam::UVec2;
 use gui::Gui;
 use node_window::NodeWindow;
+use rfd::AsyncFileDialog;
 use stage::Stage;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
@@ -49,7 +52,7 @@ use winit::window::{Window, WindowId};
 /// La taille du monitor dans l'interface : un quart de la sortie suffit.
 const MONITOR_SIZE: UVec2 = UVec2::new(960, 540);
 const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN] [--patch FICHIER] [--nodes] \
-                     [--stream NOM] [--render LxH] [--rate N]";
+                     [--stream NOM] [--render LxH] [--rate N] [--record FICHIER]";
 
 /// La période d'une cadence. Le moteur a sa propre échéance (§8.3).
 fn period_of(rate: u32) -> Duration {
@@ -79,6 +82,8 @@ struct Options {
     render: Option<UVec2>,
     /// La cadence du moteur, pour ce lancement seulement.
     rate: Option<u32>,
+    /// Lance une prise dès que ffmpeg a répondu : la vérifie sans souris (§8.2).
+    record: Option<PathBuf>,
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -98,6 +103,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--patch" => options.patch = Some(args.next().ok_or(USAGE)?.into()),
             "--nodes" => options.nodes = true,
             "--stream" => options.stream = Some(args.next().ok_or(USAGE)?),
+            "--record" => options.record = Some(args.next().ok_or(USAGE)?.into()),
             "--render" => {
                 let taille = args.next().and_then(|t| parse_size(&t));
                 options.render = Some(taille.ok_or(USAGE)?);
@@ -151,6 +157,9 @@ fn toggle_stream(flux: &mut Streams, i: usize, moteur: &mut Engine) {
     flux.toggle(i, moteur, &mut |nom, taille| open_spout(&info, nom, taille));
 }
 
+/// Les noms des préréglages, dans l'ordre de `RecordPreset::ALL`.
+const PRESETS: [&str; 2] = [RecordPreset::H264.label(), RecordPreset::ProRes.label()];
+
 /// Ce qui n'existe qu'une fois la fenêtre ouverte.
 struct Running {
     window: Arc<Window>,
@@ -165,6 +174,11 @@ struct Running {
     nodes: Option<NodeWindow>,
     files: Files,
     streams: Streams,
+    recording: Recording,
+    /// Le fichier de `--record`, jusqu'à ce que ffmpeg ait répondu.
+    pending_record: Option<PathBuf>,
+    /// Le dossier choisi dans sa fenêtre, quand elle se ferme.
+    folder: Option<Receiver<PathBuf>>,
     /// Le rendu, la cadence et les flux tels qu'ils seront retenus (§8.5).
     settings: MachineSettings,
     /// Où les retenir. `None` sans dossier de configuration.
@@ -272,6 +286,9 @@ impl Running {
             nodes,
             files,
             streams,
+            recording: Recording::new(),
+            pending_record: options.record.clone(),
+            folder: None,
             settings,
             settings_dir,
             period,
@@ -295,11 +312,45 @@ impl Running {
         let titre = self.files.title(self.engine.is_dirty());
         let flux = self.streams.views(&self.engine);
         let rendu = self.engine.render_size();
+        self.recording.poll();
+        self.poll_folder();
+        if self.recording.available() {
+            if let Some(fichier) = self.pending_record.take() {
+                let mut reglage = self.settings.recording.clone();
+                reglage.preset = RecordPreset::of_path(&fichier);
+                reglage.format.width = rendu.x;
+                reglage.format.height = rendu.y;
+                let audio = self.audio.as_mut();
+                self.recording
+                    .start(&reglage, Some(fichier), &mut self.engine, audio);
+            }
+        }
+        let prise = self
+            .recording
+            .take_status(&self.engine, self.audio.as_ref());
+        let etat_prise = prise.unwrap_or_else(|| self.recording.status().to_string());
+        let horloge = clock_label(self.recording.elapsed());
+        let dossier = self.settings.recording.folder.display().to_string();
+        let reglage = &self.settings.recording;
         let sortie = OutputView {
             streams: &flux,
             streams_available: STREAMS_AVAILABLE,
             render: (rendu.x, rendu.y),
             rate: (1.0 / self.period.as_secs_f64()).round() as u32,
+            recording: RecordingView {
+                available: self.recording.available(),
+                active: self.recording.active(),
+                presets: &PRESETS,
+                preset: RecordPreset::ALL
+                    .iter()
+                    .position(|p| *p == reglage.preset)
+                    .unwrap_or(0),
+                size: (reglage.format.width, reglage.format.height),
+                fps: reglage.format.fps,
+                folder: &dossier,
+                status: &etat_prise,
+                clock: &horloge,
+            },
             ..self.stage.view()
         };
         let demandes = self.gui.draw(
@@ -345,6 +396,32 @@ impl Running {
         self.deadline = next_deadline(self.deadline, now, self.period);
     }
 
+    /// La fenêtre du système sur un thread : elle ne doit pas figer l'image.
+    fn choose_folder(&mut self) {
+        let (reponse, recu) = channel();
+        let boite = AsyncFileDialog::new()
+            .set_directory(&self.settings.recording.folder)
+            .set_parent(&*self.window)
+            .pick_folder();
+        std::thread::spawn(move || {
+            if let Some(dossier) = pollster::block_on(boite) {
+                let _ = reponse.send(dossier.path().to_path_buf());
+            }
+        });
+        self.folder = Some(recu);
+    }
+
+    fn poll_folder(&mut self) {
+        let choisi = self.folder.as_ref().and_then(|r| r.try_recv().ok());
+        if let Some(dossier) = choisi {
+            self.folder = None;
+            self.settings.recording.folder = dossier;
+            if let Some(dir) = &self.settings_dir {
+                self.settings.save(dir);
+            }
+        }
+    }
+
     /// Le rendu et les flux : ce que l'interface demande, puis ce qu'on retient.
     fn apply_output(&mut self, demande: OutputRequest) {
         let flux = &mut self.streams;
@@ -383,6 +460,30 @@ impl Running {
                 }
             }
             OutputRequest::RemoveStream(i) => flux.remove(i, moteur),
+            OutputRequest::ToggleRecording => {
+                if self.recording.active() {
+                    self.recording.stop(moteur);
+                } else {
+                    let reglage = &self.settings.recording;
+                    self.recording
+                        .start(reglage, None, moteur, self.audio.as_mut());
+                }
+                return;
+            }
+            OutputRequest::SetRecordPreset(i) => {
+                if let Some(preset) = RecordPreset::ALL.get(i) {
+                    self.settings.recording.preset = *preset;
+                }
+            }
+            OutputRequest::SetRecordSize((width, height)) => {
+                let f = &mut self.settings.recording.format;
+                (f.width, f.height) = (width, height);
+            }
+            OutputRequest::SetRecordFps(fps) => self.settings.recording.format.fps = fps,
+            OutputRequest::ChooseRecordFolder => {
+                self.choose_folder();
+                return;
+            }
             OutputRequest::Open(_) | OutputRequest::Close => return,
         }
         self.settings.streams = self.streams.configs();
@@ -448,7 +549,11 @@ impl Running {
                     fenetre.forget_grid();
                 }
             }
-            Reaction::Quit => event_loop.exit(),
+            Reaction::Quit => {
+                // Une prise en cours se referme avant de quitter : elle ne se perd pas.
+                self.recording.finish(&mut self.engine);
+                event_loop.exit();
+            }
         }
     }
 
@@ -560,6 +665,7 @@ impl ApplicationHandler for App {
         }
         if self.options.frames.is_some_and(|n| running.frames >= n) {
             running.report();
+            running.recording.finish(&mut running.engine);
             running.stage.close(&mut running.engine);
             event_loop.exit();
             // `exit` n'arrête pas la boucle sur-le-champ : elle repasse ici.
@@ -610,6 +716,11 @@ mod tests {
 
     #[test]
     fn un_flux_le_rendu_et_la_cadence_se_choisissent_au_lancement() {
+        assert_eq!(
+            parse(&["--record", "a.mov"]).unwrap().record,
+            Some(PathBuf::from("a.mov"))
+        );
+        assert!(parse(&["--record"]).is_err());
         let lu = parse(&["--stream", "Scène", "--render", "1280x720", "--rate", "50"]).unwrap();
         assert_eq!(lu.stream.as_deref(), Some("Scène"));
         assert_eq!(lu.render, Some(UVec2::new(1280, 720)));

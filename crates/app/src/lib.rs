@@ -17,6 +17,7 @@
 pub mod file_flow;
 pub mod history;
 pub mod last_patch;
+pub mod recording;
 pub mod settings;
 pub mod streams;
 

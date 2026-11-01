@@ -55,13 +55,13 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 9 faites : la première version est là, et le feedback avec.** `cargo run` ouvre l'application : une interface egui sur la
+**Étapes 1 à 11 faites : la première version est là, avec le feedback, les flux et l'enregistrement.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
 les colonnes, Espace pour taper et R pour poser le premier temps. Les clips peuvent attendre le
 prochain temps (`Quantize`), et la grille des temps se recale sans saut (`BeatGrid`, §3bis.3). Le menu `Sortie` envoie l'image en plein écran sur un
-autre écran (§8.4) et publie des flux Spout que KyberFrog porte sur le réseau, à la résolution et
-à la cadence de chacun (§8.5), le menu `Fichier` enregistre et rouvre son travail (§23.8), et le
+autre écran (§8.4), publie des flux Spout que KyberFrog porte sur le réseau, à la résolution et
+à la cadence de chacun (§8.5), et enregistre une vidéo avec son son, en H.264 ou ProRes (§8.2), le menu `Fichier` enregistre et rouvre son travail (§23.8), et le
 dernier fichier revient au lancement. Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
 sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p frogenx-app
@@ -106,7 +106,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   tessellation lyon (module sans wgpu).
 - `crates/render` : `Compositor` (passes shader en ping-pong, 5 modes), relecture
   GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
-- `crates/output` : `GpuSink` (`encode`/`after_submit`), `CpuSink`, étage `Outputs`,
+- `crates/output` : `GpuSink` (`encode`/`after_submit`), `CpuSink`, étage `Outputs`, `FfmpegSink`
+  (`record.rs`, sans wgpu, un pipe vers le binaire ffmpeg du `PATH`),
   passe de conversion 8 bits sRGB, `PresentSurface`, `Preview`, `MonitorSink`,
   `PngSequenceSink`, relecture en direct (`live.rs`), et `SpoutSink` sous Windows, seul `unsafe`
   du projet. `fanout` (files bornées, politique de perte) et `stream` (format, cadence) ne
@@ -118,8 +119,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
   `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés, `node_window.rs`
-  celle de l'éditeur de nœuds. `streams.rs` tient les flux, `settings.rs` ce qui appartient à la
-  machine (`sorties.txt`). `file_flow.rs`
+  celle de l'éditeur de nœuds. `streams.rs` tient les flux, `recording.rs` une prise, image, son et
+  assemblage, `settings.rs` ce qui appartient à la machine (`sorties.txt`). `file_flow.rs`
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
 **Prochaine étape : à choisir au §12.1**, le backlog à tenir à jour. L'éditeur de nœuds est fait

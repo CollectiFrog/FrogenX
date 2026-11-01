@@ -94,6 +94,23 @@ pub const STREAM_SIZES: [(u32, u32); 6] = [
 /// Les cadences proposées pour un flux.
 pub const STREAM_RATES: [u32; 7] = [15, 20, 24, 25, 30, 50, 60];
 
+/// L'enregistreur, déjà mis en mots (§8.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RecordingView<'a> {
+    /// ffmpeg a répondu : sans lui, le menu dit pourquoi.
+    pub available: bool,
+    pub active: bool,
+    pub presets: &'a [&'a str],
+    pub preset: usize,
+    pub size: (u32, u32),
+    pub fps: u32,
+    pub folder: &'a str,
+    /// Le dernier résultat, ou ce qui ne va pas dans la prise en cours.
+    pub status: &'a str,
+    /// La durée de la prise, déjà écrite : `01:23`.
+    pub clock: &'a str,
+}
+
 /// L'état des sorties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputView<'a> {
@@ -109,6 +126,7 @@ pub struct OutputView<'a> {
     pub render: (u32, u32),
     /// La cadence du moteur, en images par seconde.
     pub rate: u32,
+    pub recording: RecordingView<'a>,
 }
 
 /// Ce que l'interface demande à la fenêtre de sortie. Ce n'est pas une
@@ -129,6 +147,12 @@ pub enum OutputRequest {
     SetStreamSize(usize, (u32, u32)),
     SetStreamFps(usize, u32),
     RemoveStream(usize),
+    /// Lance une prise, ou l'arrête (§8.2).
+    ToggleRecording,
+    SetRecordPreset(usize),
+    SetRecordSize((u32, u32)),
+    SetRecordFps(u32),
+    ChooseRecordFolder,
 }
 
 /// Annuler ou rétablir : `app` tient l'historique (§23.11).
@@ -492,6 +516,16 @@ fn header(
             ui.label(discret(&format!("{:.0} fps", view.fps)));
             ui.label(discret(view.outputs));
             ui.label(discret(view.output.status));
+            let prise = &view.output.recording;
+            if !prise.status.is_empty() {
+                ui.label(discret(prise.status));
+            }
+            if prise.active {
+                let rec = RichText::new(format!("REC {}", prise.clock))
+                    .color(theme::ACCENT)
+                    .size(11.5);
+                ui.label(rec);
+            }
         });
     });
 }
@@ -615,6 +649,68 @@ fn output_menu(ui: &mut Ui, view: &OutputView<'_>, output: &mut Option<OutputReq
             ui.close();
         }
     }
+    ui.separator();
+    let prise = &view.recording;
+    ui.menu_button(recording_label(prise), |ui| {
+        recording_menu(ui, prise, output)
+    });
+}
+
+/// La ligne de l'enregistreur : ce que le menu en dit sans l'ouvrir.
+fn recording_label(r: &RecordingView<'_>) -> String {
+    let nom = r.presets.get(r.preset).copied().unwrap_or_default();
+    let (w, h) = r.size;
+    format!("Enregistrement : {nom}, {w}×{h}, {} i/s", r.fps)
+}
+
+/// Une prise ne se règle pas en cours : un fichier ne change pas de taille.
+fn recording_menu(ui: &mut Ui, r: &RecordingView<'_>, output: &mut Option<OutputRequest>) {
+    if !r.available {
+        let manque = RichText::new("ffmpeg introuvable dans le PATH").color(theme::TEXT_DIM);
+        ui.label(manque);
+        return;
+    }
+    let geste = if r.active { "Arrêter" } else { "Enregistrer" };
+    if ui.button(geste).clicked() {
+        *output = Some(OutputRequest::ToggleRecording);
+        ui.close();
+    }
+    ui.separator();
+    ui.add_enabled_ui(!r.active, |ui| {
+        for (i, nom) in r.presets.iter().enumerate() {
+            if ui.selectable_label(i == r.preset, *nom).clicked() {
+                *output = Some(OutputRequest::SetRecordPreset(i));
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.menu_button(format!("Taille : {}", size_label(r.size)), |ui| {
+            for taille in STREAM_SIZES {
+                if ui
+                    .selectable_label(taille == r.size, size_label(taille))
+                    .clicked()
+                {
+                    *output = Some(OutputRequest::SetRecordSize(taille));
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button(format!("Cadence : {} i/s", r.fps), |ui| {
+            for fps in STREAM_RATES {
+                if ui
+                    .selectable_label(fps == r.fps, format!("{fps} i/s"))
+                    .clicked()
+                {
+                    *output = Some(OutputRequest::SetRecordFps(fps));
+                    ui.close();
+                }
+            }
+        });
+        if ui.button(format!("Dossier : {}", r.folder)).clicked() {
+            *output = Some(OutputRequest::ChooseRecordFolder);
+            ui.close();
+        }
+    });
 }
 
 fn size_label((w, h): (u32, u32)) -> String {
@@ -1111,6 +1207,14 @@ mod tests {
                             streams_available: true,
                             render: (1920, 1080),
                             rate: 60,
+                            recording: RecordingView {
+                                available: true,
+                                presets: &["H.264", "ProRes 422 HQ"],
+                                size: (1920, 1080),
+                                fps: 60,
+                                folder: "D:/prises",
+                                ..Default::default()
+                            },
                         },
                         file: FileView {
                             title: "concert.frogenx *",
@@ -2578,6 +2682,48 @@ mod tests {
         );
         let gauche = h.get_all_by_label("<").next().unwrap();
         assert!(gauche.accesskit_node().is_disabled(), "déjà au début");
+    }
+
+    /// Ouvre le menu `Sortie`, puis la ligne de l'enregistreur.
+    fn menu_enregistrement(h: &mut Harness<'_, Etat>) {
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label_contains("Enregistrement :").click();
+        h.run();
+    }
+
+    #[test]
+    fn enregistrer_part_du_menu_sortie() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        menu_enregistrement(&mut h);
+        h.get_by_label("Enregistrer").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::ToggleRecording));
+    }
+
+    #[test]
+    fn le_format_d_une_prise_se_choisit_dans_le_menu() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        menu_enregistrement(&mut h);
+        h.get_by_label("ProRes 422 HQ").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::SetRecordPreset(1)));
+    }
+
+    #[test]
+    fn la_ligne_dit_ce_que_sera_la_prise() {
+        let r = RecordingView {
+            presets: &["H.264"],
+            size: (1280, 720),
+            fps: 30,
+            ..Default::default()
+        };
+        assert_eq!(
+            recording_label(&r),
+            "Enregistrement : H.264, 1280×720, 30 i/s"
+        );
     }
 
     #[test]

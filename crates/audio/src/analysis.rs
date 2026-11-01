@@ -10,7 +10,7 @@ use crate::analyzer::SpectrumAnalyzer;
 use crate::features::FeatureAnalyzer;
 use frogenx_core::{AnalysisSettings, AudioFeatures};
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -23,6 +23,8 @@ const IDLE: Duration = Duration::from_millis(1);
 const SILENT_CHANNEL: f32 = 1e-6;
 /// Réglages en attente. Le thread les lit à chaque tour : quelques-uns suffisent.
 const PENDING_SETTINGS: usize = 4;
+/// Ce que l'anneau d'une prise tient, en secondes : le disque peut hésiter.
+const TAP_SECONDS: f32 = 2.0;
 
 /// Le thread d'analyse, arrêté et attendu à la destruction.
 pub struct Analysis {
@@ -30,6 +32,11 @@ pub struct Analysis {
     settings: Producer<AnalysisSettings>,
     /// Les derniers réglages transmis.
     current: AnalysisSettings,
+    /// Branche ou débranche le fil d'une prise.
+    tap: Producer<Producer<f32>>,
+    /// Les échantillons que le fil n'a pas pris.
+    tap_lost: Arc<AtomicU64>,
+    sample_rate: f32,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -43,15 +50,35 @@ impl Analysis {
     ) -> std::io::Result<Self> {
         let (input, output) = triple_buffer(&AudioFeatures::default());
         let (reglages, lus) = RingBuffer::new(PENDING_SETTINGS);
+        let (tap, taps) = RingBuffer::new(1);
+        let tap_lost = Arc::new(AtomicU64::new(0));
+        let perdus = Arc::clone(&tap_lost);
         let stop = Arc::new(AtomicBool::new(false));
         let arret = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
             .name("analyse audio".into())
-            .spawn(move || run(samples, lus, channels.max(1), sample_rate, input, &arret))?;
+            .spawn(move || {
+                let fil = Tap {
+                    pending: taps,
+                    lost: perdus,
+                };
+                run(
+                    samples,
+                    lus,
+                    fil,
+                    channels.max(1),
+                    sample_rate,
+                    input,
+                    &arret,
+                )
+            })?;
         Ok(Self {
             output,
             settings: reglages,
             current: AnalysisSettings::default(),
+            tap,
+            tap_lost,
+            sample_rate,
             stop,
             thread: Some(thread),
         })
@@ -70,6 +97,21 @@ impl Analysis {
         if settings != self.current && self.settings.push(settings).is_ok() {
             self.current = settings;
         }
+    }
+}
+
+impl Analysis {
+    /// Branche un fil sur le son mono : c'est ce que FrogenX entend. Le fil se
+    /// débranche seul quand on lâche le `Consumer`. `None` : un fil attend encore.
+    pub fn tap(&mut self) -> Option<Consumer<f32>> {
+        let (entree, sortie) = RingBuffer::new((self.sample_rate * TAP_SECONDS) as usize);
+        self.tap.push(entree).ok()?;
+        Some(sortie)
+    }
+
+    /// Les échantillons perdus depuis le lancement, faute de disque assez rapide.
+    pub fn tap_lost(&self) -> u64 {
+        self.tap_lost.load(Ordering::Relaxed)
     }
 }
 
@@ -114,9 +156,16 @@ fn downmix(a: &[f32], b: &[f32], energies: &mut [f32], mut push: impl FnMut(f32)
     }
 }
 
+/// Le fil d'une prise, côté thread d'analyse.
+struct Tap {
+    pending: Consumer<Producer<f32>>,
+    lost: Arc<AtomicU64>,
+}
+
 fn run(
     mut samples: Consumer<f32>,
     mut settings: Consumer<AnalysisSettings>,
+    taps: Tap,
     channels: usize,
     sample_rate: f32,
     mut output: Input<AudioFeatures>,
@@ -125,7 +174,15 @@ fn run(
     let mut analyzer = SpectrumAnalyzer::new(sample_rate);
     let mut features = FeatureAnalyzer::new(sample_rate);
     let mut energies = vec![0.0; channels];
+    let Tap { mut pending, lost } = taps;
+    let mut fil: Option<Producer<f32>> = None;
     while !stop.load(Ordering::Relaxed) {
+        if let Ok(neuf) = pending.pop() {
+            fil = Some(neuf);
+        }
+        if fil.as_ref().is_some_and(|f| f.is_abandoned()) {
+            fil = None;
+        }
         // L'allocation d'un changement de fenêtre est permise ici : ce thread
         // n'est pas temps réel, et le callback n'attend jamais après lui.
         while let Ok(reglages) = settings.pop() {
@@ -147,6 +204,11 @@ fn run(
         downmix(a, b, &mut energies, |mono| {
             nouveau |= analyzer.push(mono);
             nouveau |= features.push(mono);
+            if let Some(f) = &mut fil {
+                if f.push(mono).is_err() {
+                    lost.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         });
         bloc.commit_all();
 
@@ -175,6 +237,48 @@ mod tests {
         let debut = Instant::now();
         while !condition(analysis.read()) {
             assert!(debut.elapsed().as_secs() < 5, "rien reçu de l'analyse");
+            std::thread::sleep(IDLE);
+        }
+    }
+
+    #[test]
+    fn un_fil_recoit_le_son_mono_puis_se_debranche() {
+        let (mut entree, sortie) = RingBuffer::new(32_768);
+        let mut analysis = Analysis::spawn(sortie, 2, SR).unwrap();
+        let mut fil = analysis.tap().unwrap();
+        // Laisse au thread le temps de le prendre.
+        std::thread::sleep(Duration::from_millis(50));
+        for _ in 0..100 {
+            let _ = entree.push(0.5);
+            let _ = entree.push(0.25);
+        }
+        let debut = Instant::now();
+        while fil.slots() < 100 {
+            assert!(debut.elapsed().as_secs() < 5, "rien sur le fil");
+            std::thread::sleep(IDLE);
+        }
+        assert_eq!(fil.pop().unwrap(), 0.375, "mélangé en mono");
+        drop(fil);
+        std::thread::sleep(Duration::from_millis(50));
+        for _ in 0..100 {
+            let _ = entree.push(0.5);
+        }
+        assert_eq!(analysis.tap_lost(), 0);
+        assert!(analysis.tap().is_some(), "un autre peut se brancher");
+    }
+
+    #[test]
+    fn un_fil_qui_decroche_compte_ce_qu_il_perd() {
+        let (mut entree, sortie) = RingBuffer::new(4 * SR as usize);
+        let mut analysis = Analysis::spawn(sortie, 1, SR).unwrap();
+        let _fil = analysis.tap().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        for _ in 0..(3.0 * SR) as usize {
+            let _ = entree.push(0.1);
+        }
+        let debut = Instant::now();
+        while analysis.tap_lost() == 0 {
+            assert!(debut.elapsed().as_secs() < 5, "rien de perdu");
             std::thread::sleep(IDLE);
         }
     }

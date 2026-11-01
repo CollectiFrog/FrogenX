@@ -6,7 +6,8 @@
 //! fichier ouvert, rien ici ne doit empêcher un lancement : une ligne illisible
 //! est ignorée.
 
-use frogenx_output::StreamFormat;
+use crate::recording::{default_folder, RecordConfig};
+use frogenx_output::{RecordPreset, StreamFormat};
 use glam::UVec2;
 use std::fs;
 use std::path::Path;
@@ -34,6 +35,7 @@ pub struct MachineSettings {
     pub render: UVec2,
     pub rate: u32,
     pub streams: Vec<StreamConfig>,
+    pub recording: RecordConfig,
 }
 
 impl Default for MachineSettings {
@@ -42,6 +44,15 @@ impl Default for MachineSettings {
             render: DEFAULT_RENDER,
             rate: DEFAULT_RATE,
             streams: Vec::new(),
+            recording: RecordConfig {
+                preset: RecordPreset::default(),
+                format: StreamFormat {
+                    width: DEFAULT_RENDER.x,
+                    height: DEFAULT_RENDER.y,
+                    fps: DEFAULT_RATE,
+                },
+                folder: default_folder(|nom| std::env::var(nom).ok()),
+            },
         }
     }
 }
@@ -61,6 +72,25 @@ impl MachineSettings {
                 Some("cadence") => {
                     if let Some(rate) = nombre(mots.next()).filter(|r| (1..=MAX_RATE).contains(r)) {
                         reglages.rate = rate;
+                    }
+                }
+                Some("enregistrement") => {
+                    let lu = (|| {
+                        let preset = RecordPreset::from_word(mots.next()?)?;
+                        let format = StreamFormat {
+                            width: nombre(mots.next()).filter(|w| *w > 0)?,
+                            height: nombre(mots.next()).filter(|h| *h > 0)?,
+                            fps: nombre(mots.next()).filter(|f| (1..=MAX_RATE).contains(f))?,
+                        };
+                        Some((preset, format))
+                    })();
+                    let dossier = mots.collect::<Vec<_>>().join(" ");
+                    if let (Some((preset, format)), false) = (lu, dossier.is_empty()) {
+                        reglages.recording = RecordConfig {
+                            preset,
+                            format,
+                            folder: dossier.into(),
+                        };
                     }
                 }
                 Some("flux") => {
@@ -91,6 +121,16 @@ impl MachineSettings {
             let f = flux.format;
             texte += &format!("flux {} {} {} {}\n", f.width, f.height, f.fps, flux.name);
         }
+        let r = &self.recording;
+        let f = r.format;
+        texte += &format!(
+            "enregistrement {} {} {} {} {}\n",
+            r.preset.word(),
+            f.width,
+            f.height,
+            f.fps,
+            r.folder.display()
+        );
         texte
     }
 
@@ -103,6 +143,41 @@ impl MachineSettings {
     /// Rend `false` si ça n'a pas pu se faire : la performance n'en dépend pas.
     pub fn save(&self, dir: &Path) -> bool {
         fs::create_dir_all(dir).is_ok() && fs::write(dir.join(FILE_NAME), self.format()).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests_enregistrement {
+    use super::*;
+
+    #[test]
+    fn l_enregistrement_se_relit_dossier_compris() {
+        let r = MachineSettings {
+            recording: RecordConfig {
+                preset: RecordPreset::ProRes,
+                format: StreamFormat {
+                    width: 1280,
+                    height: 720,
+                    fps: 30,
+                },
+                folder: "D:/mes prises/concert".into(),
+            },
+            ..Default::default()
+        };
+        let relu = MachineSettings::parse(&r.format());
+        assert_eq!(relu.recording, r.recording);
+    }
+
+    #[test]
+    fn une_ligne_abimee_garde_l_enregistrement_par_defaut() {
+        let defaut = MachineSettings::default().recording;
+        for ligne in [
+            "enregistrement av1 1920 1080 60 D:/x",
+            "enregistrement h264 0 1080 60 D:/x",
+            "enregistrement h264 1920 1080 60",
+        ] {
+            assert_eq!(MachineSettings::parse(ligne).recording, defaut, "{ligne}");
+        }
     }
 }
 
@@ -132,6 +207,7 @@ mod tests {
                     },
                 },
             ],
+            ..Default::default()
         }
     }
 

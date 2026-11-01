@@ -1301,7 +1301,7 @@ impl FfmpegSink {
 | Préréglage | Encodeur | Fichier | Pour |
 |---|---|---|---|
 | `H264` | `h264_nvenc`, sinon `libx264` | `.mp4`, AAC | archiver un set : léger, lisible partout |
-| `ProRes` | `prores_ks`, 422 HQ | `.mov`, PCM | le montage : environ 1 Go/min en 1080p60, encodé sur le CPU |
+| `ProRes` | `prores_ks`, 422 HQ | `.mov`, PCM | le montage : environ 2 Go/min en 1080p60, encodé sur le CPU |
 
 Une sonde de quelques images dit au lancement, sur un thread, si NVENC répond vraiment :
 `ffmpeg -encoders` le liste même sans carte NVIDIA.
@@ -1309,7 +1309,9 @@ Une sonde de quelques images dit au lancement, sur un thread, si NVENC répond v
 **Le temps du fichier reste vrai.** Le flux brut n'a pas d'horloge : une frame perdue
 raccourcirait la vidéo, qui glisserait devant son son. `frames_due` compare le `t` de la frame à ce
 qui est déjà écrit, et répète la dernière image pour rattraper. Une prise qui perd des images
-reste donc de la bonne durée, et son statut le dit (`Degraded`).
+reste donc de la bonne durée, et son statut le dit (`Degraded`). Rien ne bouge à moins d'une image
+d'écart : le premier essai arrondissait, et la gigue du moteur répétait 8 images sur 400 d'une
+prise qui n'avait rien perdu.
 
 **Le son ne passe pas par le callback.** Il sort du thread d'analyse, déjà mélangé en mono : ce
 que FrogenX entend, sans deviner quelles entrées d'une carte à six forment une stéréo. Un anneau
@@ -1333,6 +1335,17 @@ cadence, le dossier, et `Enregistrer`. Le nom se choisit seul, `FrogenX 001.mp4`
 sur scène, on ne tape pas de nom. L'en-tête montre `REC 01:23` en or tant que ça tourne. Ces réglages
 appartiennent à la machine (`sorties.txt`), comme ceux des flux. `--record FICHIER` démarre une
 prise au lancement, et `sequence --video FICHIER` écrit un rendu offline sans perte.
+
+**Ce qui est vérifié, et comment.** Les lignes de commande, le rattrapage et les noms se testent
+sans ffmpeg. Le vrai ffmpeg écrit de vraies prises dans `crates/output/tests/record.rs`, et ces tests
+se sautent sans lui : H.264 et ProRes, images perdues rattrapées, taille qui change, assemblage,
+assemblage raté qui garde les deux parties. Le fil du son se teste sans carte. En vrai, par
+`--record` : une prise H.264 NVENC en 720p, moteur à 60,1 fps et 15,7 à 17,8 ms entre deux frames,
+avec le son réel de la carte ; une prise ProRes en 1080p60 de 7,7 s et 247 Mo, `REC` regardé sur une
+capture, fermeture propre, fichiers intermédiaires retirés. `sequence --video` écrit ses 240 images.
+
+**Pas encore essayés :** le calage du son à l'oreille ou à l'image, une longue prise, un disque
+plein, le menu à la vraie souris, 4K en ProRes, que le CPU ne tiendra sans doute pas à 60 i/s.
 
 **`PngSequenceSink`** reste : il écrit une image par frame, nommée d'après son `index`
 (`frame_000000.png`), sans dépendre de ffmpeg. L'ouverture crée le dossier et rend un `Result` ;
@@ -1824,7 +1837,7 @@ couches complètes empilées.
 | 7e | ✅ Sauvegarde des patchs (§19, §23.8) | **retrouver son travail** — *fait* : `cargo run`, menu `Fichier` |
 | 8 | ✅ Audio → features → `Signal`, BPM calculé, déclenchements (§7, §7.1) | **visuel audio-réactif** — *fait* : `cargo run`, clic droit sur un potentiomètre, `Suivre` |
 | 9 | ✅ Feedback : un clip qui relit l'image finale (§6.1) | **traînées, échos, complexité organique** — *fait* : `cargo run`, famille `Échos` de la bibliothèque |
-| 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
+| 10 | ✅ Enregistrement (readback + ffmpeg) | fichier vidéo — *fait* |
 | 11 | ✅ Flux réseau par Spout et KyberFrog (§8.5) ; NDI et Syphon restent à faire | intégration VJ |
 | 12 | `VideoLayer` | clips vidéo comme couches |
 | 13 | `scene3d` : maillages, caméra, lumières, culling | scène 3D comme source de clip |
@@ -1881,6 +1894,7 @@ qui les livre (skill `doc-sync`).
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets et leur ordre, sources sur l'opacité et la vitesse, zoom, place gardée dans le fichier (§23.10) |
 | Sélecteur de couleur | pastille de la couleur qui joue, champ et barre de teinte dans le panneau (§23.5) |
 | Spectrogramme | l'historique du spectre sur 2 à 30 s, en bande sous le tracé (§23.7) |
+| Enregistrement | H.264 ou ProRes par ffmpeg, avec le son, temps réel ou offline (§8.2) |
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |

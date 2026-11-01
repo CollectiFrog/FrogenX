@@ -17,10 +17,12 @@ pub mod analysis;
 pub mod analyzer;
 pub mod capture;
 pub mod features;
+pub mod recording;
 pub mod tempo;
 
 pub use analysis::Analysis;
 pub use analyzer::SpectrumAnalyzer;
 pub use capture::{AudioError, AudioInput};
 pub use features::FeatureAnalyzer;
+pub use recording::{AudioRecording, AudioTake};
 pub use tempo::TempoTracker;
