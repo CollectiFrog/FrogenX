@@ -85,8 +85,7 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   porte, et `composition` ne connaît pas wgpu.
 - `crates/composition` : la grille (§3bis) — `Deck`/`LayerGroup`/`Layer`/`Column`/
   `Clip`, `CrossFader`, `TempoController`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
-  de composition. Dépend de `core` et `shape`. `PlayMode` n'a
-  pas encore d'effet (§3bis.3).
+  de composition. Dépend de `core` et `shape`.
 - `crates/audio` : capture `cpal`, analyse en 128 bandes (crête, énergie, multi-résolution),
   features fixes et BPM (`features.rs`, `tempo.rs`, §7.1). Seul
   `capture.rs` touche à la carte son ; le reste se teste sur des signaux de synthèse. Dépend
@@ -95,7 +94,7 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   jusqu'au format de l'étape 7e. Sans GPU ni carte son.
 - `crates/patch` : le format de fichier (§19), `Composition` ↔ JSON, version et fixture,
   écriture par fichier temporaire. Seule crate à connaître le JSON ; `core` décrit un nœud
-  par une `Spec` neutre. Un nouveau `Signal` doit entrer dans `patch/src/signals.rs`.
+  par une `Spec` neutre. Un nouveau `Signal` doit entrer dans `composition/src/signals.rs`.
 - Un clip est une forme ou un écho (`ClipSource::Feedback`, §6.1) : l'écho relit l'image
   finale de la frame d'avant, et ses réglages s'expriment par seconde, jamais par frame.
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),

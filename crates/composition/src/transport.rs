@@ -59,13 +59,26 @@ impl Transport {
     }
 }
 
-/// N'a pas encore d'effet : une forme procédurale n'a pas de fin naturelle
-/// (§3bis.3). Prendra son sens avec les clips vidéo (étape 12).
+/// Ce qu'un clip fait au bout de sa durée (§3bis.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayMode {
     Loop,
+    /// La piste se vide.
     Once,
+    /// Son temps s'inverse à chaque extrémité.
     PingPong,
+}
+
+impl PlayMode {
+    pub const ALL: [PlayMode; 3] = [PlayMode::Loop, PlayMode::Once, PlayMode::PingPong];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PlayMode::Loop => "Boucle",
+            PlayMode::Once => "Une fois",
+            PlayMode::PingPong => "Aller-retour",
+        }
+    }
 }
 
 /// Pilote le tempo partagé par plusieurs clips et layers — §3bis.3.

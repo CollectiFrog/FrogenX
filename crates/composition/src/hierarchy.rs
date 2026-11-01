@@ -12,7 +12,7 @@
 use crate::analysis::AudioAnalysis;
 use crate::clip::Clip;
 use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
-use crate::transport::{sanitize_bpm, TempoController};
+use crate::transport::{sanitize_bpm, PlayMode, TempoController};
 use crate::trig::Trig;
 use frogenx_core::{AudioFeatures, Graph, Param, DEFAULT_BPM};
 use frogenx_shape::{BlendParams, MixKind};
@@ -61,6 +61,8 @@ pub struct Layer {
     active: Option<ClipId>,
     /// Le clip qui sort, et la part de la transition parcourue (§3bis.2).
     transition: Option<(ClipId, f32)>,
+    /// Le clip actif est lu à l'envers (§3bis.3).
+    reversed: bool,
 }
 
 impl Layer {
@@ -71,7 +73,13 @@ impl Layer {
             cells: Vec::new(),
             active: None,
             transition: None,
+            reversed: false,
         }
+    }
+
+    /// Le clip actif est-il lu à l'envers ?
+    pub fn is_reversed(&self) -> bool {
+        self.reversed
     }
 
     pub fn active_clip(&self) -> Option<ClipId> {
@@ -100,6 +108,7 @@ impl Layer {
         if self.active == Some(clip) {
             self.active = None;
             self.transition = None;
+            self.reversed = false;
         }
         if self.transition.is_some_and(|(sortant, _)| sortant == clip) {
             self.transition = None;
@@ -414,6 +423,7 @@ impl Composition {
         }
         let sortant = l.active.replace(clip).filter(|ancien| *ancien != clip);
         l.transition = None;
+        l.reversed = false;
         let progressif = self
             .clip(clip)
             .is_some_and(|c| c.transition_mix().is_some());
@@ -445,6 +455,38 @@ impl Composition {
         })
     }
 
+    /// Applique le mode de lecture des clips actifs, à lire **après** l'évaluation
+    /// de leur graphe : `Once` vide la piste, `PingPong` inverse son sens (§3bis.3).
+    pub fn apply_play_modes(&mut self) {
+        for id in self.all_layers() {
+            let lecture = self
+                .layer(id)
+                .and_then(|l| l.active)
+                .and_then(|a| self.clip(a))
+                .and_then(|c| c.position_beats());
+            let Some((mode, position, duree)) = lecture else {
+                continue;
+            };
+            match mode {
+                PlayMode::Loop => {}
+                PlayMode::Once => {
+                    if position >= duree {
+                        self.clear_layer(id);
+                    }
+                }
+                PlayMode::PingPong => {
+                    if let Some(piste) = self.layer_mut(id) {
+                        if position >= duree {
+                            piste.reversed = true;
+                        } else if position <= 0.0 {
+                            piste.reversed = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Fait avancer les transitions, en battements : elles suivent le tempo, et
     /// jamais la vitesse d'un clip, qui les bloquerait à l'arrêt (§3bis.2).
     pub fn advance_transitions(&mut self, dt: f64, bpm: f32) {
@@ -469,13 +511,15 @@ impl Composition {
         }
     }
 
-    /// Pose le clip actif sans le faire repartir : une grille restaurée reprend ce
-    /// qui jouait (§23.11). Sans effet si `clip` n'est pas sur `layer`.
-    pub fn set_active_clip(&mut self, layer: LayerId, clip: Option<ClipId>) {
+    /// Pose le clip actif sans le faire repartir, ni changer son sens : une grille
+    /// restaurée reprend ce qui jouait (§23.11). Sans effet si `clip` n'est pas sur
+    /// `layer`.
+    pub fn set_active_clip(&mut self, layer: LayerId, clip: Option<ClipId>, reversed: bool) {
         if let Some(l) = self.layer_mut(layer) {
             if clip.is_none_or(|c| l.holds(c)) {
                 l.active = clip;
                 l.transition = None;
+                l.reversed = reversed;
             }
         }
     }
@@ -487,6 +531,7 @@ impl Composition {
         };
         l.active = None;
         l.transition = None;
+        l.reversed = false;
         true
     }
 
@@ -706,6 +751,97 @@ mod tests {
         comp.trigger(layer, b);
         comp.advance_transitions(0.01, 120.0);
         assert_eq!(comp.outgoing_clip(layer), None);
+    }
+
+    /// Une piste qui joue un clip de 4 battements, avancé de `battements`.
+    fn lecture(mode: PlayMode) -> (Composition, LayerId, ClipId) {
+        let (mut comp, layer, a, _) = deux_clips(TransitionKind::Cut);
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), mode);
+        let clip = Clip::shape(g, Box::new(frogenx_shape::Ellipse::circle(0.5)), transport);
+        let c = comp.add_clip(layer, clip).unwrap();
+        comp.trigger(layer, c);
+        assert!(comp.clip(a).is_some());
+        (comp, layer, c)
+    }
+
+    /// Avance le graphe du clip, signe compris, comme `Engine`.
+    fn joue(comp: &mut Composition, layer: LayerId, clip: ClipId, secondes: f64) {
+        for _ in 0..(secondes * 10.0).round() as u32 {
+            let sens = if comp.layer(layer).unwrap().is_reversed() {
+                -1.0
+            } else {
+                1.0
+            };
+            let g = comp.clip_mut(clip).unwrap().graph_mut();
+            g.set_bpm(60.0);
+            g.eval_frame(0.0, 0.1 * sens);
+            comp.apply_play_modes();
+        }
+    }
+
+    #[test]
+    fn une_boucle_continue_au_dela_de_sa_duree() {
+        let (mut comp, layer, c) = lecture(PlayMode::Loop);
+        joue(&mut comp, layer, c, 9.0);
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), Some(c));
+        assert!(!comp.layer(layer).unwrap().is_reversed());
+    }
+
+    #[test]
+    fn une_lecture_unique_vide_la_piste_au_bout_de_sa_duree() {
+        let (mut comp, layer, c) = lecture(PlayMode::Once);
+        joue(&mut comp, layer, c, 3.5);
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), Some(c));
+        joue(&mut comp, layer, c, 1.0);
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), None);
+    }
+
+    #[test]
+    fn un_aller_retour_s_inverse_a_chaque_extremite() {
+        let (mut comp, layer, c) = lecture(PlayMode::PingPong);
+        joue(&mut comp, layer, c, 3.5);
+        assert!(!comp.layer(layer).unwrap().is_reversed());
+        joue(&mut comp, layer, c, 1.0);
+        assert!(comp.layer(layer).unwrap().is_reversed(), "au bout : retour");
+        joue(&mut comp, layer, c, 3.0);
+        assert!(
+            comp.layer(layer).unwrap().is_reversed(),
+            "pas encore à zéro"
+        );
+        joue(&mut comp, layer, c, 1.5);
+        assert!(!comp.layer(layer).unwrap().is_reversed(), "revenu : aller");
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), Some(c));
+    }
+
+    #[test]
+    fn redeclencher_remet_a_l_endroit() {
+        let (mut comp, layer, c) = lecture(PlayMode::PingPong);
+        joue(&mut comp, layer, c, 4.5);
+        assert!(comp.layer(layer).unwrap().is_reversed());
+        comp.trigger(layer, c);
+        assert!(!comp.layer(layer).unwrap().is_reversed());
+    }
+
+    #[test]
+    fn une_duree_sans_sens_reste_en_boucle() {
+        let (mut comp, layer, c) = lecture(PlayMode::Once);
+        let clip = comp.clip_mut(c).unwrap();
+        assert!(!clip.set_playback(PlayMode::Once, 0.0));
+        assert!(!clip.set_playback(PlayMode::Once, f32::NAN));
+        if let Transport::BpmSync { duration_beats, .. } = &mut clip.transport {
+            *duration_beats = Param::fixed(f32::NAN);
+        }
+        joue(&mut comp, layer, c, 9.0);
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), Some(c));
+    }
+
+    #[test]
+    fn la_lecture_d_un_clip_se_regle() {
+        let (mut comp, _, c) = lecture(PlayMode::Loop);
+        let clip = comp.clip_mut(c).unwrap();
+        assert!(clip.set_playback(PlayMode::PingPong, 8.0));
+        assert_eq!(clip.playback(), Some((PlayMode::PingPong, 8.0)));
     }
 
     #[test]

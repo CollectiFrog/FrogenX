@@ -23,7 +23,7 @@ use egui::{
 };
 use frogenx_composition::IdMap;
 use frogenx_composition::{
-    Clip, ClipId, ColumnId, Command, Composition, LayerId, Transport, TrigId,
+    Clip, ClipId, ColumnId, Command, Composition, LayerId, PlayMode, Transport, TrigId,
 };
 use frogenx_core::{Spectrum, SPECTRUM_BANDS};
 use frogenx_library::{presets, Family, PresetId};
@@ -508,14 +508,19 @@ pub fn loop_progress(clip: &Clip) -> Option<f32> {
     let Transport::BpmSync {
         position,
         duration_beats,
-        ..
+        play_mode,
     } = clip.transport
     else {
         return None;
     };
     let graphe = clip.graph();
     let duree = duration_beats.get(graphe);
-    (duree > 0.0).then(|| (graphe.value(position) / duree).rem_euclid(1.0))
+    let brut = graphe.value(position) / duree;
+    (duree > 0.0).then(|| match play_mode {
+        // Ces deux-là ne sortent pas de leur durée : au bout, la barre est pleine.
+        PlayMode::Once | PlayMode::PingPong => brut.clamp(0.0, 1.0),
+        PlayMode::Loop => brut.rem_euclid(1.0),
+    })
 }
 
 /// Une cellule : l'accent n'y désigne que le clip actif (§23.1), et son bas
@@ -1198,6 +1203,62 @@ mod tests {
         assert_eq!(etat.selected, None);
         assert_eq!(etat.zone_gesture, None);
         assert_eq!(etat.known_trigs, None);
+    }
+
+    #[test]
+    fn la_lecture_d_un_clip_se_choisit_dans_son_panneau() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Lecture")
+            .click();
+        h.run();
+        h.get_by_label("Aller-retour").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetClipPlayback {
+                clip: g.clips[0],
+                mode: PlayMode::PingPong,
+                beats: 4.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn la_duree_d_un_clip_se_regle_en_temps() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Lecture")
+            .set_value_accesskit(16.0);
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetClipPlayback {
+                clip: g.clips[0],
+                mode: PlayMode::Loop,
+                beats: 16.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn la_barre_d_un_clip_s_arrete_a_sa_fin_hors_d_une_boucle() {
+        let mut g = Graph::new();
+        let t = Transport::bpm_sync(&mut g, Param::fixed(1.0), PlayMode::Once);
+        let mut clip = Clip::shape(g, Box::new(Ellipse::circle(0.5)), t);
+        clip.graph_mut().set_bpm(60.0);
+        for _ in 0..15 {
+            clip.graph_mut().eval_frame(0.0, 0.1);
+        }
+        assert_eq!(loop_progress(&clip), Some(1.0));
+        assert!(clip.set_playback(PlayMode::Loop, 1.0));
+        assert!((loop_progress(&clip).unwrap() - 0.5).abs() < 0.01);
     }
 
     #[test]

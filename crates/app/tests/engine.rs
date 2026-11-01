@@ -1260,6 +1260,117 @@ fn annuler_pendant_une_transition_la_termine_net() {
     frames(&mut m, 2);
 }
 
+/// Un clip dont la lecture est `mode`, 2 temps à 120 BPM : une seconde.
+fn lecture(gpu: Gpu, mode: PlayMode) -> (Engine, LayerId, ClipId, Recu) {
+    let (composition, piste, rouge, _) = une_piste();
+    let (mut m, recu) = moteur(gpu, composition);
+    m.push(Command::SetClipPlayback {
+        clip: rouge,
+        mode,
+        beats: 2.0,
+    });
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    m.frame(0.0);
+    (m, piste, rouge, recu)
+}
+
+#[test]
+fn une_lecture_unique_efface_le_clip_de_l_image_a_sa_fin() {
+    let Some(gpu) = gpu() else { return };
+    let (mut m, piste, _, recu) = lecture(gpu, PlayMode::Once);
+    frames(&mut m, 50);
+    assert!(m
+        .composition()
+        .layer(piste)
+        .unwrap()
+        .active_clip()
+        .is_some());
+    frames(&mut m, 15);
+    assert!(m
+        .composition()
+        .layer(piste)
+        .unwrap()
+        .active_clip()
+        .is_none());
+    m.finish();
+    let frames = recu.0.lock().unwrap();
+    let centre = |i: usize| pixel(&frames[i], SIZE.x / 2, SIZE.y / 2);
+    assert_eq!(centre(50)[0], 255, "il joue");
+    assert_eq!(centre(frames.len() - 1)[3], 0, "il est parti");
+}
+
+#[test]
+fn un_aller_retour_fait_remonter_le_temps_du_clip() {
+    let Some(gpu) = gpu() else { return };
+    let (mut m, piste, rouge, _) = lecture(gpu, PlayMode::PingPong);
+    let position = |m: &Engine| {
+        let clip = m.composition().clip(rouge).unwrap();
+        let Transport::BpmSync { position, .. } = clip.transport else {
+            panic!("calé sur le tempo");
+        };
+        clip.graph().value(position)
+    };
+    frames(&mut m, 70);
+    assert!(m.composition().layer(piste).unwrap().is_reversed());
+    let (a, _) = (position(&m), frames(&mut m, 10));
+    assert!(position(&m) < a, "le temps redescend");
+    frames(&mut m, 60);
+    assert!(!m.composition().layer(piste).unwrap().is_reversed());
+    assert!(position(&m) >= 0.0);
+    assert!(m.diagnostics().iter().all(|d| d.is_clean()));
+}
+
+#[test]
+fn un_clip_du_catalogue_en_aller_retour_repasse_par_la_meme_forme() {
+    let Some(gpu) = gpu() else { return };
+    let grille = {
+        let mut c = Composition::new();
+        let deck = c.add_deck("test");
+        let groupe = c.add_layer_group(deck).unwrap();
+        let piste = c.add_layer(groupe).unwrap();
+        let preset = frogenx_library::find("Polygone").and_then(frogenx_library::preset);
+        let clip = c.add_clip(piste, preset.unwrap().build()).unwrap();
+        (c, piste, clip)
+    };
+    let (composition, piste, clip) = grille;
+    let (mut m, recu) = moteur(gpu, composition);
+    m.push(Command::SetClipPlayback {
+        clip,
+        mode: PlayMode::PingPong,
+        beats: 2.0,
+    });
+    m.push(Command::TriggerClip { layer: piste, clip });
+    // Une seconde à l'aller, une au retour : le départ, à une frame près.
+    frames(&mut m, 124);
+    m.finish();
+    let frames = recu.0.lock().unwrap();
+    let couverts = |f: &CpuFrame| {
+        f.pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count()
+    };
+    let (a, b) = (couverts(&frames[4]), couverts(frames.last().unwrap()));
+    let ecart = a.abs_diff(b) as f32 / a as f32;
+    assert!(ecart < 0.15, "{a} {b}");
+}
+
+#[test]
+fn annuler_ne_retourne_pas_un_clip_en_aller_retour() {
+    let Some(gpu) = gpu() else { return };
+    let (mut m, piste, _, _) = lecture(gpu, PlayMode::PingPong);
+    frames(&mut m, 70);
+    assert!(m.composition().layer(piste).unwrap().is_reversed());
+    m.undo();
+    let piste = m.composition().all_layers()[0];
+    assert!(m.composition().layer(piste).unwrap().is_reversed());
+}
+
 #[test]
 fn annuler_rend_le_reglage_d_avant_et_retablir_le_refait() {
     let Some(gpu) = gpu() else { return };

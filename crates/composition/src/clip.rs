@@ -10,7 +10,7 @@ use frogenx_shape::{
 
 use crate::crossfader::FadeCurve;
 use crate::position::PositionSignal;
-use crate::transport::Transport;
+use crate::transport::{PlayMode, Transport};
 
 /// Ce qu'un clip joue. La distinction se fait ici, pas sur le type `Clip`
 /// lui-même — un clip procédural module ses propres paramètres via son
@@ -461,6 +461,53 @@ impl Clip {
             },
         };
         true
+    }
+
+    /// Son mode de lecture et sa durée en battements, s'il est calé sur le tempo.
+    pub fn playback(&self) -> Option<(PlayMode, f32)> {
+        match self.transport {
+            Transport::BpmSync {
+                duration_beats,
+                play_mode,
+                ..
+            } => Some((play_mode, duration_beats.get(self.graph()))),
+            Transport::Timeline { .. } => None,
+        }
+    }
+
+    /// Ce que sa position impose à la piste cette frame : `None` si sa durée n'a
+    /// pas de sens, et le clip reste en boucle (§18.4).
+    pub(crate) fn position_beats(&self) -> Option<(PlayMode, f32, f32)> {
+        let Transport::BpmSync {
+            position,
+            duration_beats,
+            play_mode,
+        } = self.transport
+        else {
+            return None;
+        };
+        let duree = duration_beats.get(self.graph());
+        (duree.is_finite() && duree > 0.0).then(|| (play_mode, self.graph().value(position), duree))
+    }
+
+    /// Choisit sa lecture. Rend `false` si la durée n'a pas de sens, ou si le clip
+    /// n'est pas calé sur le tempo.
+    pub fn set_playback(&mut self, mode: PlayMode, beats: f32) -> bool {
+        if !beats.is_finite() || beats <= 0.0 {
+            return false;
+        }
+        match &mut self.transport {
+            Transport::BpmSync {
+                duration_beats,
+                play_mode,
+                ..
+            } => {
+                duration_beats.set_base(beats);
+                *play_mode = mode;
+                true
+            }
+            Transport::Timeline { .. } => false,
+        }
     }
 
     pub fn with_transition(mut self, transition: ClipTransition) -> Self {

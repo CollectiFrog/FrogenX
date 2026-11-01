@@ -137,7 +137,7 @@ impl Composition {
                         .position(|c| *c == actif && actif.is_some())?;
                     cases.get(colonne).copied().flatten()
                 });
-            self.set_active_clip(neuve, neuf);
+            self.set_active_clip(neuve, neuf, a.is_reversed());
 
             for (vieux, id) in &paires {
                 let source = ancienne.clip(*vieux).map(|c| c.graph());

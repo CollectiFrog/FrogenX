@@ -447,6 +447,17 @@ absent des fichiers. Une position à la limite suffit à le lire, et une durée 
 **Le geste.** Le panneau du clip porte une ligne `Lecture` : le mode et la durée en temps. Elle ne
 concerne que les clips calés sur le tempo. `Timeline` n'a ni durée ni mode.
 
+**Ce qui est vérifié, et comment.** Sans GPU : la piste vidée au bout de la durée, le sens inversé à
+chaque extrémité, le redéclenchement qui remet à l'endroit, une durée absurde qui reste en boucle.
+Dans le moteur : le clip qui quitte l'image à sa fin, un temps qui redescend, et un clip du catalogue
+qui retrouve sa forme de départ après un aller-retour. Annuler garde le sens de lecture. Le réglage
+se teste par clics simulés, et revient d'un fichier sans changer le format. **Pas encore essayés :**
+le réglage à la vraie souris, et le rendu d'un aller-retour regardé sur une image.
+
+**Non couvert.** `Once` termine en coupure : la transition du clip suivant ne s'applique pas à une
+piste qui se vide. La durée ne se module pas depuis l'interface, et une boucle ne fait pas repartir
+le clip de zéro : c'est sa barre qui repart.
+
 ### 3bis.4 `CrossFader`
 
 ```rust
@@ -1594,6 +1605,7 @@ qui les livre (skill `doc-sync`).
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
+| Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
 | Annuler et rétablir | 100 pas, un par geste, sans faire sauter l'image, Ctrl+Z et menu `Édition` (§23.11) |
 | Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
@@ -1602,19 +1614,18 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
-| 2 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
-| 3 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 4 | Recalage de la phase du tempo |
-| 5 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 6 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
-| 7 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
-| 8 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 9 | Scène 3D, étape 13 | | très grande |
-| 10 | Art-Net / DMX, étape 14 | | moyenne |
-| 11 | Scripting Lua, étape 15 | | moyenne |
-| 12 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 13 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
+| 2 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 3 | Recalage de la phase du tempo |
+| 4 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 5 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
+| 6 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
+| 7 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 8 | Scène 3D, étape 13 | | très grande |
+| 9 | Art-Net / DMX, étape 14 | | moyenne |
+| 10 | Scripting Lua, étape 15 | | moyenne |
+| 11 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 12 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 

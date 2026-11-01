@@ -356,6 +356,26 @@ fn une_transition_choisie_revient_avec_sa_duree() {
 }
 
 #[test]
+fn une_lecture_choisie_revient_avec_sa_duree() {
+    let (mut c, piste) = une_case(cercle());
+    let id = c.layer(piste).unwrap().cell(0).unwrap();
+    assert!(c
+        .clip_mut(id)
+        .unwrap()
+        .set_playback(PlayMode::PingPong, 16.0));
+    let copie = relu(&c);
+    let id = copie
+        .layer(copie.layers_de_test()[0])
+        .unwrap()
+        .cell(0)
+        .unwrap();
+    assert_eq!(
+        copie.clip(id).unwrap().playback(),
+        Some((PlayMode::PingPong, 16.0))
+    );
+}
+
+#[test]
 fn le_suivi_du_tempo_revient() {
     let mut c = starter();
     assert!(!relu(&c).tempo_follow);

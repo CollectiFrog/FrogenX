@@ -13,7 +13,7 @@ use crate::widgets::{floating_panel, knob, knob_with_menu, Knob, Modulation, KNO
 use crate::{theme, FrameView, UiState};
 use egui::{Rect, RichText, Ui};
 use frogenx_composition::{
-    Clip, ClipId, ClipParam, Command, Layer, LayerId, TransitionKind, MAX_CLIP_SPEED,
+    Clip, ClipId, ClipParam, Command, Layer, LayerId, PlayMode, TransitionKind, MAX_CLIP_SPEED,
 };
 use frogenx_core::FeatureKind;
 use std::ops::Range;
@@ -185,6 +185,43 @@ fn transition_row(ui: &mut Ui, id: ClipId, clip: &Clip, commands: &mut Vec<Comma
     }
 }
 
+/// Ce que fait le clip au bout de sa durée, et cette durée.
+fn playback_row(ui: &mut Ui, id: ClipId, clip: &Clip, commands: &mut Vec<Command>) {
+    let Some((actuel, beats)) = clip.playback() else {
+        return;
+    };
+    let nom = ui.label(RichText::new("Lecture").size(11.0).color(theme::TEXT_DIM));
+    egui::ComboBox::from_id_salt(("lecture", id))
+        .selected_text(actuel.label())
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for mode in PlayMode::ALL {
+                if ui.selectable_label(mode == actuel, mode.label()).clicked() {
+                    commands.push(Command::SetClipPlayback {
+                        clip: id,
+                        mode,
+                        beats,
+                    });
+                }
+            }
+        })
+        .response
+        .labelled_by(nom.id);
+    let mut duree = beats;
+    let reglage = egui::DragValue::new(&mut duree)
+        .range(0.25..=256.0)
+        .speed(0.05)
+        .suffix(" temps")
+        .max_decimals(2);
+    if ui.add(reglage).labelled_by(nom.id).changed() {
+        commands.push(Command::SetClipPlayback {
+            clip: id,
+            mode: actuel,
+            beats: duree,
+        });
+    }
+}
+
 /// Les réglages propres au clip et à sa piste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipKnob {
@@ -252,6 +289,7 @@ pub fn floating(
                     }
                 });
             });
+            ui.horizontal(|ui| playback_row(ui, id, clip, commands));
             ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
             let mut places = vec![CLIP_KNOBS.len()];

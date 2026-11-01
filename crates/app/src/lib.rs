@@ -520,19 +520,30 @@ impl Engine {
             let actif = self.composition.layer(*layer).and_then(|l| l.active_clip());
             // Un clip qui sort continue de jouer jusqu'à la fin de la transition.
             let sortant = self.composition.outgoing_clip(*layer);
+            let envers = self
+                .composition
+                .layer(*layer)
+                .is_some_and(|l| l.is_reversed());
             for id in actif.into_iter().chain(sortant) {
                 // Lue dans le graphe de composition, déjà évalué (§3bis.2).
                 let vitesse = self.composition.clip(id).map_or(1.0, |clip| {
                     sanitize_speed(clip.speed.get(self.composition.graph()))
                 });
+                // Le sens ne vaut que pour le clip actif (§3bis.3).
+                let sens = if envers && Some(id) == actif {
+                    -1.0
+                } else {
+                    1.0
+                };
                 if let Some(clip) = self.composition.clip_mut(id) {
                     let graph = clip.graph_mut();
                     graph.set_bpm(self.bpm);
                     graph.set_audio(self.audio.clone());
-                    graph.eval_frame(t, dt * vitesse as f64);
+                    graph.eval_frame(t, sens * dt * vitesse as f64);
                 }
             }
         }
+        self.composition.apply_play_modes();
         self.sync_tracks();
 
         let ctx = Ctx::new(dt, self.clock.frame(), &self.audio).with_bpm(self.bpm);

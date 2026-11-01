@@ -45,7 +45,10 @@ pub(crate) fn coeff(tau: f32, dt: f32) -> f32 {
     if tau <= 0.0 || !tau.is_finite() {
         return 1.0;
     }
-    if dt <= 0.0 {
+    // Un clip lu à l'envers a un `dt` négatif : le lissage suit quand même son
+    // entrée, vers l'avant (§3bis.3).
+    let dt = dt.abs();
+    if dt == 0.0 {
         return 0.0;
     }
     1.0 - (-dt / tau).exp()
