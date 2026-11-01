@@ -88,7 +88,13 @@ fn graph(file: &[FileNode], g: &mut Graph) -> Result<(Vec<NodeId>, Vec<Spec>), P
             .iter()
             .map(|d| node(&nodes, *d))
             .collect::<Result<_, _>>()?;
-        nodes.push(g.add_with_deps(signal, deps)?);
+        let id = g.add_with_deps(signal, deps)?;
+        if let Some(place) = n.place {
+            if !g.set_place(id, place) {
+                return Err(invalid(format!("place {place:?}")));
+            }
+        }
+        nodes.push(id);
         specs.push(description);
     }
     Ok((nodes, specs))

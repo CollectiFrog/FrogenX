@@ -77,6 +77,9 @@ pub struct FileNode {
     pub deps: Vec<u32>,
     #[serde(default)]
     pub fields: BTreeMap<String, FileValue>,
+    /// Sa place dans l'éditeur, s'il a été déplacé (§23.10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

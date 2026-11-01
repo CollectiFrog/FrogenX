@@ -1831,7 +1831,7 @@ qui les livre (skill `doc-sync`).
 | Modulation par le son | source audio au clic droit de chaque potentiomètre (§7.1) |
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
-| Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
+| Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets et leur ordre, sources sur l'opacité et la vitesse, zoom, place gardée dans le fichier (§23.10) |
 | Sélecteur de couleur | pastille de la couleur qui joue, champ et barre de teinte dans le panneau (§23.5) |
 | Spectrogramme | l'historique du spectre sur 2 à 30 s, en bande sous le tracé (§23.7) |
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
@@ -3679,8 +3679,21 @@ câblage complet se relit d'un fichier, qui reste stable. Sur la vraie fenêtre 
 60 fps et 16,1 à 17,3 ms, l'éditeur présente chacune des 300 frames, et sa croix le ferme sans
 toucher à l'application. L'affichage de l'onglet `Régie` a été regardé sur une capture.
 
-**Pas encore essayés :** tirer un fil à la vraie souris, le menu du fond, et l'onglet `Clip` sur
-une capture. Le fil s'y dessine par clics simulés seulement.
+La place se relit d'un fichier et se perd avec le nœud ; un glissé à 200 % déplace de moitié moins
+sur le canevas, par clics simulés. L'ordre des effets s'annule, et une modulation suit son effet.
+Une capture de la vraie fenêtre montre l'onglet `Régie` à 75 %, fils et champs alignés, et les
+flèches du panneau du clip.
+
+**Pièges.** Une couche sans `Area` doit se déclarer par `Areas::set_state`, `interactable` à vrai,
+sinon elle ne reçoit aucun clic. `set_sublayer` retire ses enfants de l'ordre : sans parent connu,
+ils disparaissent, et une couche ajoutée après le fond passe déjà dessus. AccessKit ignore la
+transformation : la couche zoome donc autour de l'ancre, ce qui en fait l'identité à 100 %, et un
+test lit ses rectangles comme avant. La police embarquée n'a pas `←` ni `→`, comme elle n'avait pas
+`📋` (§23.5) : un glyphe absent panique dans les tests, et les flèches sont `<` et `>`.
+
+**Pas encore essayés :** tirer un fil à la vraie souris, le menu du fond, la molette et le
+déplacement d'un nœud à la vraie souris, et l'onglet `Clip` sur une capture. Le fil s'y dessine par
+clics simulés seulement.
 
 **Non couvert.** Une opacité ou une
 vitesse ne reçoit qu'une source de la régie, jamais d'un clip : c'est le §3.
@@ -3733,8 +3746,8 @@ les deux fenêtres. L'application tourne à 60 fps avec l'éditeur ouvert.
 
 **Non couvert.** Annuler une colonne retirée rend ses clips neufs, phases à zéro, puisqu'ils
 n'existent plus dans la grille qui joue. Une grille qui contiendrait un `Signal` absent de la table
-ne s'enregistre pas, donc ne s'annule pas : c'est sans effet, et sans panique. La place des nœuds
-n'est pas concernée, puisqu'elle n'est pas dans le fichier.
+ne s'enregistre pas, donc ne s'annule pas : c'est sans effet, et sans panique. La place d'un nœud
+revient avec l'image restaurée, mais ne fait pas un pas à elle seule (§23.10).
 
 ---
 

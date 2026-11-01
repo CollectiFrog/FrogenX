@@ -123,7 +123,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
 **Prochaine étape : à choisir au §12.1**, le backlog à tenir à jour. L'éditeur de nœuds est fait
-(§23.10) : tout câblage passe par `Composition::connect` et ses commandes. Annuler passe par
+(§23.10) : tout câblage passe par `Composition::connect` et ses commandes, et la place d'un nœud
+vit dans son `Graph`. Annuler passe par
 `Engine::undo` et des images de la grille (§23.11) : une nouvelle commande est couverte d'office,
 mais elle doit recevoir son nom dans `Command::label`.
 Le BPM et les features n'ont pas encore été essayés sur de la vraie musique (§7.1).

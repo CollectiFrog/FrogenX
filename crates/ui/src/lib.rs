@@ -999,6 +999,7 @@ mod tests {
     use frogenx_composition::{Clip, PlayMode, Transport, TrigSlot, TrigTarget};
     use frogenx_core::{AmpScale, AnalysisMethod, Constant, FreqScale, Graph, Param};
     use frogenx_library::find;
+    use frogenx_shape::EffectKind;
     use frogenx_shape::{ColorParam, Ellipse, ShapeStyle};
 
     struct Grille {
@@ -2549,6 +2550,34 @@ mod tests {
     fn le_nom_du_fichier_reste_centre_tant_que_le_tempo_le_laisse() {
         assert_eq!(title_center(700.0, 200.0, 500.0), 700.0);
         assert_eq!(title_center(700.0, 400.0, 560.0), 760.0);
+    }
+
+    #[test]
+    fn les_fleches_d_une_carte_changent_l_ordre_des_effets() {
+        use egui_kittest::kittest::NodeT;
+        let mut g = grille();
+        let clip = g.clips[0];
+        g.composition.add_effect(clip, EffectKind::Smooth);
+        g.composition.add_effect(clip, EffectKind::Deform);
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+
+        let droite = h.get_all_by_label(">").next().unwrap();
+        assert!(!droite.accesskit_node().is_disabled());
+        droite.click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::MoveEffect {
+                clip,
+                index: 0,
+                to: 1
+            }]
+        );
+        let gauche = h.get_all_by_label("<").next().unwrap();
+        assert!(gauche.accesskit_node().is_disabled(), "déjà au début");
     }
 
     #[test]

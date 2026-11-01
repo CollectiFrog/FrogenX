@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 /// La version écrite par ce programme. Tout changement du format l'incrémente,
 /// avec sa migration et sa fixture (§19.2).
-pub const CURRENT_VERSION: u64 = 5;
+pub const CURRENT_VERSION: u64 = 6;
 /// Plus de colonnes que ça n'est pas une grille : un fichier abîmé.
 pub const MAX_COLUMNS: usize = 4096;
 /// Refusé avant d'allouer quoi que ce soit.
@@ -117,6 +117,7 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
             2 => migrate_2_to_3(data),
             3 => migrate_3_to_4(data),
             4 => migrate_4_to_5(data),
+            5 => migrate_5_to_6(data),
             _ => return Err(PatchError::UnknownVersion(version)),
         };
         version += 1;
@@ -154,6 +155,13 @@ fn migrate_3_to_4(mut data: Value) -> Value {
 fn migrate_4_to_5(mut data: Value) -> Value {
     data["quantize"] = Value::from("off");
     data["version"] = Value::from(5);
+    data
+}
+
+/// La version 6 ajoute la place des nœuds (§23.10), facultative : un fichier v5 n'a
+/// rien à changer.
+fn migrate_5_to_6(mut data: Value) -> Value {
+    data["version"] = Value::from(6);
     data
 }
 
@@ -210,8 +218,8 @@ mod tests {
     fn une_version_plus_recente_est_refusee_sans_deviner() {
         let json = format!("{{\"version\": {}}}", CURRENT_VERSION + 1);
         let erreur = from_json(&json).err().expect("refusé");
-        assert!(matches!(erreur, PatchError::UnknownVersion(6)));
-        assert!(erreur.to_string().contains("version 6"));
+        assert!(matches!(erreur, PatchError::UnknownVersion(7)));
+        assert!(erreur.to_string().contains("version 7"));
     }
 
     #[test]

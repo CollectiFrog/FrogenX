@@ -14,6 +14,7 @@ const V2: &str = include_str!("fixtures/patch_v2.json");
 const V3: &str = include_str!("fixtures/patch_v3.json");
 const V4: &str = include_str!("fixtures/patch_v4.json");
 const V5: &str = include_str!("fixtures/patch_v5.json");
+const V6: &str = include_str!("fixtures/patch_v6.json");
 
 fn pistes(c: &Composition) -> Vec<String> {
     let mut ids = Vec::new();
@@ -107,11 +108,23 @@ fn une_quantification_inconnue_est_refusee() {
     assert!(from_json(&texte).is_err());
 }
 
-/// Tant que `CURRENT_VERSION` vaut 5, relire puis réécrire la fixture rend le
+#[test]
+fn les_noeuds_d_un_fichier_v5_restent_places_d_office() {
+    let c = from_json(V5).unwrap();
+    assert!(c.graph().nodes().iter().all(|n| n.place.is_none()));
+}
+
+#[test]
+fn la_fixture_v6_garde_la_place_d_un_noeud() {
+    let c = from_json(V6).unwrap();
+    assert_eq!(c.graph().nodes()[0].place, Some([320.0, 48.0]));
+}
+
+/// Tant que `CURRENT_VERSION` vaut 6, relire puis réécrire la fixture rend le
 /// même contenu. Sinon, le format a changé sans changer de version.
 #[test]
 fn le_format_n_a_pas_change_sans_changer_de_version() {
-    if CURRENT_VERSION != 5 {
+    if CURRENT_VERSION != 6 {
         return;
     }
     let sans_meta = |texte: &str| {
@@ -119,6 +132,6 @@ fn le_format_n_a_pas_change_sans_changer_de_version() {
         v.as_object_mut().unwrap().remove("meta");
         v
     };
-    let reecrit = to_json(&from_json(V5).unwrap()).unwrap();
-    assert_eq!(sans_meta(&reecrit), sans_meta(V5));
+    let reecrit = to_json(&from_json(V6).unwrap()).unwrap();
+    assert_eq!(sans_meta(&reecrit), sans_meta(V6));
 }

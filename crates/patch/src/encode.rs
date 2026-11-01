@@ -99,6 +99,7 @@ fn graph(g: &Graph) -> Result<(Vec<FileNode>, Positions), PatchError> {
                 // Une dépendance vers un nœud retiré n'attend plus rien.
                 deps: n.deps.iter().filter_map(|d| positions.of(*d)).collect(),
                 fields: fields(&n.spec, &positions)?,
+                place: n.place,
             })
         })
         .collect::<Result<_, PatchError>>()?;

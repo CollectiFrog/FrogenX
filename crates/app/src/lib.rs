@@ -558,6 +558,8 @@ impl Engine {
             if self.composition.apply(command, instant) {
                 if command.is_edit() {
                     self.dirty = true;
+                }
+                if command.is_step() {
                     self.steps.note(command.label());
                 }
             } else {

@@ -432,6 +432,25 @@ impl Composition {
         }
     }
 
+    /// Déplace un effet dans la chaîne. Ses modulations le suivent : elles vivent
+    /// dans ses `Param`.
+    pub fn move_effect(&mut self, clip: ClipId, index: usize, to: usize) -> bool {
+        match self.clip_mut(clip) {
+            Some(c) if index < c.effects.len() && to < c.effects.len() && index != to => {
+                let effet = c.effects.remove(index);
+                c.effects.insert(to, effet);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Range un nœud dans l'éditeur (§23.10).
+    pub fn set_node_place(&mut self, scope: GraphScope, node: NodeId, place: [f32; 2]) -> bool {
+        self.graph_of_mut(scope)
+            .is_some_and(|g| g.set_place(node, place))
+    }
+
     pub fn remove_effect(&mut self, clip: ClipId, index: usize) -> bool {
         match self.clip_mut(clip) {
             Some(c) if index < c.effects.len() => {
@@ -440,6 +459,112 @@ impl Composition {
             }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_ordre {
+    use super::*;
+    use crate::clip::Clip;
+    use crate::command::Command;
+    use crate::transport::{PlayMode, Transport};
+    use frogenx_core::{Constant, Graph, Param};
+    use frogenx_shape::Ellipse;
+
+    fn clip_a_trois_effets() -> (Composition, ClipId) {
+        let mut c = Composition::new();
+        let deck = c.add_deck("A");
+        let groupe = c.add_layer_group(deck).unwrap();
+        let piste = c.add_layer(groupe).unwrap();
+        let colonne = c.add_column();
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+        let clip = Clip::shape(g, Box::new(Ellipse::circle(0.5)), transport);
+        let id = c.place_clip(piste, colonne, clip).unwrap();
+        for kind in [EffectKind::ALL[0], EffectKind::ALL[1], EffectKind::ALL[2]] {
+            assert!(c.add_effect(id, kind));
+        }
+        (c, id)
+    }
+
+    fn noms(c: &Composition, id: ClipId) -> Vec<String> {
+        let clip = c.clip(id).unwrap();
+        clip.effects.iter().map(|e| e.kind().to_string()).collect()
+    }
+
+    #[test]
+    fn un_effet_change_de_place_dans_la_chaine() {
+        let (mut c, id) = clip_a_trois_effets();
+        let avant = noms(&c, id);
+        assert!(c.apply(
+            Command::MoveEffect {
+                clip: id,
+                index: 0,
+                to: 2
+            },
+            0.0
+        ));
+        let apres = noms(&c, id);
+        assert_eq!(
+            apres,
+            [avant[1].clone(), avant[2].clone(), avant[0].clone()]
+        );
+    }
+
+    #[test]
+    fn une_place_hors_de_la_chaine_est_refusee() {
+        let (mut c, id) = clip_a_trois_effets();
+        let avant = noms(&c, id);
+        assert!(!c.move_effect(id, 0, 3));
+        assert!(!c.move_effect(id, 3, 0));
+        assert!(!c.move_effect(id, 1, 1));
+        assert_eq!(noms(&c, id), avant);
+    }
+
+    #[test]
+    fn la_modulation_d_un_effet_le_suit() {
+        let (mut c, id) = clip_a_trois_effets();
+        let source = c
+            .clip_mut(id)
+            .unwrap()
+            .graph_mut()
+            .add(Box::new(Constant(1.0)));
+        let slot = ParamSlot::Effect {
+            effect: 0,
+            param: 0,
+        };
+        let cible = ParamTarget::ClipParam { clip: id, slot };
+        assert!(c.connect(cible, source));
+        assert!(c.move_effect(id, 0, 2));
+        let deplace = ParamSlot::Effect {
+            effect: 2,
+            param: 0,
+        };
+        let lu = c.target_param(ParamTarget::ClipParam {
+            clip: id,
+            slot: deplace,
+        });
+        assert_eq!(lu.unwrap().source(), Some(source));
+    }
+
+    #[test]
+    fn ranger_un_noeud_modifie_le_fichier_sans_pas_d_annulation() {
+        let (mut c, id) = clip_a_trois_effets();
+        let scope = GraphScope::Clip(id);
+        let node = c
+            .clip_mut(id)
+            .unwrap()
+            .graph_mut()
+            .add(Box::new(Constant(1.0)));
+        let range = Command::SetNodePlace {
+            scope,
+            node,
+            place: [40.0, 12.0],
+        };
+        assert!(range.is_edit() && !range.is_step());
+        assert!(c.apply(range, 0.0));
+        assert_eq!(c.graph_of(scope).unwrap().place(node), Some([40.0, 12.0]));
+        assert!(Command::AddColumn.is_step());
     }
 }
 

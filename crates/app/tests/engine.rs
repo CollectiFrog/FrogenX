@@ -1241,6 +1241,51 @@ fn un_recalage_rejoint_le_temps_sans_toucher_au_tempo_ni_au_fichier() {
 }
 
 #[test]
+fn ranger_un_noeud_marque_le_fichier_sans_pas_d_annulation() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, rouge, _) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    let scope = GraphScope::Clip(rouge);
+    let node = m.composition().graph_of(scope).unwrap().nodes()[0].id;
+    m.push(Command::SetNodePlace {
+        scope,
+        node,
+        place: [12.0, 34.0],
+    });
+    frames(&mut m, 20);
+    assert!(m.is_dirty());
+    assert_eq!(m.undo_label(), None);
+    m.finish();
+}
+
+#[test]
+fn annuler_l_ordre_des_effets_le_rend() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, _, rouge, _) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    for kind in [EffectKind::Smooth, EffectKind::Deform] {
+        m.push(Command::AddEffect { clip: rouge, kind });
+    }
+    frames(&mut m, 20);
+    let noms = |m: &Engine, clip| -> Vec<String> {
+        let c = m.composition().clip(clip).unwrap();
+        c.effects.iter().map(|e| e.kind().to_string()).collect()
+    };
+    let avant = noms(&m, rouge);
+    m.push(Command::MoveEffect {
+        clip: rouge,
+        index: 0,
+        to: 1,
+    });
+    frames(&mut m, 20);
+    assert_eq!(m.undo_label(), Some("Ordre des effets"));
+    assert_ne!(noms(&m, rouge), avant);
+    let fait = m.undo().expect("un pas à annuler");
+    assert_eq!(noms(&m, fait.map.clip(rouge).unwrap()), avant);
+    m.finish();
+}
+
+#[test]
 fn annuler_garde_le_temps() {
     let Some(gpu) = gpu() else { return };
     let (composition, _, _, _) = une_piste();

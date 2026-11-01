@@ -5,9 +5,10 @@
 //! calcule à part ([`boxes`], [`auto_positions`]), sans egui : ça se teste seul.
 
 use crate::{theme, HistoryRequest};
+use egui::emath::TSTransform;
 use egui::{
-    Align2, Color32, DragValue, FontId, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, Ui,
-    UiBuilder, Vec2, WidgetInfo,
+    Align2, Button, Color32, DragValue, FontId, LayerId, Pos2, Rect, Response, RichText, Sense,
+    Shape, Stroke, Ui, UiBuilder, Vec2, WidgetInfo,
 };
 use frogenx_composition::{
     ClipId, ClipParam, ClipSource, Command, Composition, GraphScope, IdMap, NodeKind, NodeValue,
@@ -24,6 +25,10 @@ pub const TITLE_HEIGHT: f32 = 26.0;
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const COLUMN_STEP: f32 = 290.0;
 const BOX_GAP: f32 = 18.0;
+pub const MIN_ZOOM: f32 = 0.25;
+pub const MAX_ZOOM: f32 = 2.0;
+/// Ce que vaut un point de molette, en exposant du zoom.
+const WHEEL_ZOOM: f32 = 0.002;
 const MARGIN: f32 = 20.0;
 /// Le rayon d'un port, et la distance où un fil s'y accroche.
 const PORT_RADIUS: f32 = 5.0;
@@ -44,41 +49,59 @@ pub enum Tab {
     Regie,
 }
 
-/// Ce que l'éditeur se rappelle. La place des nœuds n'est pas dans le fichier
-/// (§23.10) : un patch décrit ce qui joue, pas sa mise en page.
-#[derive(Debug, Clone, Default)]
+/// Un nœud qu'on déplace : sa place reste ici jusqu'à ce que le graphe l'ait reçue.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Moving {
+    scope: GraphScope,
+    node: NodeId,
+    place: Pos2,
+}
+
+/// Ce que l'éditeur se rappelle. La place des nœuds est dans leur graphe
+/// (§23.10) : ici ne reste que le regard, qui n'appartient pas au fichier.
+#[derive(Debug, Clone)]
 pub struct EditorState {
     pub tab: Tab,
     pub pan: Vec2,
-    positions: HashMap<(GraphScope, NodeId), Pos2>,
+    pub zoom: f32,
+    moving: Option<Moving>,
     /// Le fil en cours de tirage : la sortie d'où il part.
     dragging: Option<NodeId>,
     /// Annuler ou rétablir, demandé cette frame (§23.11).
     pub history: Option<HistoryRequest>,
 }
 
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            tab: Tab::default(),
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+            moving: None,
+            dragging: None,
+            history: None,
+        }
+    }
+}
+
 impl EditorState {
-    /// La grille a été restaurée : les nœuds d'un clip gardent leur place.
-    pub fn remap(&mut self, map: &IdMap) {
-        let places = std::mem::take(&mut self.positions);
-        self.positions = places
-            .into_iter()
-            .filter_map(|((scope, node), p)| {
-                let scope = match scope {
-                    GraphScope::Clip(clip) => GraphScope::Clip(map.clip(clip)?),
-                    regie => regie,
-                };
-                Some(((scope, node), p))
-            })
-            .collect();
-        self.dragging = None;
+    /// La grille a été restaurée : ce qu'on tenait visait les anciens clips.
+    pub fn remap(&mut self, _map: &IdMap) {
+        self.forget_grid();
     }
 
     /// La grille a été remplacée : les identifiants ne désignent plus rien.
     pub fn forget_grid(&mut self) {
-        self.positions.clear();
+        self.moving = None;
         self.dragging = None;
     }
+}
+
+/// Le regard après un zoom de `factor` : le point sous le pointeur ne bouge pas.
+/// `pointer` est compté depuis le coin du canevas.
+pub fn zoom_at(pan: Vec2, zoom: f32, pointer: Vec2, factor: f32) -> (Vec2, f32) {
+    let neuf = (zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+    (pointer - (pointer - pan) * (neuf / zoom), neuf)
 }
 
 /// Ce qu'`app` prête à l'éditeur pour une frame.
@@ -640,11 +663,13 @@ struct Drawn {
 fn draw_box(
     ui: &mut Ui,
     state: &mut EditorState,
+    c: &Composition,
     scope: GraphScope,
     boite: &NodeBox,
-    origine: Pos2,
+    (place, ancre): (Pos2, Vec2),
     commands: &mut Vec<Command>,
 ) -> Drawn {
+    let origine = place + ancre;
     let rect = Rect::from_min_size(origine, egui::vec2(BOX_WIDTH, boite.height()));
     ui.painter().rect_filled(rect, 6.0, theme::GLASS);
     ui.painter().rect_stroke(
@@ -664,13 +689,15 @@ fn draw_box(
     barre.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, boite.title.clone()));
     if let Some(node) = boite.node {
         if barre.dragged() {
-            state
-                .positions
-                .entry((scope, node))
-                .or_insert(origine - state.pan);
-            if let Some(p) = state.positions.get_mut(&(scope, node)) {
-                *p += barre.drag_delta();
-            }
+            let place = place + barre.drag_delta();
+            state.moving = Some(Moving { scope, node, place });
+        }
+        if barre.drag_stopped() {
+            commands.push(Command::SetNodePlace {
+                scope,
+                node,
+                place: place.into(),
+            });
         }
     }
     ui.painter().text(
@@ -700,7 +727,20 @@ fn draw_box(
         }
         Removal::Effect(index) => {
             if let GraphScope::Clip(clip) = scope {
+                let chaine = c.clip(clip).map_or(0, |c| c.effects.len());
                 barre.context_menu(|ui| {
+                    let reculer = ui.add_enabled(index > 0, Button::new("Reculer"));
+                    if reculer.clicked() {
+                        let to = index - 1;
+                        commands.push(Command::MoveEffect { clip, index, to });
+                        ui.close();
+                    }
+                    let avancer = ui.add_enabled(index + 1 < chaine, Button::new("Avancer"));
+                    if avancer.clicked() {
+                        let to = index + 1;
+                        commands.push(Command::MoveEffect { clip, index, to });
+                        ui.close();
+                    }
                     if ui.button("Retirer l'effet").clicked() {
                         commands.push(Command::RemoveEffect { clip, index });
                         ui.close();
@@ -832,26 +872,66 @@ fn canvas(
     if fond.dragged() {
         state.pan += fond.drag_delta();
     }
+    let pointeur = ui
+        .input(|i| i.pointer.hover_pos())
+        .filter(|p| zone.contains(*p));
+    if let Some(p) = pointeur {
+        // La molette seule, ou Ctrl et la molette : le canevas n'a rien à faire défiler.
+        let facteur = ui.input(|i| i.zoom_delta() * (i.smooth_scroll_delta.y * WHEEL_ZOOM).exp());
+        if facteur != 1.0 {
+            (state.pan, state.zoom) = zoom_at(state.pan, state.zoom, p - zone.min, facteur);
+        }
+    }
     let effets = matches!(
         scope,
         GraphScope::Clip(id) if c.clip(id).is_some_and(|clip| matches!(clip.source, ClipSource::Shape { .. }))
     );
     fond.context_menu(|ui| add_menu(ui, c, scope, effets, commands));
 
+    // Une couche transformée, comme `egui::Scene` : aucun champ n'a à connaître le
+    // zoom. Elle zoome autour de l'ancre : à 100 %, c'est l'identité.
+    let ancre = zone.min.to_vec2() + state.pan;
+    let vers_ecran = TSTransform::new(ancre * (1.0 - state.zoom), state.zoom);
+    let calque = LayerId::new(ui.layer_id().order, ui.scope_id().with("noeuds"));
+    ui.ctx().set_transform_layer(calque, vers_ecran);
+    let visible = vers_ecran.inverse() * zone;
+    // Sans `Area`, la couche doit se déclarer pour recevoir la souris.
+    ui.ctx().memory_mut(|m| {
+        m.areas_mut().set_state(
+            calque,
+            egui::AreaState {
+                pivot_pos: Some(visible.min),
+                pivot: Align2::LEFT_TOP,
+                size: Some(visible.size()),
+                interactable: true,
+                last_became_visible_at: None,
+            },
+        );
+    });
+    let mut canevas = ui.new_child(UiBuilder::new().layer_id(calque).max_rect(visible));
+    let ui = &mut canevas;
+    ui.set_clip_rect(visible);
+
+    let graphe = c.graph_of(scope);
+    // Le graphe a reçu la place : elle n'a plus à rester ici.
+    if let Some(m) = state.moving {
+        let recue = graphe.and_then(|g| g.place(m.node)) == Some(m.place.into());
+        if recue && !ui.input(|i| i.pointer.any_down()) {
+            state.moving = None;
+        }
+    }
     let boites = boxes(c, scope);
     let auto = auto_positions(&boites);
-    let origine = zone.min.to_vec2() + state.pan;
     let mut sorties = Vec::new();
     let mut entrees = Vec::new();
-    ui.set_clip_rect(zone);
     for (boite, position) in boites.iter().zip(&auto) {
-        let cle = boite.node.map(|n| (scope, n));
-        let place = cle
-            .and_then(|k| state.positions.get(&k))
-            .copied()
-            .unwrap_or(*position)
-            + origine;
-        let dessin = draw_box(ui, state, scope, boite, place, commands);
+        let tenu = state
+            .moving
+            .filter(|m| m.scope == scope && Some(m.node) == boite.node)
+            .map(|m| m.place);
+        let range = boite.node.and_then(|n| graphe?.place(n)).map(Pos2::from);
+        let place = tenu.or(range).unwrap_or(*position);
+        let dessin = draw_box(ui, state, c, scope, boite, (place, ancre), commands);
         sorties.extend(dessin.output);
         entrees.extend(dessin.inputs);
     }
@@ -866,7 +946,9 @@ fn canvas(
     let Some(source) = state.dragging else {
         return;
     };
-    let curseur = ui.input(|i| i.pointer.latest_pos());
+    let curseur = ui
+        .input(|i| i.pointer.latest_pos())
+        .map(|p| vers_ecran.inverse() * p);
     if let (Some(pos), Some((_, depart))) = (curseur, sorties.iter().find(|(n, _)| *n == source)) {
         wire(ui, *depart, pos, theme::ACCENT);
     }
@@ -913,6 +995,12 @@ pub fn editor(
                 .size(11.0)
                 .color(theme::TEXT_DIM),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let niveau = format!("{:.0} %", state.zoom * 100.0);
+                if ui.button(niveau).on_hover_text("Revenir à 100 %").clicked() {
+                    state.zoom = 1.0;
+                }
+            });
         });
     });
     let scope = match state.tab {
@@ -1358,7 +1446,88 @@ mod tests {
     }
 
     #[test]
-    fn deplacer_un_noeud_garde_sa_place_et_n_emet_rien() {
+    fn un_effet_change_de_place_au_clic_droit() {
+        use egui_kittest::kittest::NodeT;
+        let mut g = grille();
+        g.c.add_effect(g.clip, EffectKind::Smooth);
+        g.c.add_effect(g.clip, EffectKind::Deform);
+        let mut h = harness(&g.c, Some(g.clip), Tab::Clip);
+        h.get_by_label("Lissage").click_secondary();
+        h.run();
+        assert!(h.get_by_label("Reculer").accesskit_node().is_disabled());
+        h.get_by_label("Avancer").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::MoveEffect {
+                clip: g.clip,
+                index: 0,
+                to: 1
+            }]
+        );
+    }
+
+    #[test]
+    fn un_noeud_garde_la_place_ecrite_dans_son_graphe() {
+        let mut g = grille();
+        let scope = scope_du_clip(&g);
+        let h = harness(&g.c, Some(g.clip), Tab::Clip);
+        let depart = h.get_by_label("Tempo").rect().center();
+        drop(h);
+        let node = boxes(&g.c, scope)
+            .iter()
+            .find(|b| b.title == "Tempo")
+            .and_then(|b| b.node)
+            .unwrap();
+        assert!(g.c.set_node_place(scope, node, [400.0, 300.0]));
+        let h = harness(&g.c, Some(g.clip), Tab::Clip);
+        let ici = h.get_by_label("Tempo").rect().center();
+        assert!((ici - depart).length() > 100.0, "{depart:?} → {ici:?}");
+    }
+
+    #[test]
+    fn un_glisse_a_200_pourcent_deplace_de_moitie_moins_sur_le_canevas() {
+        let g = grille();
+        let scope = scope_du_clip(&g);
+        let mut h = harness(&g.c, Some(g.clip), Tab::Clip);
+        let titre = h.get_by_label("Tempo").rect().center();
+        // AccessKit ignore la transformation : le rectangle lu est celui du canevas.
+        let auto = auto_positions(&boxes(&g.c, scope));
+        let rang = boxes(&g.c, scope)
+            .iter()
+            .position(|b| b.title == "Tempo")
+            .unwrap();
+        let ancre = titre - (auto[rang].to_vec2() + egui::vec2(BOX_WIDTH, TITLE_HEIGHT) * 0.5);
+        h.state_mut().editeur.zoom = 2.0;
+        h.run();
+        let ecran = ancre + (titre - ancre) * 2.0;
+        h.drag_at(ecran);
+        h.run();
+        h.hover_at(ecran + egui::vec2(100.0, 60.0));
+        h.run();
+        h.drop_at(ecran + egui::vec2(100.0, 60.0));
+        h.run();
+
+        let [Command::SetNodePlace { place, .. }] = h.state().commands[..] else {
+            panic!("{:?}", h.state().commands);
+        };
+        assert!((place[0] - auto[rang].x - 50.0).abs() < 2.0, "{place:?}");
+        assert!((place[1] - auto[rang].y - 30.0).abs() < 2.0, "{place:?}");
+    }
+
+    #[test]
+    fn le_bouton_du_zoom_revient_a_100_pourcent() {
+        let g = grille();
+        let mut h = harness(&g.c, Some(g.clip), Tab::Clip);
+        h.state_mut().editeur.zoom = 0.5;
+        h.run();
+        h.get_by_label("50 %").click();
+        h.run();
+        assert_eq!(h.state().editeur.zoom, 1.0);
+    }
+
+    #[test]
+    fn deplacer_un_noeud_emet_sa_place_une_seule_fois() {
         let g = grille();
         let mut h = harness(&g.c, Some(g.clip), Tab::Clip);
         let a = h.get_by_label("Tempo").rect().center();
@@ -1370,7 +1539,11 @@ mod tests {
         h.run();
         let apres = h.get_by_label("Tempo").rect().center();
         assert!(apres.y > a.y + 100.0, "{a:?} → {apres:?}");
-        assert!(h.state().commands.is_empty());
+        assert_eq!(h.state().commands.len(), 1);
+        assert!(matches!(
+            h.state().commands[0],
+            Command::SetNodePlace { .. }
+        ));
     }
 
     #[test]
@@ -1450,32 +1623,37 @@ mod tests {
     }
 
     #[test]
-    fn une_grille_restauree_garde_la_place_des_noeuds_de_ses_clips() {
-        let g = grille();
+    fn une_grille_restauree_lache_le_noeud_tenu() {
         let noeud = Graph::new().add(Box::new(frogenx_core::Constant(0.0)));
-        let mut e = EditorState::default();
-        e.positions
-            .insert((GraphScope::Clip(g.clip), noeud), Pos2::ZERO);
-        e.remap(&IdMap {
-            clips: vec![(g.clip, g.clip)],
+        let mut e = EditorState {
+            moving: Some(Moving {
+                scope: GraphScope::Composition,
+                node: noeud,
+                place: Pos2::ZERO,
+            }),
             ..Default::default()
-        });
-        assert_eq!(e.positions.len(), 1);
+        };
         e.remap(&IdMap::default());
-        assert!(e.positions.is_empty(), "le clip a disparu");
+        assert_eq!(e.moving, None);
     }
 
     #[test]
-    fn oublier_la_grille_oublie_les_places() {
-        let mut e = EditorState::default();
-        e.positions.insert(
-            (
-                GraphScope::Composition,
-                Graph::new().add(Box::new(frogenx_core::Constant(0.0))),
-            ),
-            Pos2::ZERO,
-        );
-        e.forget_grid();
-        assert!(e.positions.is_empty());
+    fn le_zoom_garde_le_point_sous_le_pointeur() {
+        let (pan, zoom) = (Vec2::new(30.0, -20.0), 1.0);
+        let pointeur = Vec2::new(200.0, 150.0);
+        let monde = (pointeur - pan) / zoom;
+        let (pan, zoom) = zoom_at(pan, zoom, pointeur, 1.5);
+        assert_eq!(zoom, 1.5);
+        let apres = pan + monde * zoom;
+        assert!((apres - pointeur).length() < 1e-3, "{apres:?}");
+    }
+
+    #[test]
+    fn le_zoom_reste_dans_ses_bornes() {
+        let p = Vec2::new(10.0, 10.0);
+        assert_eq!(zoom_at(Vec2::ZERO, 1.0, p, 100.0).1, MAX_ZOOM);
+        assert_eq!(zoom_at(Vec2::ZERO, 1.0, p, 0.001).1, MIN_ZOOM);
+        let (pan, _) = zoom_at(Vec2::new(3.0, 4.0), MAX_ZOOM, p, 2.0);
+        assert_eq!(pan, Vec2::new(3.0, 4.0), "à la borne, rien ne glisse");
     }
 }

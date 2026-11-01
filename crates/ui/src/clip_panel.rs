@@ -12,9 +12,10 @@
 use crate::color_panel::{color_row, swatch_button, Swatch};
 use crate::widgets::{floating_panel, knob, knob_with_menu, Knob, Modulation, KNOB_STEP};
 use crate::{theme, FrameView, UiState};
-use egui::{Rect, RichText, Ui};
+use egui::{Button, Rect, RichText, Ui};
 use frogenx_composition::{
-    Clip, ClipId, ClipParam, Command, Layer, LayerId, PlayMode, TransitionKind, MAX_CLIP_SPEED,
+    Clip, ClipId, ClipParam, ClipSource, Command, Layer, LayerId, PlayMode, TransitionKind,
+    MAX_CLIP_SPEED,
 };
 use frogenx_core::FeatureKind;
 use std::ops::Range;
@@ -63,6 +64,7 @@ fn card<T>(
     pastille: Option<(&Swatch, bool)>,
     items: &[T],
     per_row: usize,
+    entete: impl FnOnce(&mut Ui),
     mut add: impl FnMut(&mut Ui, &T),
 ) -> bool {
     let mut clic = false;
@@ -72,6 +74,7 @@ fn card<T>(
             if let Some((couleur, ouvert)) = pastille {
                 clic = swatch_button(ui, titre, couleur, ouvert);
             }
+            entete(ui);
         });
         for rangee in items.chunks(per_row) {
             ui.horizontal(|ui| {
@@ -82,6 +85,21 @@ fn card<T>(
         }
     });
     clic
+}
+
+/// Les flèches d'un effet : la chaîne se lit de gauche à droite. Rend sa nouvelle
+/// place, si l'une est cliquée.
+fn effect_arrows(ui: &mut Ui, index: usize, chaine: usize) -> Option<usize> {
+    let mut place = None;
+    ui.spacing_mut().item_spacing.x = 2.0;
+    let fleche = |texte| Button::new(RichText::new(texte).size(10.5)).small();
+    if ui.add_enabled(index > 0, fleche("<")).clicked() {
+        place = Some(index - 1);
+    }
+    if ui.add_enabled(index + 1 < chaine, fleche(">")).clicked() {
+        place = Some(index + 1);
+    }
+    place
 }
 
 /// Ce qu'on peut brancher sur un paramètre depuis son menu.
@@ -345,6 +363,10 @@ pub fn floating(
             ui.horizontal(|ui| playback_row(ui, id, clip, commands));
             ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
+            let chaine = match clip.source {
+                ClipSource::Shape { .. } => clip.effects.len(),
+                ClipSource::Feedback { .. } => 0,
+            };
             let trigs: Vec<(String, u32)> = c
                 .trigs()
                 .iter()
@@ -375,22 +397,38 @@ pub fn floating(
                                 let ajout = |ui: &mut Ui, reglage: &ClipKnob| {
                                     clip_knob(ui, *reglage, id, layer, clip, piste, commands);
                                 };
-                                card(ui, "Clip", None, &CLIP_KNOBS, par_rangee, ajout);
+                                card(ui, "Clip", None, &CLIP_KNOBS, par_rangee, |_| {}, ajout);
                             } else {
                                 let groupe = &groupes[i - 1];
                                 let couleur = couleurs[i - 1].as_ref();
                                 let cle = couleur.map(|c| c.key);
                                 let ouvert = cle.is_some() && cle == ouverte;
+                                // Le groupe 0 est la forme : les effets viennent après.
+                                let effet = (i >= 2).then(|| i - 2).filter(|e| *e < chaine);
+                                let mut deplace = None;
                                 let clic = card(
                                     ui,
                                     &groupe.label,
                                     couleur.map(|c| (c, ouvert)),
                                     &groupe.params,
                                     par_rangee,
+                                    |ui| {
+                                        if let Some(index) = effet {
+                                            deplace = effect_arrows(ui, index, chaine)
+                                                .map(|to| (index, to));
+                                        }
+                                    },
                                     |ui, param| {
                                         param_knob(ui, id, clip, param, &trigs, commands);
                                     },
                                 );
+                                if let Some((index, to)) = deplace {
+                                    commands.push(Command::MoveEffect {
+                                        clip: id,
+                                        index,
+                                        to,
+                                    });
+                                }
                                 if clic {
                                     state.open_color = cle.filter(|_| !ouvert).map(|cle| (id, cle));
                                 }

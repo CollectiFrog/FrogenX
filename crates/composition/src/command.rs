@@ -160,6 +160,18 @@ pub enum Command {
         clip: ClipId,
         index: usize,
     },
+    /// Change la place d'un effet dans la chaîne (§23.10).
+    MoveEffect {
+        clip: ClipId,
+        index: usize,
+        to: usize,
+    },
+    /// Range un nœud dans l'éditeur.
+    SetNodePlace {
+        scope: GraphScope,
+        node: NodeId,
+        place: [f32; 2],
+    },
     /// Branche une feature audio sur un paramètre du clip, ou l'en débranche.
     SetAudioModulation {
         clip: ClipId,
@@ -217,6 +229,8 @@ impl Command {
             Self::Connect { .. } | Self::Disconnect { .. } => "Câblage",
             Self::AddEffect { .. } => "Ajout d'un effet",
             Self::RemoveEffect { .. } => "Retrait d'un effet",
+            Self::MoveEffect { .. } => "Ordre des effets",
+            Self::SetNodePlace { .. } => "Place d'un nœud",
         }
     }
 
@@ -261,6 +275,8 @@ impl Command {
             | Self::SetNodeValue { .. }
             | Self::AddEffect { .. }
             | Self::RemoveEffect { .. }
+            | Self::MoveEffect { .. }
+            | Self::SetNodePlace { .. }
             | Self::SetAudioModulation { .. }
             | Self::SetTrigModulation { .. }
             | Self::SetAnalysisMethod(_)
@@ -268,6 +284,14 @@ impl Command {
             | Self::SetAmpScale(_)
             | Self::SetAnalysisWindow(_) => true,
         }
+    }
+}
+
+impl Command {
+    /// Est-elle un pas d'annulation (§23.11) ? Ranger un nœud modifie le fichier,
+    /// mais Ctrl+Z ne doit pas défaire un rangement avant un vrai réglage.
+    pub fn is_step(&self) -> bool {
+        self.is_edit() && !matches!(self, Self::SetNodePlace { .. })
     }
 }
 
@@ -360,6 +384,8 @@ impl Composition {
             } => self.set_node_value(scope, node, field, value),
             Command::AddEffect { clip, kind } => self.add_effect(clip, kind),
             Command::RemoveEffect { clip, index } => self.remove_effect(clip, index),
+            Command::MoveEffect { clip, index, to } => self.move_effect(clip, index, to),
+            Command::SetNodePlace { scope, node, place } => self.set_node_place(scope, node, place),
             Command::SetTempoFollow(suivre) => {
                 self.tempo_follow = suivre;
                 if suivre {

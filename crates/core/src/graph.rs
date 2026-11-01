@@ -56,6 +56,9 @@ struct Slot {
     /// Offset et longueur de l'état de ce nœud dans `state`.
     state_off: usize,
     state_len: usize,
+    /// Sa place dans l'éditeur, s'il a été déplacé (§23.10). Rien ne la lit en
+    /// jouant : elle n'est ici que pour suivre le nœud.
+    place: Option<[f32; 2]>,
 }
 
 /// Un nœud décrit, pour le format de patch (§19.1).
@@ -64,6 +67,7 @@ pub struct NodeView {
     pub id: NodeId,
     pub spec: Spec,
     pub deps: Vec<NodeId>,
+    pub place: Option<[f32; 2]>,
 }
 
 /// Le graphe de signaux.
@@ -144,6 +148,7 @@ impl Graph {
                 slot.deps = deps;
                 slot.state_off = state_off;
                 slot.state_len = state_len;
+                slot.place = None;
                 NodeId::new(i as u32, slot.gen)
             }
             None => {
@@ -153,6 +158,7 @@ impl Graph {
                     deps,
                     state_off,
                     state_len,
+                    place: None,
                 });
                 self.cache.push(0.0);
                 NodeId::new((self.slots.len() - 1) as u32, 0)
@@ -161,6 +167,23 @@ impl Graph {
 
         self.order_dirty = true;
         Ok(id)
+    }
+
+    /// La place d'un nœud dans l'éditeur, s'il en a une (§23.10).
+    pub fn place(&self, node: NodeId) -> Option<[f32; 2]> {
+        self.slots
+            .get(node.index() as usize)
+            .filter(|_| self.is_live(node))?
+            .place
+    }
+
+    /// Range un nœud. Rend `false` pour un nœud périmé ou une place non finie.
+    pub fn set_place(&mut self, node: NodeId, place: [f32; 2]) -> bool {
+        if !self.is_live(node) || !place.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        self.slots[node.index() as usize].place = Some(place);
+        true
     }
 
     /// Déclare que `node` dépend de `dep`. Refusé si cela crée un cycle.
@@ -443,6 +466,7 @@ impl Graph {
                     id: NodeId::new(i, slot.gen),
                     spec: slot.signal.as_ref()?.spec(),
                     deps: slot.deps.clone(),
+                    place: slot.place,
                 })
             })
             .collect()
@@ -628,6 +652,23 @@ mod tests {
         assert!((g.value(n) - 0.5).abs() < 1e-6, "got {}", g.value(n));
         g.eval_frame(0.5, 0.5);
         assert!((g.value(n) - 1.0).abs() < 1e-6, "got {}", g.value(n));
+    }
+
+    #[test]
+    fn la_place_suit_le_noeud_et_part_avec_lui() {
+        let mut g = Graph::new();
+        let a = g.add(Box::new(Constant(0.0)));
+        assert_eq!(g.place(a), None);
+        assert!(g.set_place(a, [10.0, -4.0]));
+        assert_eq!(g.place(a), Some([10.0, -4.0]));
+        assert_eq!(g.nodes()[0].place, Some([10.0, -4.0]));
+        assert!(!g.set_place(a, [f32::NAN, 0.0]));
+
+        g.remove(a).unwrap();
+        assert_eq!(g.place(a), None, "périmé");
+        assert!(!g.set_place(a, [1.0, 1.0]));
+        let b = g.add(Box::new(Constant(0.0)));
+        assert_eq!(g.place(b), None, "l'emplacement réutilisé repart vide");
     }
 
     #[test]
