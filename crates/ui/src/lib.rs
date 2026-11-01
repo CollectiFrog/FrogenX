@@ -1789,6 +1789,53 @@ mod tests {
     }
 
     #[test]
+    fn un_trig_se_choisit_au_clic_droit_d_un_parametre() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let channel = g.composition.trig(trig).unwrap().channel();
+        let mut h = menu_du_rayon(&g.composition);
+        // Le spectre porte aussi son nom : la ligne du menu vient en dernier.
+        h.get_all_by_label("Trig 1").last().unwrap().click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetTrigModulation {
+                clip: g.clips[0],
+                slot: ParamSlot::Generator(0),
+                channel,
+            }]
+        );
+    }
+
+    #[test]
+    fn sans_trig_le_menu_n_en_parle_pas() {
+        let g = grille();
+        let h = menu_du_rayon(&g.composition);
+        assert!(h.query_by_label("Trig").is_none());
+    }
+
+    #[test]
+    fn un_parametre_branche_sur_un_trig_se_debranche_au_menu() {
+        let mut g = grille();
+        let trig = g.composition.add_default_trig().unwrap();
+        let channel = g.composition.trig(trig).unwrap().channel();
+        let slot = ParamSlot::Generator(0);
+        let clip = g.composition.clip_mut(g.clips[0]).unwrap();
+        assert!(clip.set_trig_modulation(slot, channel));
+        let mut h = menu_du_rayon(&g.composition);
+        h.get_by_label("Sans source audio").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetAudioModulation {
+                clip: g.clips[0],
+                slot,
+                feature: None,
+            }]
+        );
+    }
+
+    #[test]
     fn le_menu_propose_chaque_feature() {
         let g = grille();
         let h = menu_du_rayon(&g.composition);

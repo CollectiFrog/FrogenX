@@ -149,6 +149,8 @@ pub struct Composition {
     pub(crate) trig_arena: Arena<Trig>,
     /// L'ordre des trigs, celui de leurs commandes (§3bis.6).
     pub(crate) trig_order: Vec<TrigId>,
+    /// Le prochain canal : un canal retiré ne resert jamais (§3bis.6).
+    pub(crate) next_trig_channel: u32,
     pub tempo: TempoController,
     /// Comment analyser le son : un fichier le garde avec ses zones (§7).
     pub analysis: AudioAnalysis,
@@ -176,6 +178,7 @@ impl Composition {
             graph: Graph::new(),
             trig_arena: Arena::new(),
             trig_order: Vec::new(),
+            next_trig_channel: 0,
             tempo: TempoController::new(DEFAULT_BPM),
             analysis: AudioAnalysis::default(),
             tempo_follow: false,

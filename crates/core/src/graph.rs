@@ -5,7 +5,7 @@
 //! sérialisation triviale, pas d'emprunts imbriqués à l'exécution.
 
 use crate::param::NodeId;
-use crate::signal::{AudioFeatures, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
+use crate::signal::{AudioFeatures, Ctx, Diagnostics, NodeState, Signal, TrigValues, DEFAULT_BPM};
 use crate::spec::Spec;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -79,6 +79,8 @@ pub struct Graph {
     order_dirty: bool,
     diagnostics: Diagnostics,
     audio: AudioFeatures,
+    /// Les trigs de la composition, lus par les clips (§3bis.6).
+    trigs: Vec<TrigValues>,
     /// Tempo de la frame, exposé aux modules via `Ctx::bpm` (§3bis.3).
     bpm: f32,
     /// Compteur de frames, exposé aux modules via `Ctx::frame` (§16.2).
@@ -101,6 +103,7 @@ impl Graph {
             order_dirty: true,
             diagnostics: Diagnostics::default(),
             audio: AudioFeatures::default(),
+            trigs: Vec::new(),
             bpm: DEFAULT_BPM,
             frame: 0,
         }
@@ -334,6 +337,13 @@ impl Graph {
         self.bpm = bpm;
     }
 
+    /// Pose la valeur des trigs pour la prochaine évaluation, sans allouer une
+    /// fois la taille atteinte.
+    pub fn set_trigs(&mut self, trigs: &[TrigValues]) {
+        self.trigs.clear();
+        self.trigs.extend_from_slice(trigs);
+    }
+
     /// Remet tout l'état persistant à zéro, sans toucher à la topologie (§16.1).
     pub fn reset_state(&mut self) {
         self.state.iter_mut().for_each(|s| *s = 0.0);
@@ -375,7 +385,9 @@ impl Graph {
             // est précisément pourquoi `Ctx` porte le cache et non `&Graph`.
             let (off, len) = (slot.state_off, slot.state_len);
             let (cache, state) = (&self.cache, &mut self.state);
-            let ctx = Ctx::with_cache(dt, self.frame, &audio, cache).with_bpm(self.bpm);
+            let ctx = Ctx::with_cache(dt, self.frame, &audio, cache)
+                .with_bpm(self.bpm)
+                .with_trigs(&self.trigs);
             let mut st = NodeState::new(&mut state[off..off + len]);
             let v = signal.eval(t, &ctx, &mut st);
 

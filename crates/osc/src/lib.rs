@@ -55,5 +55,5 @@ pub use audio::AudioFeature;
 pub use envelope::{Envelope, SampleHold, Trigger};
 pub use noise::{fbm_1d, value_noise_1d, Noise};
 pub use oscillator::{Lfo, Mix, Oscillator, Product, Sum};
-pub use trig::{Divider, SpectrumZone, MAX_DIVISION};
+pub use trig::{Divider, SpectrumZone, TrigInput, TrigOutput, MAX_DIVISION};
 pub use waveform::{wrap01, Waveform};

@@ -242,6 +242,7 @@ fn trig(
     Ok(RestoredTrig {
         name: t.name.clone(),
         target,
+        channel: t.channel,
         zone: SpectrumZone::from_spec(description(t.gate)?)?,
         divider: Divider::from_spec(description(t.pulse)?)?,
         gate: node(nodes, t.gate)?,

@@ -9,7 +9,7 @@ use crate::position::{BeatRate, PositionSignal};
 use frogenx_core::{Constant, Signal, Spec, SpecError};
 use frogenx_osc::{
     AudioFeature, Divider, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold,
-    SpectrumZone, Sum, Trigger,
+    SpectrumZone, Sum, TrigInput, Trigger,
 };
 
 /// Le `Signal` que décrit `spec`.
@@ -28,6 +28,7 @@ pub fn signal_from_spec(spec: &Spec) -> Result<Box<dyn Signal>, SpecError> {
         "SpectrumZone" => Box::new(SpectrumZone::from_spec(spec)?),
         "Divider" => Box::new(Divider::from_spec(spec)?),
         "AudioFeature" => Box::new(AudioFeature::from_spec(spec)?),
+        "TrigInput" => Box::new(TrigInput::from_spec(spec)?),
         "BeatRate" => Box::new(BeatRate::from_spec(spec)?),
         "PositionSignal" => Box::new(PositionSignal::from_spec(spec)?),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
@@ -45,6 +46,10 @@ mod tests {
         let p = |v| Param::fixed(v);
         vec![
             Box::new(Constant(0.25)),
+            Box::new(TrigInput {
+                channel: 3,
+                output: frogenx_osc::TrigOutput::Gate,
+            }),
             Box::new(
                 Oscillator::new(Waveform::Saw, 2.0)
                     .with_amp(p(0.5))
@@ -92,7 +97,7 @@ mod tests {
         let mut noms: Vec<_> = signaux().iter().map(|s| s.spec().kind).collect();
         noms.sort();
         noms.dedup();
-        assert_eq!(noms.len(), 15, "un type par ligne");
+        assert_eq!(noms.len(), 16, "un type par ligne");
     }
 
     #[test]

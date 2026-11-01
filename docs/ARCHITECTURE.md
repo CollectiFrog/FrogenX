@@ -632,6 +632,16 @@ tout `Param` du clip, effets compris. L'éditeur de nœuds les propose dans le m
 boîte porte le nom du trig, on y choisit la sortie et on tire son fil. `TrigTarget` ne change pas :
 il déclenche un clip ou une colonne, ce n'est pas une modulation.
 
+**Ce qui est vérifié, et comment.** Sans GPU : la lecture de chaque sortie, un canal vide qui vaut
+zéro, les canaux jamais réutilisés, une source qui en remplace une autre sans laisser de nœud. Sur
+le GPU : un coup de spectre agrandit une forme par son effet `Transform`, un trig retiré ne casse
+rien, annuler et rétablir retrouvent le branchement. Le menu et le fil tiré se testent par clics
+simulés. **Pas encore essayé :** sur de la vraie musique, à la vraie souris.
+
+**Non couvert.** Retirer un trig laisse sa boîte dans les clips qui le lisaient : elle ne lit plus
+que zéro. Un seul trig par paramètre au clic droit ; en mélanger plusieurs passe par l'éditeur. Un
+trig ne met pas un effet en marche ou à l'arrêt : il module ses réglages.
+
 ### 5.1 Le trait
 
 ```rust
@@ -778,7 +788,8 @@ s'accumule pas sans fin.
 clip déclenché réinjecte une image vieille de plusieurs minutes. Une cible de plus, allouée à
 la première utilisation d'un feedback sur la piste.
 
-**Fichier.** Un clip porte `generator` et `style`, ou `feedback`. C'est la version 3 du format.
+**Fichier.** Un clip porte `generator` et `style`, ou `feedback`. C'est la version 3 du format ; la
+version 4 donne un canal à chaque trig (§3bis.6).
 
 **Un flou léger s'accumule, et il fait partie de l'effet.** Chaque frame relit l'image entre
 deux pixels : sur une dérive, les bords s'adoucissent peu à peu. Rien ne le compense.
@@ -1744,7 +1755,7 @@ qui les livre (skill `doc-sync`).
 | Sortie plein écran | menu `Sortie`, fenêtre sans bordure, écran perdu géré (§8.4) |
 | Sauvegarde | format JSON versionné, migrations, dernier fichier rouvert, confirmation (§19, §23.8) |
 | Spectre | 3 méthodes, 4 échelles de fréquence, 2 d'amplitude, durée réglable (§7) |
-| Trig | zone tracée sur le spectre, compteur « 1 sur N », cible clip ou colonne (§3bis.6) |
+| Trig | zone tracée sur le spectre, compteur « 1 sur N », cible clip ou colonne, et source de tout paramètre de clip, effets compris (§3bis.6) |
 | Features audio | volume, registres, brillance, transitoires, chroma, comme `Signal` (§7.1) |
 | Modulation par le son | source audio au clic droit de chaque potentiomètre (§7.1) |
 | BPM | détection et suivi du tempo (§7.1) |

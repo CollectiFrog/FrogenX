@@ -150,6 +150,12 @@ pub enum Command {
         slot: ParamSlot,
         feature: Option<FeatureKind>,
     },
+    /// Branche un trig sur un paramètre du clip, effets compris (§3bis.6).
+    SetTrigModulation {
+        clip: ClipId,
+        slot: ParamSlot,
+        channel: u32,
+    },
 }
 
 impl Command {
@@ -181,6 +187,7 @@ impl Command {
             | Self::SetFreqScale(_)
             | Self::SetAmpScale(_)
             | Self::SetAnalysisWindow(_) => "Analyse audio",
+            Self::SetTrigModulation { .. } => "Source de trig",
             Self::SetAudioModulation { .. } => "Source audio",
             Self::SetClipTransition { .. } => "Transition",
             Self::SetClipPlayback { .. } => "Lecture",
@@ -230,6 +237,7 @@ impl Command {
             | Self::AddEffect { .. }
             | Self::RemoveEffect { .. }
             | Self::SetAudioModulation { .. }
+            | Self::SetTrigModulation { .. }
             | Self::SetAnalysisMethod(_)
             | Self::SetFreqScale(_)
             | Self::SetAmpScale(_)
@@ -325,6 +333,13 @@ impl Composition {
             } => self
                 .clip_mut(clip)
                 .is_some_and(|c| c.set_audio_modulation(slot, feature)),
+            Command::SetTrigModulation {
+                clip,
+                slot,
+                channel,
+            } => self
+                .clip_mut(clip)
+                .is_some_and(|c| c.set_trig_modulation(slot, channel)),
             Command::AddTrig => self.add_default_trig().is_some(),
             Command::AddTrigAt { freq, level } => {
                 let bornes = [freq.0, freq.1, level.0, level.1];

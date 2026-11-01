@@ -14,6 +14,7 @@ use frogenx_composition::{
     ParamTarget,
 };
 use frogenx_core::{FeatureKind, NodeId, Param, SpecValue, CHROMA_NOTES};
+use frogenx_osc::TrigOutput;
 use frogenx_shape::EffectKind;
 use std::collections::HashMap;
 
@@ -161,6 +162,7 @@ pub fn node_label(kind: &str) -> &str {
         "Noise" => "Bruit",
         "Envelope" => "Enveloppe",
         "Trigger" => "Seuil",
+        "TrigInput" => "Trig",
         "SampleHold" => "Échantillonneur",
         "Sum" => "Somme",
         "Product" => "Produit",
@@ -215,6 +217,10 @@ pub fn word_choices(field: &str) -> Vec<(&'static str, &'static str)> {
             .chain((0..CHROMA_NOTES as u8).map(FeatureKind::Chroma))
             .map(|f| (f.word(), f.label()))
             .collect(),
+        "output" => TrigOutput::ALL
+            .into_iter()
+            .map(|o| (o.word(), o.label()))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -247,6 +253,13 @@ fn trig_title(c: &Composition, node: NodeId) -> Option<String> {
     })
 }
 
+/// Le nom du trig que lit une boîte de clip (§3bis.6). Un trig retiré la laisse
+/// sous son nom de type : elle ne lit plus que zéro.
+fn trig_input_title(c: &Composition, canal: u32) -> Option<String> {
+    let mut trigs = c.trigs().iter().filter_map(|id| c.trig(*id));
+    Some(trigs.find(|t| t.channel() == canal)?.name.clone())
+}
+
 /// Les boîtes des nœuds de `scope`, chacune dans la colonne de sa profondeur.
 fn node_boxes(c: &Composition, scope: GraphScope) -> Vec<NodeBox> {
     let Some(graph) = c.graph_of(scope) else {
@@ -265,8 +278,15 @@ fn node_boxes(c: &Composition, scope: GraphScope) -> Vec<NodeBox> {
             .unwrap_or(0);
         profondeurs.insert(vue.id, profondeur);
 
-        let trig = trig_title(c, vue.id);
+        // Un `NodeId` ne vaut que dans son graphe : ceux d'un clip recoupent ceux
+        // des trigs, qui vivent dans la composition.
+        let trig = (scope == GraphScope::Composition)
+            .then(|| trig_title(c, vue.id))
+            .flatten();
         let lecture_seule = trig.is_some();
+        let lu = (vue.spec.kind == "TrigInput")
+            .then(|| vue.spec.int("channel").ok())
+            .flatten();
         let inputs = vue
             .spec
             .inputs()
@@ -289,6 +309,7 @@ fn node_boxes(c: &Composition, scope: GraphScope) -> Vec<NodeBox> {
             .fields
             .iter()
             .enumerate()
+            .filter(|(_, (nom, _))| nom != "channel")
             .filter_map(|(i, (nom, valeur))| {
                 let (field, label) = (i as u8, field_label(nom));
                 match valeur {
@@ -318,7 +339,9 @@ fn node_boxes(c: &Composition, scope: GraphScope) -> Vec<NodeBox> {
             .collect();
         let verrouille = c.is_locked_node(scope, vue.id);
         boites.push(NodeBox {
-            title: trig.unwrap_or_else(|| node_label(&vue.spec.kind).to_string()),
+            title: trig
+                .or_else(|| trig_input_title(c, lu?))
+                .unwrap_or_else(|| node_label(&vue.spec.kind).to_string()),
             node: Some(vue.id),
             value: Some(graph.value(vue.id)),
             inputs,
@@ -743,8 +766,14 @@ fn draw_box(
     }
 }
 
-/// Le menu du fond : ajouter un nœud, ou un effet au clip.
-fn add_menu(ui: &mut Ui, scope: GraphScope, effets: bool, commands: &mut Vec<Command>) {
+/// Le menu du fond : ajouter un nœud, un trig, ou un effet au clip.
+fn add_menu(
+    ui: &mut Ui,
+    c: &Composition,
+    scope: GraphScope,
+    effets: bool,
+    commands: &mut Vec<Command>,
+) {
     ui.label(
         RichText::new("Ajouter un nœud")
             .color(theme::TEXT_DIM)
@@ -754,6 +783,24 @@ fn add_menu(ui: &mut Ui, scope: GraphScope, effets: bool, commands: &mut Vec<Com
         if ui.button(kind.label()).clicked() {
             commands.push(Command::AddNode { scope, kind });
             ui.close();
+        }
+    }
+    // Dans la composition, ses nœuds sont déjà là : seul un clip a besoin du pont.
+    if matches!(scope, GraphScope::Clip(_)) && !c.trigs().is_empty() {
+        ui.separator();
+        ui.label(
+            RichText::new("Lire un trig")
+                .color(theme::TEXT_DIM)
+                .size(11.0),
+        );
+        for trig in c.trigs().iter().filter_map(|id| c.trig(*id)) {
+            if ui.button(&trig.name).clicked() {
+                let kind = NodeKind::Trig {
+                    channel: trig.channel(),
+                };
+                commands.push(Command::AddNode { scope, kind });
+                ui.close();
+            }
         }
     }
     if let (true, GraphScope::Clip(clip)) = (effets, scope) {
@@ -789,7 +836,7 @@ fn canvas(
         scope,
         GraphScope::Clip(id) if c.clip(id).is_some_and(|clip| matches!(clip.source, ClipSource::Shape { .. }))
     );
-    fond.context_menu(|ui| add_menu(ui, scope, effets, commands));
+    fond.context_menu(|ui| add_menu(ui, c, scope, effets, commands));
 
     let boites = boxes(c, scope);
     let auto = auto_positions(&boites);
@@ -994,6 +1041,109 @@ mod tests {
         let flash = b.iter().find(|b| b.title == "Trig 1 : flash").unwrap();
         assert_eq!(flash.removal, Removal::None);
         assert!(flash.read_only);
+    }
+
+    #[test]
+    fn un_noeud_de_clip_ne_prend_jamais_le_nom_d_un_trig() {
+        let mut g = grille();
+        g.c.add_default_trig().unwrap();
+        let boites = boxes(&g.c, scope_du_clip(&g));
+        assert!(boites.iter().all(|b| !b.title.starts_with("Trig 1")));
+        assert!(boites.iter().all(|b| !b.read_only));
+        assert!(boites.iter().any(|b| b.title == "Position"));
+    }
+
+    #[test]
+    fn le_menu_d_un_clip_propose_de_lire_chaque_trig() {
+        let mut g = grille();
+        let trig = g.c.add_default_trig().unwrap();
+        let channel = g.c.trig(trig).unwrap().channel();
+        let scope = scope_du_clip(&g);
+        let mut h = Harness::builder().build_ui_state(
+            |ui, commandes: &mut Vec<Command>| add_menu(ui, &g.c, scope, false, commandes),
+            Vec::new(),
+        );
+        h.run();
+        h.get_by_label("Trig 1").click();
+        h.run();
+        assert_eq!(
+            h.state(),
+            &vec![Command::AddNode {
+                scope,
+                kind: NodeKind::Trig { channel },
+            }]
+        );
+    }
+
+    #[test]
+    fn le_menu_de_la_regie_ne_propose_pas_de_pont() {
+        let mut g = grille();
+        g.c.add_default_trig().unwrap();
+        let h = Harness::builder().build_ui_state(
+            |ui, commandes: &mut Vec<Command>| {
+                add_menu(ui, &g.c, GraphScope::Composition, false, commandes)
+            },
+            Vec::new(),
+        );
+        assert!(h.query_by_label("Lire un trig").is_none());
+    }
+
+    #[test]
+    fn une_boite_de_clip_porte_le_nom_de_son_trig_et_choisit_sa_sortie() {
+        let mut g = grille();
+        let trig = g.c.add_default_trig().unwrap();
+        let channel = g.c.trig(trig).unwrap().channel();
+        g.c.trig_mut(trig).unwrap().name = "Grosse caisse".into();
+        let scope = scope_du_clip(&g);
+        g.c.add_node(scope, NodeKind::Trig { channel }).unwrap();
+        let boite = boxes(&g.c, scope);
+        let boite = boite.iter().find(|b| b.title == "Grosse caisse").unwrap();
+        assert_eq!(
+            boite.settings.len(),
+            1,
+            "le canal ne se règle pas : {boite:?}"
+        );
+        assert!(matches!(
+            &boite.settings[0],
+            Setting::Word { value, .. } if value == "flash"
+        ));
+    }
+
+    #[test]
+    fn un_trig_retire_laisse_une_boite_qui_se_retire() {
+        let mut g = grille();
+        let trig = g.c.add_default_trig().unwrap();
+        let channel = g.c.trig(trig).unwrap().channel();
+        let scope = scope_du_clip(&g);
+        let node = g.c.add_node(scope, NodeKind::Trig { channel }).unwrap();
+        g.c.remove_trig(trig);
+        let boite = boxes(&g.c, scope);
+        let boite = boite.iter().find(|b| b.node == Some(node)).unwrap();
+        assert_eq!(boite.title, "Trig");
+        assert_eq!(boite.removal, Removal::Node(node));
+    }
+
+    #[test]
+    fn tirer_un_trig_sur_un_effet_le_branche() {
+        let mut g = grille();
+        let trig = g.c.add_default_trig().unwrap();
+        let channel = g.c.trig(trig).unwrap().channel();
+        let scope = scope_du_clip(&g);
+        assert!(g.c.add_effect(g.clip, EffectKind::Deform));
+        let source = g.c.add_node(scope, NodeKind::Trig { channel }).unwrap();
+        let boites = boxes(&g.c, scope);
+        let effet = boites.iter().find(|b| b.title == "Déformation").unwrap();
+        let entree = &effet.inputs[0];
+        let vers = format!("entrée Déformation {}", entree.label);
+        let mut h = harness(&g.c, Some(g.clip), Tab::Clip);
+        tire(&mut h, "sortie Trig 1", &vers);
+        assert_eq!(
+            h.state().commands,
+            vec![Command::Connect {
+                target: entree.target,
+                source
+            }]
+        );
     }
 
     #[test]

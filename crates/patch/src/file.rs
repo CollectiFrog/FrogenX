@@ -93,6 +93,8 @@ pub enum FileTarget {
 pub struct FileTrig {
     pub name: String,
     pub target: FileTarget,
+    /// Son canal : ce par quoi un clip le lit (§3bis.6).
+    pub channel: u32,
     pub gate: u32,
     pub pulse: u32,
     pub flash: u32,

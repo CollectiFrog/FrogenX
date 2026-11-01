@@ -12,6 +12,7 @@ use serde_json::Value;
 const V1: &str = include_str!("fixtures/patch_v1.json");
 const V2: &str = include_str!("fixtures/patch_v2.json");
 const V3: &str = include_str!("fixtures/patch_v3.json");
+const V4: &str = include_str!("fixtures/patch_v4.json");
 
 fn pistes(c: &Composition) -> Vec<String> {
     let mut ids = Vec::new();
@@ -72,11 +73,28 @@ fn la_fixture_v3_garde_son_echo() {
     assert_eq!(echo.params()[0].params[4].desc.value.base(), 0.75);
 }
 
-/// Tant que `CURRENT_VERSION` vaut 3, relire puis réécrire la fixture rend le
+#[test]
+fn un_fichier_v3_donne_a_ses_trigs_un_canal_par_rang() {
+    let c = from_json(V3).expect("un fichier v3 s'ouvre");
+    assert_eq!(c.trig(c.trigs()[0]).unwrap().channel(), 0);
+}
+
+#[test]
+fn la_fixture_v4_garde_le_canal_et_le_trig_d_un_clip() {
+    let c = from_json(V4).expect("un fichier v4 s'ouvre");
+    assert_eq!(c.trig(c.trigs()[0]).unwrap().channel(), 0);
+    let mut ids = Vec::new();
+    c.layers_in_order(&mut ids);
+    let formes = c.layer(ids[1]).unwrap();
+    let clip = c.clip(formes.cell(0).unwrap()).unwrap();
+    assert_eq!(clip.params()[0].params[0].trig, Some(0));
+}
+
+/// Tant que `CURRENT_VERSION` vaut 4, relire puis réécrire la fixture rend le
 /// même contenu. Sinon, le format a changé sans changer de version.
 #[test]
 fn le_format_n_a_pas_change_sans_changer_de_version() {
-    if CURRENT_VERSION != 3 {
+    if CURRENT_VERSION != 4 {
         return;
     }
     let sans_meta = |texte: &str| {
@@ -84,6 +102,6 @@ fn le_format_n_a_pas_change_sans_changer_de_version() {
         v.as_object_mut().unwrap().remove("meta");
         v
     };
-    let reecrit = to_json(&from_json(V3).unwrap()).unwrap();
-    assert_eq!(sans_meta(&reecrit), sans_meta(V3));
+    let reecrit = to_json(&from_json(V4).unwrap()).unwrap();
+    assert_eq!(sans_meta(&reecrit), sans_meta(V4));
 }

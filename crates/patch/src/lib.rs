@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 /// La version écrite par ce programme. Tout changement du format l'incrémente,
 /// avec sa migration et sa fixture (§19.2).
-pub const CURRENT_VERSION: u64 = 3;
+pub const CURRENT_VERSION: u64 = 4;
 /// Plus de colonnes que ça n'est pas une grille : un fichier abîmé.
 pub const MAX_COLUMNS: usize = 4096;
 /// Refusé avant d'allouer quoi que ce soit.
@@ -115,6 +115,7 @@ fn migrate(mut data: Value) -> Result<Value, PatchError> {
         data = match version {
             1 => migrate_1_to_2(data),
             2 => migrate_2_to_3(data),
+            3 => migrate_3_to_4(data),
             _ => return Err(PatchError::UnknownVersion(version)),
         };
         version += 1;
@@ -133,6 +134,18 @@ fn migrate_1_to_2(mut data: Value) -> Value {
 /// `generator` et `style` y sont tous présents.
 fn migrate_2_to_3(mut data: Value) -> Value {
     data["version"] = Value::from(3);
+    data
+}
+
+/// La version 4 donne un canal à chaque trig (§3bis.6) : aucun clip d'un fichier
+/// v3 n'en lit, et leur rang convient.
+fn migrate_3_to_4(mut data: Value) -> Value {
+    if let Some(trigs) = data["trigs"].as_array_mut() {
+        for (i, trig) in trigs.iter_mut().enumerate() {
+            trig["channel"] = Value::from(i);
+        }
+    }
+    data["version"] = Value::from(4);
     data
 }
 
@@ -189,8 +202,8 @@ mod tests {
     fn une_version_plus_recente_est_refusee_sans_deviner() {
         let json = format!("{{\"version\": {}}}", CURRENT_VERSION + 1);
         let erreur = from_json(&json).err().expect("refusé");
-        assert!(matches!(erreur, PatchError::UnknownVersion(4)));
-        assert!(erreur.to_string().contains("version 4"));
+        assert!(matches!(erreur, PatchError::UnknownVersion(5)));
+        assert!(erreur.to_string().contains("version 5"));
     }
 
     #[test]

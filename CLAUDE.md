@@ -70,7 +70,8 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 Le panneau audio montre le spectre de l'entrée par défaut, dans l'analyse choisie : trois
 méthodes, quatre échelles de fréquence dont la linéaire, deux d'amplitude, et une durée
 d'analyse de 5 ms à 1 s (§7). On y trace à la souris la zone d'un **trig**, qui déclenche
-une colonne ou un clip une fois sur 1, 2, 4, 8, 16 ou 32 (§3bis.6). Le design suit §23.1 :
+une colonne ou un clip une fois sur 1, 2, 4, 8, 16 ou 32, et que tout paramètre de clip peut
+lire, effets compris (§3bis.6). Le design suit §23.1 :
 disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle du spectre
 (§23.9) : le signal d'abord, un potentiomètre pour tout réglage, l'image jamais couverte.
 

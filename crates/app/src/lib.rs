@@ -23,7 +23,9 @@ pub mod streams;
 use frogenx_composition::{
     sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, IdMap, LayerId,
 };
-use frogenx_core::{AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
+use frogenx_core::{
+    AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph, TrigValues,
+};
 use frogenx_layer::{
     BlendParams, FeedbackRenderer, FeedbackStep, FrameHistory, Gpu, MixKind, MixRenderer,
     RenderLayer, ShapeContent, ShapeRenderer,
@@ -335,6 +337,8 @@ pub struct Engine {
     /// Les features de la prochaine frame. Vides sans entrée audio, écrites à
     /// la main par un rendu offline : c'est ce qui garde le déterminisme (§20.3).
     audio: AudioFeatures,
+    /// La valeur des trigs à cette frame, pour les graphes des clips (§3bis.6).
+    trigs: Vec<TrigValues>,
 }
 
 impl Engine {
@@ -363,6 +367,7 @@ impl Engine {
             gesture_held: false,
             bpm,
             audio: AudioFeatures::default(),
+            trigs: Vec::new(),
         }
     }
 
@@ -587,6 +592,7 @@ impl Engine {
         // Une commande ne s'applique qu'entre deux frames (§23) : un trig agit
         // donc à la frame suivante, une de retard sur le spectre.
         self.composition.trig_commands(&mut self.commands);
+        self.composition.trig_values(&mut self.trigs);
         self.composition.layers_in_order(&mut self.order);
         self.composition.advance_transitions(dt, self.bpm);
         for layer in &self.order {
@@ -612,6 +618,7 @@ impl Engine {
                     let graph = clip.graph_mut();
                     graph.set_bpm(self.bpm);
                     graph.set_audio(self.audio.clone());
+                    graph.set_trigs(&self.trigs);
                     graph.eval_frame(t, sens * dt * vitesse as f64);
                 }
             }

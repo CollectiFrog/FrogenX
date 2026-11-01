@@ -49,7 +49,9 @@ pub use clock::{Clock, ClockMode};
 pub use features::{FeatureKind, CHROMA_NOTES};
 pub use graph::{Graph, GraphError, NodeView};
 pub use param::{NodeId, Param};
-pub use signal::{AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal, DEFAULT_BPM};
+pub use signal::{
+    AudioFeatures, Constant, Ctx, Diagnostics, NodeState, Signal, TrigValues, DEFAULT_BPM,
+};
 pub use spec::{Spec, SpecError, SpecValue};
 pub use spectrum::{
     sanitize_window, AmpScale, AnalysisMethod, AnalysisSettings, FreqScale, Spectrum,

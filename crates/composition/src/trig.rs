@@ -13,7 +13,7 @@
 use crate::command::Command;
 use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, LayerId, TrigId};
-use frogenx_core::{Graph, GraphError, NodeId, Param};
+use frogenx_core::{Graph, GraphError, NodeId, Param, TrigValues};
 use frogenx_osc::{Divider, Envelope, SpectrumZone};
 
 /// Constante de temps de la retombée de `flash`, en secondes.
@@ -55,6 +55,9 @@ pub enum TrigSlot {
 pub struct Trig {
     pub name: String,
     pub target: TrigTarget,
+    /// Comment un clip le désigne : ni un identifiant, qui ne survit pas à un
+    /// fichier, ni une position, qui change avec le retrait d'un autre (§3bis.6).
+    channel: u32,
     zone: SpectrumZone,
     divider: Divider,
     gate: NodeId,
@@ -66,6 +69,7 @@ pub struct Trig {
 pub struct RestoredTrig {
     pub name: String,
     pub target: TrigTarget,
+    pub channel: u32,
     pub zone: SpectrumZone,
     pub divider: Divider,
     pub gate: NodeId,
@@ -77,6 +81,7 @@ impl Trig {
     fn wire(
         graph: &mut Graph,
         name: String,
+        channel: u32,
         zone: SpectrumZone,
         every: f32,
     ) -> Result<Self, GraphError> {
@@ -94,6 +99,7 @@ impl Trig {
         Ok(Self {
             name,
             target: TrigTarget::None,
+            channel,
             zone,
             divider,
             gate,
@@ -104,6 +110,11 @@ impl Trig {
 
     pub fn zone(&self) -> &SpectrumZone {
         &self.zone
+    }
+
+    /// Son canal dans `Ctx::trigs` (§3bis.6).
+    pub fn channel(&self) -> u32 {
+        self.channel
     }
 
     /// Le `N` de « 1 sur N ».
@@ -162,7 +173,9 @@ impl Composition {
     /// Ajoute un trig, sans cible. `None` si `zone` module sur un nœud périmé.
     pub fn add_trig(&mut self, zone: SpectrumZone, every: f32) -> Option<TrigId> {
         let nom = format!("Trig {}", self.trig_order.len() + 1);
-        let trig = Trig::wire(&mut self.graph, nom, zone, every).ok()?;
+        let canal = self.next_trig_channel;
+        let trig = Trig::wire(&mut self.graph, nom, canal, zone, every).ok()?;
+        self.next_trig_channel += 1;
         let (i, g) = self.trig_arena.insert(trig);
         let id = TrigId::new(i, g);
         self.trig_order.push(id);
@@ -173,9 +186,11 @@ impl Composition {
     /// le chargement d'un fichier (§19.1). `zone` et `divider` doivent être les
     /// copies de référence des nœuds `gate` et `pulse`.
     pub fn restore_trig(&mut self, trig: RestoredTrig) -> TrigId {
+        self.next_trig_channel = self.next_trig_channel.max(trig.channel.saturating_add(1));
         let (i, g) = self.trig_arena.insert(Trig {
             name: trig.name,
             target: trig.target,
+            channel: trig.channel,
             zone: trig.zone,
             divider: trig.divider,
             gate: trig.gate,
@@ -241,6 +256,23 @@ impl Composition {
     /// Les commandes des trigs qui viennent de passer, à lire **après**
     /// `eval_frame` du graphe de composition. Écrit dans `out` pour ne pas
     /// allouer à chaque frame.
+    /// La valeur de chaque trig, indexée par son canal, pour les graphes des
+    /// clips (§3bis.6). Se lit après l'évaluation du graphe de composition.
+    pub fn trig_values(&self, out: &mut Vec<TrigValues>) {
+        out.clear();
+        for trig in self.trig_order.iter().filter_map(|id| self.trig(*id)) {
+            let canal = trig.channel as usize;
+            if out.len() <= canal {
+                out.resize(canal + 1, TrigValues::default());
+            }
+            out[canal] = TrigValues {
+                gate: self.graph.value(trig.gate),
+                pulse: self.graph.value(trig.pulse),
+                flash: self.graph.value(trig.flash),
+            };
+        }
+    }
+
     pub fn trig_commands(&self, out: &mut Vec<Command>) {
         for id in &self.trig_order {
             let Some(trig) = self.trig(*id) else { continue };
@@ -258,6 +290,59 @@ mod tests {
     use crate::transport::{PlayMode, Transport};
     use frogenx_core::{AudioFeatures, Spectrum};
     use frogenx_shape::Ellipse;
+
+    #[test]
+    fn chaque_trig_a_son_canal_et_un_canal_ne_resert_jamais() {
+        let mut c = Composition::new();
+        let a = c.add_default_trig().unwrap();
+        let b = c.add_default_trig().unwrap();
+        assert_eq!(c.trig(a).unwrap().channel(), 0);
+        assert_eq!(c.trig(b).unwrap().channel(), 1);
+        c.remove_trig(a);
+        let suivant = c.add_default_trig().unwrap();
+        assert_eq!(c.trig(suivant).unwrap().channel(), 2);
+    }
+
+    #[test]
+    fn les_valeurs_suivent_le_canal_meme_apres_un_retrait() {
+        let mut c = Composition::new();
+        let a = c.add_default_trig().unwrap();
+        c.add_default_trig().unwrap();
+        c.remove_trig(a);
+        c.graph_mut().set_audio(plat(0.9));
+        c.graph_mut().eval_frame(0.0, 1.0 / 60.0);
+        let mut valeurs = vec![TrigValues::default(); 9];
+        c.trig_values(&mut valeurs);
+        assert_eq!(valeurs.len(), 2, "indexé par canal, pas par rang");
+        assert_eq!(valeurs[0], TrigValues::default());
+        assert_eq!(valeurs[1].gate, 1.0);
+    }
+
+    #[test]
+    fn un_trig_restaure_repousse_le_prochain_canal() {
+        let mut c = Composition::new();
+        let id = c.add_default_trig().unwrap();
+        let (gate, pulse, flash) = {
+            let t = c.trig(id).unwrap();
+            (t.gate(), t.pulse(), t.flash())
+        };
+        let (zone, divider) = {
+            let t = c.trig(id).unwrap();
+            (*t.zone(), *t.divider())
+        };
+        c.restore_trig(RestoredTrig {
+            name: "Lu".into(),
+            target: TrigTarget::None,
+            channel: 5,
+            zone,
+            divider,
+            gate,
+            pulse,
+            flash,
+        });
+        let suivant = c.add_default_trig().unwrap();
+        assert_eq!(c.trig(suivant).unwrap().channel(), 6);
+    }
 
     fn plat(niveau: f32) -> AudioFeatures {
         AudioFeatures {

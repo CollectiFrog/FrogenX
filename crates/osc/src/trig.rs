@@ -173,6 +173,85 @@ impl Divider {
     }
 }
 
+/// Ce qu'on lit d'un trig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrigOutput {
+    Gate,
+    Pulse,
+    /// Retombe seule : ce qui se lit le mieux sur un paramètre.
+    #[default]
+    Flash,
+}
+
+impl TrigOutput {
+    pub const ALL: [TrigOutput; 3] = [TrigOutput::Flash, TrigOutput::Pulse, TrigOutput::Gate];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            TrigOutput::Gate => "gate",
+            TrigOutput::Pulse => "pulse",
+            TrigOutput::Flash => "flash",
+        }
+    }
+
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|o| o.word() == word)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TrigOutput::Gate => "porte",
+            TrigOutput::Pulse => "impulsion",
+            TrigOutput::Flash => "flash",
+        }
+    }
+}
+
+/// Un trig lu depuis un autre graphe que le sien (§3bis.6). Sans état : comme une
+/// feature audio, la valeur arrive par le contexte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrigInput {
+    /// Le canal du trig : stable, et jamais réutilisé.
+    pub channel: u32,
+    pub output: TrigOutput,
+}
+
+impl TrigInput {
+    pub fn new(channel: u32) -> Self {
+        Self {
+            channel,
+            output: TrigOutput::default(),
+        }
+    }
+
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            channel: spec.int("channel")?,
+            output: TrigOutput::from_word(spec.word("output")?)
+                .ok_or_else(|| spec.field_error("output"))?,
+        })
+    }
+}
+
+impl Signal for TrigInput {
+    fn spec(&self) -> Spec {
+        Spec::new("TrigInput")
+            .with("channel", self.channel)
+            .with("output", self.output.word())
+    }
+
+    fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
+        // Un trig retiré laisse son canal vide : zéro, jamais une panne (§18).
+        let valeurs = ctx.trigs.get(self.channel as usize).copied();
+        let valeurs = valeurs.unwrap_or_default();
+        match self.output {
+            TrigOutput::Gate => valeurs.gate,
+            TrigOutput::Pulse => valeurs.pulse,
+            TrigOutput::Flash => valeurs.flash,
+        }
+    }
+}
+
 impl Signal for Divider {
     fn spec(&self) -> Spec {
         Spec::new("Divider")
@@ -215,7 +294,46 @@ impl Signal for Divider {
 mod tests {
     use super::*;
     use crate::Envelope;
-    use frogenx_core::{AudioFeatures, Constant, Graph, Spectrum};
+    use frogenx_core::{AudioFeatures, Constant, Graph, Spectrum, TrigValues};
+
+    fn lu(signal: TrigInput, trigs: &[TrigValues]) -> f32 {
+        let mut g = Graph::new();
+        let noeud = g.add(Box::new(signal));
+        g.set_trigs(trigs);
+        g.eval_frame(0.0, 1.0 / 60.0);
+        g.value(noeud)
+    }
+
+    #[test]
+    fn une_entree_de_trig_lit_son_canal_et_sa_sortie() {
+        let trigs = [
+            TrigValues::default(),
+            TrigValues {
+                gate: 1.0,
+                pulse: 0.5,
+                flash: 0.25,
+            },
+        ];
+        let mut signal = TrigInput::new(1);
+        assert_eq!(lu(signal, &trigs), 0.25, "le flash par défaut");
+        signal.output = TrigOutput::Pulse;
+        assert_eq!(lu(signal, &trigs), 0.5);
+        signal.output = TrigOutput::Gate;
+        assert_eq!(lu(signal, &trigs), 1.0);
+    }
+
+    #[test]
+    fn un_canal_sans_trig_vaut_zero() {
+        assert_eq!(lu(TrigInput::new(7), &[]), 0.0);
+    }
+
+    #[test]
+    fn une_sortie_inconnue_est_refusee_a_la_lecture() {
+        let spec = Spec::new("TrigInput")
+            .with("channel", 0u32)
+            .with("output", "fin");
+        assert!(TrigInput::from_spec(&spec).is_err());
+    }
 
     /// Un spectre plat à `niveau`.
     fn plat(niveau: f32) -> AudioFeatures {

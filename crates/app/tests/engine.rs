@@ -1043,6 +1043,117 @@ fn un_noeud_ajoute_et_cable_module_l_image() {
 }
 
 #[test]
+fn un_trig_module_un_effet_du_clip() {
+    let Some(gpu) = gpu() else { return };
+    let (mut composition, piste, rouge, _) = une_piste();
+    composition.trigger(piste, rouge);
+    let trig = composition.add_default_trig().unwrap();
+    let channel = composition.trig(trig).unwrap().channel();
+    let (mut moteur, recu) = moteur(gpu, composition);
+
+    let slot = ParamSlot::Effect {
+        effect: 0,
+        param: 0,
+    };
+    moteur.push(Command::AddEffect {
+        clip: rouge,
+        kind: EffectKind::Transform,
+    });
+    moteur.push(Command::SetParam {
+        clip: rouge,
+        slot,
+        value: 0.1,
+    });
+    moteur.push(Command::SetTrigModulation {
+        clip: rouge,
+        slot,
+        channel,
+    });
+    moteur.push(Command::SetDepth {
+        clip: rouge,
+        slot,
+        value: 0.9,
+    });
+    moteur.set_audio(son(0.0));
+    moteur.frame(0.0);
+    moteur.frame(0.0);
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    moteur.frame(0.0);
+    moteur.finish();
+    assert!(moteur.is_dirty(), "un branchement est une modification");
+
+    let frames = recu.0.lock().unwrap();
+    let bord = |i: usize| pixel(&frames[i], SIZE.x * 3 / 8, SIZE.y / 2);
+    assert_eq!(bord(1)[3], 0, "silence : la forme reste petite");
+    assert!(bord(3)[3] > 100, "le coup l'agrandit : {:?}", bord(3));
+}
+
+#[test]
+fn un_trig_retire_laisse_l_effet_a_sa_base_sans_panne() {
+    let Some(gpu) = gpu() else { return };
+    let (mut composition, piste, rouge, _) = une_piste();
+    composition.trigger(piste, rouge);
+    let trig = composition.add_default_trig().unwrap();
+    let channel = composition.trig(trig).unwrap().channel();
+    let (mut moteur, recu) = moteur(gpu, composition);
+    let slot = ParamSlot::Effect {
+        effect: 0,
+        param: 0,
+    };
+    moteur.push(Command::AddEffect {
+        clip: rouge,
+        kind: EffectKind::Transform,
+    });
+    moteur.push(Command::SetTrigModulation {
+        clip: rouge,
+        slot,
+        channel,
+    });
+    moteur.set_audio(son(0.9));
+    moteur.frame(0.0);
+    moteur.push(Command::RemoveTrig(trig));
+    moteur.frame(0.0);
+    moteur.frame(0.0);
+    moteur.finish();
+    assert_eq!(recu.0.lock().unwrap().len(), 3);
+}
+
+#[test]
+fn annuler_retrouve_le_trig_branche_sur_un_effet() {
+    let Some(gpu) = gpu() else { return };
+    let (mut composition, piste, rouge, _) = une_piste();
+    composition.trigger(piste, rouge);
+    composition.add_default_trig().unwrap();
+    assert!(composition.add_effect(rouge, EffectKind::Transform));
+    let (mut moteur, _) = moteur(gpu, composition);
+    let slot = ParamSlot::Effect {
+        effect: 0,
+        param: 0,
+    };
+    moteur.push(Command::SetTrigModulation {
+        clip: rouge,
+        slot,
+        channel: 0,
+    });
+    frames(&mut moteur, 20);
+    assert_eq!(moteur.undo_label(), Some("Source de trig"));
+    let fait = moteur.undo().expect("un pas à annuler");
+    let clip = fait.map.clip(rouge).unwrap();
+    let lit_un_trig = |m: &Engine, clip| {
+        let c = m.composition().clip(clip).unwrap();
+        c.params()
+            .iter()
+            .flat_map(|g| g.params.clone())
+            .any(|p| p.trig.is_some())
+    };
+    assert!(!lit_un_trig(&moteur, clip));
+    let fait = moteur.redo().expect("un pas à rétablir");
+    assert!(lit_un_trig(&moteur, fait.map.clip(clip).unwrap()));
+    moteur.finish();
+}
+
+#[test]
 fn un_effet_ajoute_change_l_image_a_la_frame_suivante() {
     let Some(gpu) = gpu() else { return };
     let (composition, piste, rouge, _) = une_piste();

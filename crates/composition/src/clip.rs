@@ -1,8 +1,8 @@
 //! Le `Clip` — point de jonction avec le graphe modulaire, §3bis.2 de
 //! `docs/ARCHITECTURE.md`.
 
-use frogenx_core::{FeatureKind, Graph, Param};
-use frogenx_osc::AudioFeature;
+use frogenx_core::{FeatureKind, Graph, Param, Signal};
+use frogenx_osc::{AudioFeature, TrigInput};
 use frogenx_shape::{
     ColorParam, FeedbackParams, MixKind, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle,
     COLOR_CHANNELS,
@@ -116,6 +116,8 @@ pub struct ClipParam {
     pub desc: ParamDesc,
     /// La feature audio qui le module, s'il y en a une (§7.1).
     pub audio: Option<FeatureKind>,
+    /// Le canal du trig qui le module, s'il y en a un (§3bis.6).
+    pub trig: Option<u32>,
 }
 
 /// Les paramètres d'une partie du clip : son générateur, un effet, son style.
@@ -130,6 +132,14 @@ fn audio_source(graph: &Graph, param: Param) -> Option<FeatureKind> {
     let spec = graph.node_spec(param.source()?)?;
     (spec.kind == "AudioFeature")
         .then(|| FeatureKind::from_word(spec.word("feature").ok()?))
+        .flatten()
+}
+
+/// Le canal du trig que lit `param`, si sa source en est un.
+fn trig_source(graph: &Graph, param: Param) -> Option<u32> {
+    let spec = graph.node_spec(param.source()?)?;
+    (spec.kind == "TrigInput")
+        .then(|| spec.int("channel").ok())
         .flatten()
 }
 
@@ -227,6 +237,7 @@ impl Clip {
                     slot: slot(i),
                     desc,
                     audio: audio_source(graph, desc.value),
+                    trig: trig_source(graph, desc.value),
                 })
                 .collect()
         };
@@ -303,37 +314,58 @@ impl Clip {
     /// qui était réglée. `None` n'efface qu'une source audio : le LFO d'un clip du
     /// catalogue reste en place. Rend `false` si `slot` ne désigne rien.
     pub fn set_audio_modulation(&mut self, slot: ParamSlot, feature: Option<FeatureKind>) -> bool {
-        let params = self.params();
-        let Some(param) = params
-            .iter()
-            .flat_map(|g| &g.params)
-            .find(|p| p.slot == slot)
-        else {
+        let Some(param) = self.clip_param(slot) else {
             return false;
         };
-        if param.audio == feature {
+        if param.audio == feature && param.trig.is_none() {
             return true;
         }
+        let source = feature.map(|f| Box::new(AudioFeature::new(f)) as Box<dyn Signal>);
+        self.replace_source(param, source);
+        true
+    }
+
+    /// Branche le trig de ce canal sur un paramètre (§3bis.6). Remplace la source
+    /// d'un menu, comme [`Self::set_audio_modulation`].
+    pub fn set_trig_modulation(&mut self, slot: ParamSlot, channel: u32) -> bool {
+        let Some(param) = self.clip_param(slot) else {
+            return false;
+        };
+        if param.trig != Some(channel) {
+            self.replace_source(param, Some(Box::new(TrigInput::new(channel))));
+        }
+        true
+    }
+
+    fn clip_param(&self, slot: ParamSlot) -> Option<ClipParam> {
+        let groupes = self.params();
+        let params = groupes.iter().flat_map(|g| &g.params);
+        params.into_iter().find(|p| p.slot == slot).copied()
+    }
+
+    /// Pose une nouvelle source sur `param`, ou aucune. Seule une source posée
+    /// par un menu se retire : un câble tiré dans l'éditeur reste à l'éditeur.
+    fn replace_source(&mut self, param: ClipParam, source: Option<Box<dyn Signal>>) {
         let valeur = param.desc.value;
-        let ancienne = param.audio.and(valeur.source());
+        let du_menu = param.audio.is_some() || param.trig.is_some();
+        let ancienne = valeur.source().filter(|_| du_menu);
         let amplitude = valeur
             .depth()
             .filter(|_| ancienne.is_some())
             .unwrap_or((param.desc.max - param.desc.min) * 0.5);
-        let nouvelle = match feature {
-            Some(feature) => {
-                let source = self.graph_mut().add(Box::new(AudioFeature::new(feature)));
+        let nouvelle = match source {
+            Some(source) => {
+                let source = self.graph_mut().add(source);
                 Param::modulated(valeur.base(), amplitude, source)
             }
             None => Param::fixed(valeur.base()),
         };
-        if let Some(p) = self.param_mut(slot) {
+        if let Some(p) = self.param_mut(param.slot) {
             *p = nouvelle;
         }
         if let Some(source) = ancienne {
             let _ = self.graph_mut().remove(source);
         }
-        true
     }
 
     /// Remplace un paramètre entier, source comprise (§23.10). Rend `false` si
@@ -554,6 +586,68 @@ mod tests {
             c.graph_mut().eval_frame(0.0, 1.0 / 60.0);
         }
         assert!(rayon(&c).desc.value.get(c.graph()) > 1.4);
+    }
+
+    #[test]
+    fn un_trig_se_branche_sur_un_parametre_et_se_lit_dans_son_graphe() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        let noeuds = c.graph().len();
+        assert!(c.set_trig_modulation(slot, 3));
+        assert_eq!(rayon(&c).trig, Some(3));
+        assert_eq!(c.graph().len(), noeuds + 1);
+        let trigs = [frogenx_core::TrigValues {
+            gate: 0.0,
+            pulse: 0.0,
+            flash: 1.0,
+        }; 4];
+        let base = rayon(&c).desc.value.base();
+        c.graph_mut().set_trigs(&trigs);
+        c.graph_mut().eval_frame(0.0, 1.0 / 60.0);
+        assert!(rayon(&c).desc.value.get(c.graph()) > base);
+    }
+
+    #[test]
+    fn rebrancher_le_meme_trig_ne_change_rien() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        c.set_trig_modulation(slot, 1);
+        let noeuds = c.graph().len();
+        assert!(c.set_trig_modulation(slot, 1));
+        assert_eq!(c.graph().len(), noeuds);
+    }
+
+    #[test]
+    fn un_trig_remplace_une_feature_et_inversement_sans_laisser_de_noeud() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        c.set_audio_modulation(slot, Some(FeatureKind::Bass));
+        c.set_depth(slot, 0.25);
+        let noeuds = c.graph().len();
+        c.set_trig_modulation(slot, 0);
+        assert_eq!(rayon(&c).audio, None);
+        assert_eq!(rayon(&c).desc.value.depth(), Some(0.25));
+        assert_eq!(c.graph().len(), noeuds);
+        c.set_audio_modulation(slot, Some(FeatureKind::Onset));
+        assert_eq!(rayon(&c).trig, None);
+        assert_eq!(c.graph().len(), noeuds);
+    }
+
+    #[test]
+    fn sans_source_debranche_aussi_un_trig() {
+        let mut c = un_cercle();
+        let slot = ParamSlot::Generator(0);
+        let noeuds = c.graph().len();
+        c.set_trig_modulation(slot, 0);
+        assert!(c.set_audio_modulation(slot, None));
+        assert_eq!(rayon(&c).trig, None);
+        assert_eq!(rayon(&c).desc.value.source(), None);
+        assert_eq!(c.graph().len(), noeuds);
+    }
+
+    #[test]
+    fn un_trig_sur_un_parametre_inconnu_est_refuse() {
+        assert!(!un_cercle().set_trig_modulation(ParamSlot::Generator(99), 0));
     }
 
     #[test]

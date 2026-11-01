@@ -84,9 +84,22 @@ fn card<T>(
     clic
 }
 
-/// Le choix d'une source audio, au clic droit d'un potentiomètre (§7.1). Rend le
-/// nouveau choix, s'il y en a un.
-fn audio_menu(ui: &mut Ui, actuelle: Option<FeatureKind>) -> Option<Option<FeatureKind>> {
+/// Ce qu'on peut brancher sur un paramètre depuis son menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Audio(FeatureKind),
+    Trig(u32),
+    Nothing,
+}
+
+/// Le choix d'une source, au clic droit d'un potentiomètre (§7.1, §3bis.6). Rend
+/// le nouveau choix, s'il y en a un.
+fn source_menu(
+    ui: &mut Ui,
+    actuelle: Option<FeatureKind>,
+    trig: Option<u32>,
+    trigs: &[(String, u32)],
+) -> Option<Source> {
     let mut choix = None;
     ui.label(
         RichText::new("Source audio")
@@ -98,21 +111,39 @@ fn audio_menu(ui: &mut Ui, actuelle: Option<FeatureKind>) -> Option<Option<Featu
             .selectable_label(actuelle == Some(feature), feature.label())
             .clicked()
         {
-            choix = Some(Some(feature));
+            choix = Some(Source::Audio(feature));
+            ui.close();
+        }
+    }
+    if !trigs.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("Trig").color(theme::TEXT_DIM).size(11.0));
+    }
+    for (nom, canal) in trigs {
+        if ui.selectable_label(trig == Some(*canal), nom).clicked() {
+            choix = Some(Source::Trig(*canal));
             ui.close();
         }
     }
     ui.separator();
     let debrancher = egui::Button::new("Sans source audio");
-    if ui.add_enabled(actuelle.is_some(), debrancher).clicked() {
-        choix = Some(None);
+    let branche = actuelle.is_some() || trig.is_some();
+    if ui.add_enabled(branche, debrancher).clicked() {
+        choix = Some(Source::Nothing);
         ui.close();
     }
     choix
 }
 
 /// Le réglage d'un `Param` du clip. Il émet une commande, n'écrit rien (§23).
-fn param_knob(ui: &mut Ui, clip: ClipId, graph: &Clip, param: &ClipParam, out: &mut Vec<Command>) {
+fn param_knob(
+    ui: &mut Ui,
+    clip: ClipId,
+    graph: &Clip,
+    param: &ClipParam,
+    trigs: &[(String, u32)],
+    out: &mut Vec<Command>,
+) {
     ui.spacing_mut().item_spacing.x = 8.0;
     let desc = param.desc;
     let nom = desc.name.to_uppercase();
@@ -125,14 +156,26 @@ fn param_knob(ui: &mut Ui, clip: ClipId, graph: &Clip, param: &ClipParam, out: &
     let reglage =
         Knob::new(&nom, desc.value.base(), desc.min, desc.max, couleur).modulated(modulation);
     let mut demande = None;
-    let mut menu = |ui: &mut Ui| demande = audio_menu(ui, param.audio);
+    let mut menu = |ui: &mut Ui| demande = source_menu(ui, param.audio, param.trig, trigs);
     let change = knob_with_menu(ui, &reglage, Some(&mut menu));
-    if let Some(feature) = demande {
-        out.push(Command::SetAudioModulation {
+    let slot = param.slot;
+    match demande {
+        Some(Source::Audio(feature)) => out.push(Command::SetAudioModulation {
             clip,
-            slot: param.slot,
-            feature,
-        });
+            slot,
+            feature: Some(feature),
+        }),
+        Some(Source::Trig(channel)) => out.push(Command::SetTrigModulation {
+            clip,
+            slot,
+            channel,
+        }),
+        Some(Source::Nothing) => out.push(Command::SetAudioModulation {
+            clip,
+            slot,
+            feature: None,
+        }),
+        None => {}
     }
     if let Some(value) = change.value {
         out.push(Command::SetParam {
@@ -302,6 +345,12 @@ pub fn floating(
             ui.horizontal(|ui| playback_row(ui, id, clip, commands));
             ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
+            let trigs: Vec<(String, u32)> = c
+                .trigs()
+                .iter()
+                .filter_map(|t| c.trig(*t))
+                .map(|t| (t.name.clone(), t.channel()))
+                .collect();
             let couleurs: Vec<Option<Swatch>> =
                 groupes.iter().map(|g| Swatch::of(clip, g)).collect();
             let mut places = vec![CLIP_KNOBS.len()];
@@ -339,7 +388,7 @@ pub fn floating(
                                     &groupe.params,
                                     par_rangee,
                                     |ui, param| {
-                                        param_knob(ui, id, clip, param, commands);
+                                        param_knob(ui, id, clip, param, &trigs, commands);
                                     },
                                 );
                                 if clic {

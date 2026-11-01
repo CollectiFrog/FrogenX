@@ -306,6 +306,7 @@ pub(crate) fn patch(c: &Composition) -> Result<FilePatch, PatchError> {
             Ok(FileTrig {
                 name: t.name.clone(),
                 target: target(c, t.target, &pistes),
+                channel: t.channel(),
                 gate: positions.require(t.gate(), "un trig")?,
                 pulse: positions.require(t.pulse(), "un trig")?,
                 flash: positions.require(t.flash(), "un trig")?,

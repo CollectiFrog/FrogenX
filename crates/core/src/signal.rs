@@ -41,6 +41,18 @@ pub const DEFAULT_BPM: f32 = 120.0;
 ///
 /// Ne contient jamais l'horloge système : `t` est un paramètre séparé de `eval`,
 /// précisément pour qu'un test puisse le fixer (§4).
+/// Ce qu'un trig donne à lire hors de son graphe (§3bis.6). `core` n'en sait pas
+/// plus : c'est `composition` qui les calcule.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TrigValues {
+    /// `1` tant que le pic est dans la zone.
+    pub gate: f32,
+    /// `1` pendant une frame, une fois sur N.
+    pub pulse: f32,
+    /// `pulse` qui retombe seule.
+    pub flash: f32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Ctx<'a> {
     /// Durée de la frame, en secondes. Nécessaire aux modules à état : une
@@ -55,6 +67,8 @@ pub struct Ctx<'a> {
     /// Tempo de la composition, en BPM (§3bis.3). Source unique : aucun clip
     /// n'y est câblé un par un.
     pub bpm: f32,
+    /// Les trigs, indexés par leur canal (§3bis.6). Un canal absent vaut zéro.
+    pub trigs: &'a [TrigValues],
     /// Cache d'évaluation de la frame, indexé par `NodeId::index()`.
     ///
     /// **Pourquoi le cache et non `&Graph` :** pendant `eval_frame`, le graphe
@@ -76,6 +90,7 @@ impl<'a> Ctx<'a> {
             sample_rate: 48_000.0,
             audio,
             bpm: DEFAULT_BPM,
+            trigs: &[],
             cache: &[],
         }
     }
@@ -88,12 +103,18 @@ impl<'a> Ctx<'a> {
             sample_rate: 48_000.0,
             audio,
             bpm: DEFAULT_BPM,
+            trigs: &[],
             cache,
         }
     }
 
     pub fn with_bpm(mut self, bpm: f32) -> Self {
         self.bpm = bpm;
+        self
+    }
+
+    pub fn with_trigs(mut self, trigs: &'a [TrigValues]) -> Self {
+        self.trigs = trigs;
         self
     }
 }

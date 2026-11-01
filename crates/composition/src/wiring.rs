@@ -12,8 +12,8 @@ use crate::signals::signal_from_spec;
 use crate::transport::Transport;
 use frogenx_core::{Constant, FeatureKind, Graph, NodeId, Param, Signal, Spec, SpecValue};
 use frogenx_osc::{
-    AudioFeature, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold, Sum, Trigger,
-    Waveform,
+    AudioFeature, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold, Sum, TrigInput,
+    Trigger, Waveform,
 };
 use frogenx_shape::EffectKind;
 
@@ -39,6 +39,11 @@ pub enum NodeKind {
     Mix,
     BeatRate,
     AudioFeature,
+    /// Un trig de la composition, lu depuis un clip (§3bis.6). Hors de `ALL` :
+    /// le menu en propose un par trig.
+    Trig {
+        channel: u32,
+    },
 }
 
 impl NodeKind {
@@ -71,6 +76,7 @@ impl NodeKind {
             NodeKind::Mix => "Mélange",
             NodeKind::BeatRate => "Tempo",
             NodeKind::AudioFeature => "Audio",
+            NodeKind::Trig { .. } => "Trig",
         }
     }
 
@@ -96,6 +102,7 @@ impl NodeKind {
             }),
             NodeKind::BeatRate => Box::new(BeatRate::new(4.0)),
             NodeKind::AudioFeature => Box::new(AudioFeature::new(FeatureKind::Rms)),
+            NodeKind::Trig { channel } => Box::new(TrigInput::new(channel)),
         }
     }
 }
