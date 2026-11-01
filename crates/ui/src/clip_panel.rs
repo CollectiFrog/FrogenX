@@ -9,6 +9,7 @@
 //! sous un panneau ; une image de sortie doit se voir entière. Il flotte donc à
 //! côté d'elle, et ne se pose dessus que si la scène n'a plus de place.
 
+use crate::color_panel::{color_row, swatch_button, Swatch};
 use crate::widgets::{floating_panel, knob, knob_with_menu, Knob, Modulation, KNOB_STEP};
 use crate::{theme, FrameView, UiState};
 use egui::{Rect, RichText, Ui};
@@ -54,16 +55,24 @@ pub fn wrap_cards(counts: &[usize], per_row: usize) -> Vec<Range<usize>> {
     rangees
 }
 
-/// Une partie du clip : son titre, et ses potentiomètres par rangées.
+/// Une partie du clip : son titre, sa pastille si c'est une couleur, et ses
+/// potentiomètres par rangées. Rend `true` si la pastille a été cliquée.
 fn card<T>(
     ui: &mut Ui,
     titre: &str,
+    pastille: Option<(&Swatch, bool)>,
     items: &[T],
     per_row: usize,
     mut add: impl FnMut(&mut Ui, &T),
-) {
+) -> bool {
+    let mut clic = false;
     ui.vertical(|ui| {
-        ui.label(RichText::new(titre).size(10.5).color(theme::TEXT_DIM));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(titre).size(10.5).color(theme::TEXT_DIM));
+            if let Some((couleur, ouvert)) = pastille {
+                clic = swatch_button(ui, titre, couleur, ouvert);
+            }
+        });
         for rangee in items.chunks(per_row) {
             ui.horizontal(|ui| {
                 for item in rangee {
@@ -72,6 +81,7 @@ fn card<T>(
             });
         }
     });
+    clic
 }
 
 /// Le choix d'une source audio, au clic droit d'un potentiomètre (§7.1). Rend le
@@ -292,31 +302,49 @@ pub fn floating(
             ui.horizontal(|ui| playback_row(ui, id, clip, commands));
             ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
+            let couleurs: Vec<Option<Swatch>> =
+                groupes.iter().map(|g| Swatch::of(clip, g)).collect();
             let mut places = vec![CLIP_KNOBS.len()];
             places.extend(groupes.iter().map(|g| g.params.len()));
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 // Un écart de carte retiré par carte : large, mais jamais coupé.
                 let par_rangee = knobs_per_row(ui.available_width() - CARD_GAP);
+                let ouverte = state.open_color.filter(|(c, _)| *c == id).map(|o| o.1);
+                let selecteur = couleurs.iter().zip(&groupes).find_map(|(c, g)| {
+                    let couleur = c.as_ref().filter(|c| Some(c.key) == ouverte)?;
+                    Some((couleur, &g.label))
+                });
+                if let Some((couleur, titre)) = selecteur {
+                    color_row(ui, titre, id, couleur, commands);
+                }
                 for rangee in wrap_cards(&places, par_rangee) {
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = CARD_GAP;
                         for i in rangee {
                             if i == 0 {
-                                card(ui, "Clip", &CLIP_KNOBS, par_rangee, |ui, reglage| {
+                                let ajout = |ui: &mut Ui, reglage: &ClipKnob| {
                                     clip_knob(ui, *reglage, id, layer, clip, piste, commands);
-                                });
+                                };
+                                card(ui, "Clip", None, &CLIP_KNOBS, par_rangee, ajout);
                             } else {
                                 let groupe = &groupes[i - 1];
-                                card(
+                                let couleur = couleurs[i - 1].as_ref();
+                                let cle = couleur.map(|c| c.key);
+                                let ouvert = cle.is_some() && cle == ouverte;
+                                let clic = card(
                                     ui,
                                     &groupe.label,
+                                    couleur.map(|c| (c, ouvert)),
                                     &groupe.params,
                                     par_rangee,
                                     |ui, param| {
                                         param_knob(ui, id, clip, param, commands);
                                     },
                                 );
+                                if clic {
+                                    state.open_color = cle.filter(|_| !ouvert).map(|cle| (id, cle));
+                                }
                             }
                         }
                     });

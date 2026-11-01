@@ -1750,6 +1750,7 @@ qui les livre (skill `doc-sync`).
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
+| Sélecteur de couleur | pastille de la couleur qui joue, champ et barre de teinte dans le panneau (§23.5) |
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
@@ -1760,17 +1761,16 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 2 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 3 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
-| 4 | Enregistrement, étape 10 | un fichier vidéo | grande |
-| 5 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
-| 6 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 7 | Scène 3D, étape 13 | | très grande |
-| 8 | Art-Net / DMX, étape 14 | | moyenne |
-| 9 | Scripting Lua, étape 15 | | moyenne |
-| 10 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 11 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 2 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
+| 3 | Enregistrement, étape 10 | un fichier vidéo | grande |
+| 4 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
+| 5 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 6 | Scène 3D, étape 13 | | très grande |
+| 7 | Art-Net / DMX, étape 14 | | moyenne |
+| 8 | Scripting Lua, étape 15 | | moyenne |
+| 9 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 10 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -1811,6 +1811,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **L'image de sortie n'est jamais couverte par les réglages** (§23.9) | un spectre se lit sous un panneau, une image de sortie doit se voir entière ; c'est la seule entorse au modèle du spectre |
 | **L'image ne dépend pas de la sélection** (§23.9) | choisir un clip ne doit pas la faire sauter en plein set |
 | **Un seul potentiomètre pour tous les réglages** (`widgets::knob`), avec couronne de modulation (§23.9) | un seul geste à apprendre ; la modulation d'un `Param` se voit là où il se règle |
+| **Le sélecteur de couleur s'ajoute aux potentiomètres, dans le panneau** (§23.5) | eux seuls portent la modulation ; une fenêtre surgissante pourrait couvrir le monitor |
 | **Le pliage des réglages est calculé** (§23.9) | egui ne replie que ce dont il connaît la taille d'avance : les derniers réglages sortaient du panneau sans le dire |
 | **Un en-tête unique** au lieu d'un menu et d'une barre (§23.9) | une ligne gagnée pour l'image, et le tempo au plus près des menus |
 | **Apparence de Pro-Q, disposition de Resolume** (§23.1) | la disposition répond à la conduite d'un set, l'apparence à la lecture d'un son ; le spectre est devenu le cœur de l'audio-réactivité |
@@ -3199,9 +3200,20 @@ second le ferme. Trois décisions :
 - **Dans le panneau, jamais par-dessus.** Une fenêtre surgissante pourrait couvrir le monitor
   (§23.9). Il occupe une rangée entière, parce que les cartes se plient d'après leur nombre de
   potentiomètres (`wrap_cards`).
-- **Le RVB seul.** L'alpha garde son potentiomètre : passer par `Color32`, prémultiplié, l'abîmerait
-  à faible opacité. Un canal que le geste n'a pas changé n'émet rien : le choix se fait sur 8 bits,
-  et réécrire les autres canaux leur ferait perdre leur précision.
+- **Le RVB seul.** L'alpha garde son potentiomètre. Un canal que le geste n'a pas changé n'émet
+  rien : le choix se fait sur 8 bits, et réécrire les autres canaux leur ferait perdre leur
+  précision.
+
+**Dessiné ici, pas celui d'egui.** Le sien affiche un bouton de copie dont le glyphe manque à nos
+polices, ce qui panique en test, et il prend de la place pour des curseurs déjà présents. Le nôtre
+est un champ saturation-valeur et une barre de teinte, calculés sur les canaux sRGB tels qu'on les
+saisit (§21). Il retient sa teinte d'un geste à l'autre : celle d'un gris ou d'un noir ne se lit pas
+dans ses canaux, et passer par le noir la perdrait.
+
+**Ce qui est vérifié, et comment.** Sans fenêtre : les six couleurs pures, l'aller-retour sRGB et
+HSV, la teinte gardée au noir, une couleur venue d'ailleurs qui reprend ses droits, un seul canal
+émis quand un seul change. Par clics simulés : la pastille qui ouvre et ferme, le champ et la barre
+qui émettent des `SetParam`. **Pas encore essayé :** le geste à la vraie souris.
 
 **Non couvert.** Les onglets et l'ajout d'effets à un clip sont dans l'éditeur de
 nœuds (§23.10). Le sélecteur n'a ni palette ni saisie hexadécimale.

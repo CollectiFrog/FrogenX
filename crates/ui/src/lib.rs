@@ -12,6 +12,7 @@
 //! `app`. Les tests simulent des clics, sans GPU ni écran.
 
 pub mod clip_panel;
+pub mod color_panel;
 pub mod nodes;
 pub mod spectrum;
 pub mod theme;
@@ -23,7 +24,7 @@ use egui::{
 };
 use frogenx_composition::IdMap;
 use frogenx_composition::{
-    Clip, ClipId, ColumnId, Command, Composition, LayerId, PlayMode, Transport, TrigId,
+    Clip, ClipId, ColumnId, Command, Composition, LayerId, ParamSlot, PlayMode, Transport, TrigId,
 };
 use frogenx_core::{Spectrum, SPECTRUM_BANDS};
 use frogenx_library::{presets, Family, PresetId};
@@ -200,6 +201,8 @@ const SAVE_SHORTCUT: egui::KeyboardShortcut =
 pub struct UiState {
     /// Le clip affiché dans les réglages, et sa piste.
     pub selected: Option<(LayerId, ClipId)>,
+    /// La couleur ouverte dans le sélecteur : son clip, et son premier canal.
+    pub open_color: Option<(ClipId, ParamSlot)>,
     pub show_grid: bool,
     pub show_monitor: bool,
     pub show_settings: bool,
@@ -231,10 +234,14 @@ impl UiState {
             .and_then(|(layer, clip)| Some((map.layer(layer)?, map.clip(clip)?)));
         self.selected_trig = self.selected_trig.and_then(|t| map.trig(t));
         self.zone_gesture = None;
+        self.open_color = self
+            .open_color
+            .and_then(|(clip, slot)| Some((map.clip(clip)?, slot)));
     }
 
     pub fn forget_grid(&mut self) {
         self.selected = None;
+        self.open_color = None;
         self.selected_trig = None;
         self.zone_gesture = None;
         self.known_trigs = None;
@@ -245,6 +252,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             selected: None,
+            open_color: None,
             show_grid: true,
             show_monitor: true,
             show_settings: true,
@@ -938,7 +946,7 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
     use egui_kittest::Harness;
-    use frogenx_composition::{Clip, ParamSlot, PlayMode, Transport, TrigSlot, TrigTarget};
+    use frogenx_composition::{Clip, PlayMode, Transport, TrigSlot, TrigTarget};
     use frogenx_core::{AmpScale, AnalysisMethod, Constant, FreqScale, Graph, Param};
     use frogenx_library::find;
     use frogenx_shape::{ColorParam, Ellipse, ShapeStyle};
@@ -1521,6 +1529,69 @@ mod tests {
         assert_eq!(loop_progress(&clip), Some(1.0));
         assert!(clip.set_playback(PlayMode::Loop, 1.0));
         assert!((loop_progress(&clip).unwrap() - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn la_pastille_ouvre_le_selecteur_puis_le_referme() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        assert_eq!(h.state().ui.open_color, None);
+        h.get_by_label("Couleur : Remplissage").click();
+        h.run();
+        assert_eq!(
+            h.state().ui.open_color,
+            Some((g.clips[0], ParamSlot::Fill(0)))
+        );
+        h.get_by_label("Couleur : Remplissage").click();
+        h.run();
+        assert_eq!(h.state().ui.open_color, None);
+    }
+
+    #[test]
+    fn ouvrir_le_selecteur_n_emet_aucune_commande() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_label("Couleur : Remplissage").click();
+        h.run();
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn un_geste_sur_la_teinte_emet_les_canaux_du_clip() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.get_by_label("Couleur : Remplissage").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_label("Teinte").click();
+        h.run();
+        // Du rouge pur au milieu de la barre : du cyan, le rouge s'éteint.
+        assert!(h.state().commands.contains(&Command::SetParam {
+            clip: g.clips[0],
+            slot: ParamSlot::Fill(0),
+            value: 0.0,
+        }));
+    }
+
+    #[test]
+    fn le_selecteur_d_un_autre_clip_ne_s_affiche_pas() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.get_by_label("Couleur : Remplissage").click();
+        h.run();
+        assert_eq!(h.query_all_by_label("Remplissage").count(), 2, "ouvert");
+        h.get_by_label("Beta").click();
+        h.run();
+        assert_eq!(h.query_all_by_label("Remplissage").count(), 1);
     }
 
     #[test]
