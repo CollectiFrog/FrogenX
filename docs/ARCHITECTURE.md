@@ -1281,15 +1281,62 @@ frame relue, pas ceux de la frame en cours de rendu.
 - **Offline / déterministe** — pas de temps fixe, aucune frame perdue, qualité garantie,
   mais pas temps réel. Pour un rendu final propre.
 
-**Encodage :** un pipe vers le binaire `ffmpeg` plutôt que des bindings. Plus simple à
-démarrer, et surtout ffmpeg sélectionne lui-même l'encodeur matériel de chaque
-plateforme (NVENC, VideoToolbox, Media Foundation) — un problème de portabilité qu'on
-n'a pas à porter.
+**Encodage :** un pipe vers le binaire `ffmpeg` plutôt que des bindings. Le binaire n'est pas
+livré : il se cherche dans le `PATH`, et le menu dit quand il manque. Rien d'autre ne dépend de
+lui, et sa licence reste la sienne.
 
-**D'ici l'étape 10, `PngSequenceSink`** écrit une image par frame, nommée d'après son
-`index` (`frame_000000.png`). Elle donne un rendu offline déterministe sans encodeur ;
-`ffmpeg` assemble ensuite la séquence (skill `poc-video`). L'ouverture crée le dossier
-et rend un `Result` ; un disque plein en cours de rendu la fait passer en `Failed`.
+**L'enregistreur est un flux.** `FfmpegSink` est un `CpuSink` posé par `add_stream` avec un
+`StreamFormat` : la relecture, la cadence, la file bornée et la perte existent déjà (§8.5). Un
+ffmpeg qui décroche ne touche donc jamais le rendu : c'est sa file qui perd des frames.
+
+```rust
+pub enum RecordPreset { H264, ProRes }
+
+impl FfmpegSink {
+    pub fn open(preset: RecordPreset, encoder: VideoEncoder, size: (u32, u32), fps: u32,
+                path: &Path) -> Result<Self, String>;
+}
+```
+
+| Préréglage | Encodeur | Fichier | Pour |
+|---|---|---|---|
+| `H264` | `h264_nvenc`, sinon `libx264` | `.mp4`, AAC | archiver un set : léger, lisible partout |
+| `ProRes` | `prores_ks`, 422 HQ | `.mov`, PCM | le montage : environ 1 Go/min en 1080p60, encodé sur le CPU |
+
+Une sonde de quelques images dit au lancement, sur un thread, si NVENC répond vraiment :
+`ffmpeg -encoders` le liste même sans carte NVIDIA.
+
+**Le temps du fichier reste vrai.** Le flux brut n'a pas d'horloge : une frame perdue
+raccourcirait la vidéo, qui glisserait devant son son. `frames_due` compare le `t` de la frame à ce
+qui est déjà écrit, et répète la dernière image pour rattraper. Une prise qui perd des images
+reste donc de la bonne durée, et son statut le dit (`Degraded`).
+
+**Le son ne passe pas par le callback.** Il sort du thread d'analyse, déjà mélangé en mono : ce
+que FrogenX entend, sans deviner quelles entrées d'une carte à six forment une stéréo. Un anneau
+le porte à un thread qui écrit un `.wav`, parce qu'une écriture sur disque n'a rien à faire dans
+l'analyse, et encore moins dans le callback (§7). L'anneau tient 2 s : au-delà, les échantillons
+perdus se comptent et s'affichent.
+
+**À l'arrêt, ffmpeg assemble.** L'image va dans `nom.video.mp4`, le son dans `nom.audio.wav`, à côté
+du fichier final. Un second ffmpeg copie l'image sans la réencoder, ajoute le son, puis retire les
+deux. Le tout tourne sur un thread : l'interface continue, et dit `Assemblage…`. Fermer
+l'application l'attend. Si l'assemblage échoue, les deux fichiers restent : une prise de concert
+ne se jette pas. L'écart entre les deux départs, mesuré à l'horloge, recale le son. La latence
+de la carte son n'y est pas, pas plus qu'au §7.1.
+
+**Une prise ne se règle pas en cours.** Format, cadence et dossier sont grisés pendant la prise :
+un fichier ne change pas de taille. Un rendu redimensionné passe la prise en `Failed`, et ce
+qu'elle a déjà écrit reste lisible.
+
+**Les gestes.** Une ligne `Enregistrement` dans le menu `Sortie` : le format, la taille, la
+cadence, le dossier, et `Enregistrer`. Le nom se choisit seul, `FrogenX 001.mp4`, le premier libre :
+sur scène, on ne tape pas de nom. L'en-tête montre `REC 01:23` en or tant que ça tourne. Ces réglages
+appartiennent à la machine (`sorties.txt`), comme ceux des flux. `--record FICHIER` démarre une
+prise au lancement, et `sequence --video FICHIER` écrit un rendu offline sans perte.
+
+**`PngSequenceSink`** reste : il écrit une image par frame, nommée d'après son `index`
+(`frame_000000.png`), sans dépendre de ffmpeg. L'ouverture crée le dossier et rend un `Result` ;
+un disque plein en cours de rendu la fait passer en `Failed`.
 
 ### 8.3 Le moteur, la fenêtre et le rythme
 
@@ -1389,9 +1436,9 @@ bandes noires, un écran 4K une image agrandie. Le rendu se règle à la main (�
 le ferme. Elle sert aussi à travailler avec un seul écran.
 
 **Retirer une sortie.** `Failed` ne retire jamais une sortie (§8.0), parce que seul
-l'utilisateur en décide : fermer est précisément ce geste. Seules les sorties GPU se
-retirent pour l'instant ; une sortie CPU suppose d'arrêter son thread, ce que l'enregistreur
-de l'étape 10 décidera. Cela se fait entre deux frames, en régime d'édition :
+l'utilisateur en décide : fermer est précisément ce geste. Une sortie GPU se retire ainsi ; un
+flux par `remove_stream`, qui attend sa dernière frame (§8.5). Cela se fait entre deux frames, en
+régime d'édition :
 
 ```rust
 impl Outputs {
@@ -1845,14 +1892,13 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Enregistrement, étape 10 | un fichier vidéo | grande |
-| 2 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
-| 3 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 4 | Scène 3D, étape 13 | | très grande |
-| 5 | Art-Net / DMX, étape 14 | | moyenne |
-| 6 | Scripting Lua, étape 15 | | moyenne |
-| 7 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 8 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
+| 2 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 3 | Scène 3D, étape 13 | | très grande |
+| 4 | Art-Net / DMX, étape 14 | | moyenne |
+| 5 | Scripting Lua, étape 15 | | moyenne |
+| 6 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 7 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -1935,7 +1981,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Le plein écran rend le focus à l'interface** (§8.4) | sous Windows, `set_fullscreen` active toujours la fenêtre, qui volerait le clavier en plein jeu ; rendre le focus couvre aussi un clic accidentel, sur toutes les plateformes |
 | **Écran perdu : la sortie se ferme, le moteur continue** (§8.4) | un câble débranché ne doit couper ni l'interface ni le monitor ; laisser la fenêtre glisser sur l'écran restant pourrait recouvrir l'interface |
 | **`OutputRequest` distinct de `Command`** (§8.4) | une fenêtre n'est pas la grille : `Composition` n'a rien à en savoir, et `Command` ne concerne que ce qui s'applique entre deux frames du moteur |
-| **Seules les sorties GPU se retirent** (§8.4) | retirer une sortie CPU suppose d'arrêter son thread : l'enregistreur de l'étape 10 dira comment terminer un fichier proprement |
+| **L'enregistreur est un flux, et ffmpeg un binaire du `PATH`** (§8.2) | la relecture, la cadence et la perte existent déjà ; pas de bindings, pas de codec à livrer, et un ffmpeg absent n'empêche rien d'autre |
+| **Une frame perdue se répète dans le fichier** (§8.2) | le flux brut n'a pas d'horloge : sans cela, la vidéo raccourcit et glisse devant son son |
+| **Le son s'écrit à part, en mono, et s'assemble à l'arrêt** (§8.2) | deux entrées dans un seul ffmpeg demanderaient des tubes nommés par plateforme ; et si l'assemblage échoue, la prise reste |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
 | **Grille de clips (Deck/LayerGroup/Layer/Column) comme structure d'organisation** (§3bis) | répond à « quoi joue, quand » ; un patch modulaire unique ne permet pas de changer de répertoire de visuels à chaud en live |
