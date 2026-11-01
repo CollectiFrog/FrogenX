@@ -1828,6 +1828,8 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Apparence de Pro-Q, disposition de Resolume** (§23.1) | la disposition répond à la conduite d'un set, l'apparence à la lecture d'un son ; le spectre est devenu le cœur de l'audio-réactivité |
 | **Un trig se lit dans un clip par `Ctx`, et par un canal stable** (§3bis.6) | un fil ne quitte pas son graphe ; c'est le chemin de l'audio, et un identifiant ou une position ne survivraient pas à un fichier ou à un retrait |
 | **Une couleur par trig, enfermée dans le spectre** (§23.1) | des zones qui se superposent se distinguent par leur couleur ; hors du panneau, l'or reste le seul ton saturé, et rien ne concurrence le monitor |
+| **Le spectrogramme est une vue de l'interface, en bande sous le spectre** (§23.7) | il ne lit que le `Spectrum` : rien à ajouter à l'analyse ni au fichier ; son axe vertical est le temps, les zones ne s'y posent pas, et il ne prend donc pas la place du tracé |
+| **Une ligne de spectrogramme est une durée, pas une frame** (§23.7) | l'axe du temps reste vrai quand l'interface ralentit, et la crête gardée dans chaque ligne ne laisse passer aucun coup sur 30 s |
 | **Les gestes sur le spectre se calculent en coordonnées du tracé** (§23.7) | ni Hz ni pixels : un même geste vaut sur toutes les échelles, et se teste sans egui |
 | **Un `Signal` lit l'audio dans `Ctx`, pas dans le triple buffer** (§7, §20.1) | le buffer se lit une fois par frame, à l'étape 2 : deux lectures pendant l'évaluation verraient deux spectres, et le rendu ne serait plus déterministe |
 | **`Graph::replace`, plutôt qu'un `Param` partagé** (§3bis.6) | un `Signal` est opaque dans le graphe ; le remplacer garde son identifiant, ses dépendances et son état, donc le compte d'un trig qu'on règle en jouant |
@@ -3306,6 +3308,52 @@ que six valeurs se lisent mieux qu'une liste ; le coup attendu, la cible et `Rec
 Retirer un trig passe par un clic droit sur sa puce : sur scène, un clic raté ne
 supprime rien (§23.6). La barre du bas règle l'analyse (§7), et la fenêtre annonce sa résolution au
 survol. Sans entrée audio, elle dit pourquoi et l'application tourne quand même (§18.1).
+
+**Le spectrogramme.** Le bouton `Spectrogramme` de la barre ouvre une bande sous le spectre :
+son historique, sur 2, 5, 10 ou 30 secondes (`Durée`, 5 par défaut). La fréquence y reste
+en abscisse, sur le même axe que le tracé du dessus : un son se suit donc à la verticale de sa
+zone. Le temps descend, le plus récent en haut, contre le spectre, et ses repères s'écrivent
+dans la marge de droite. Le niveau devient une teinte, du fond du tracé au gris de la courbe,
+puis à l'or des crêtes : le spectrogramme ne prend aucune couleur de trig, qui restent les
+seules de l'interface (§23.1).
+
+```
+┌─────────────────────────────────────────────────────────┬────┐
+│                 spectre, zones de trig               -24 │ ▐  │
+│ 20      100       1k       10k       20k             -48 │ ▐  │
+├─────────────────────────────────────────────────────────┼────┤
+│ ▓▒░   ▓▒░░   ▓▒░   maintenant                          0 │    │
+│ ▓▒░   ░░     ▓▒░                                   -2 s │    │
+│ ▓▒░░  ▓▒░    ▓▒░   plus ancien                     -4 s │    │
+└─────────────────────────────────────────────────────────┴────┘
+```
+
+La bande prend 40 % du panneau et laisse toujours 120 pixels au spectre, sinon elle ne
+s'ouvre pas : c'est sur lui que se posent les zones. Elle ne reçoit aucun geste, parce que son
+axe vertical n'est plus le niveau. Le panneau flottant d'un trig se pose sur elle plutôt que sur
+le tracé, qu'il couvrirait presque entier : une zone reste ainsi visible pendant qu'on la règle.
+
+**Une vue, pas une analyse.** Le spectrogramme ne lit que le `Spectrum` de la frame :
+`crates/ui/src/spectrogram.rs` n'ajoute rien à `audio`, ni au graphe, ni au fichier. Son
+état vit dans `UiState`, à côté de la courbe de crêtes, et ses deux réglages sont des gestes
+d'affichage : ni `Param`, puisque rien ne s'y branche, ni `Command`, puisqu'ils ne changent ni
+la grille ni le son, ni donc une étape d'annulation (§23.11).
+
+**Le temps est vrai quelle que soit la cadence.** Une ligne vaut `durée / 256` secondes, jamais
+une frame : une interface qui ralentit répète la ligne au lieu de contracter le temps. Une
+ligne garde la crête des frames qu'elle couvre : sur 30 secondes, elle dure 117 ms, et un
+coup de grosse caisse ne doit pas passer entre deux lignes.
+
+**Une texture en anneau.** 256 lignes de 128 bandes, chargées une fois, puis écrites ligne par
+ligne (`set_partial`) : envoyer toute l'image à chaque frame coûterait 8 Mo/s pour une seule
+ligne neuve. L'affichage la déroule en deux morceaux, `quads`, calculés sans egui.
+
+**Un historique qui ne ment pas s'efface.** Changer d'échelle (de fréquence ou d'amplitude)
+ou de durée redonne la bande vide : les lignes passées n'auraient plus le sens de leurs
+axes. Les échelles se lisent dans le `Spectrum`, pas dans la composition : la bande change
+d'échelle à l'instant où le son le fait. Fermer la bande ou masquer le panneau l'efface aussi,
+et ne laisse aucune texture : rouverte, elle ne recollerait pas deux moments éloignés. Changer
+la méthode ou la fenêtre, elles, ne l'efface pas : c'est justement ce qu'on veut comparer.
 
 **Pièges.** `drag_started` ne tombe qu'après quelques pixels : un geste part de
 `pointer.press_origin()`, pas du curseur. `vertical_centered` prend toute la largeur
