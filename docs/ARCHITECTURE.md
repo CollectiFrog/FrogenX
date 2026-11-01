@@ -407,6 +407,29 @@ valeur qui avance seule, et laisser le sketch initial (`position: Param`) tel qu
 aurait forcé une réécriture à l'étape 7 de la feuille de route (BpmSync câblé en
 direct, §12).
 
+**`PlayMode` agit sur le temps du clip, sans vidéo.** Une forme procédurale n'a pas de fin
+naturelle : c'est `duration_beats` qui lui en donne une.
+
+| Mode | Au bout de la durée |
+|---|---|
+| `Loop` | rien ne change : le clip continue, la barre de sa cellule repart |
+| `Once` | la piste se vide, comme par `ClearLayer`, en coupure |
+| `PingPong` | le temps du clip s'inverse, jusqu'au retour à zéro, puis repart |
+
+**À l'envers, c'est le `dt` qui change de signe.** `Engine` évalue le graphe du clip avec `-dt`. Les
+phases et le bruit remontent donc d'eux-mêmes, sans code par type : c'est tout l'intérêt de les
+intégrer (§2.3). Ce n'est pas une lecture à rebours exacte : une enveloppe ou une feature audio
+continuent de suivre leur entrée vers l'avant, le son ne se rejoue pas à l'envers. Un écho reste
+aussi à l'endroit : ses réglages s'exprimeraient à contresens, et sa mémoire grandirait au lieu de
+s'effacer.
+
+**Le sens vit dans `Layer`**, comme le clip actif et la transition (§3bis.2) : c'est un état de jeu,
+absent des fichiers. Une position à la limite suffit à le lire, et une durée qui n'a pas de sens
+(nulle, non finie) laisse le clip en boucle (§18.4).
+
+**Le geste.** Le panneau du clip porte une ligne `Lecture` : le mode et la durée en temps. Elle ne
+concerne que les clips calés sur le tempo. `Timeline` n'a ni durée ni mode.
+
 ### 3bis.4 `CrossFader`
 
 ```rust
@@ -1691,6 +1714,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un `ShapeRenderer` par piste**, le clip actif lui prête son contenu (§3bis.2, §22.1) | une `ShapeLayer` par clip coûterait 80 Mo par clip en 1080p, 8 Go pour 100 clips, dont un seul par piste s'affiche |
 | **`ColorParam`, `ShapeStyle`, `BlendParams` dans `shape`** (§10) | clips et pistes les portent ; `composition` ne peut pas dépendre de `layer` sans tirer wgpu |
 | **Seul le clip actif est évalué, et il repart de zéro au déclenchement** (§3bis.2) | le coût d'une frame suit ce qui est affiché, pas la taille de la grille ; un pad frappé redémarre |
+| **`PlayMode` agit par le signe du `dt` du clip** (§3bis.3) | tout ce qui s'intègre remonte seul, sans code par type ; une forme procédurale reçoit une fin de sa durée, sans attendre la vidéo |
 | **Une transition mélange deux clips avant le compositeur** (§3bis.2) | deux couches d'opacités croisées creusent l'image à mi-fondu ; une texture mélangée rejoint le compositeur comme un seul clip, avec le mode de la piste |
 | **La durée d'une transition est en battements, hors de la vitesse du clip** (§3bis.2) | elle suit le tempo, et un clip à vitesse nulle ne doit pas la bloquer |
 | **Annuler par images de la grille, pas par commandes inverses** (§23.11) | une image coûte 1 ms et couvre d'office toute nouvelle commande ; un inverse faux corromprait la grille sans le dire |
