@@ -32,7 +32,7 @@ Les layers se composent en **couches**, envoyées vers plusieurs **sorties** sim
                                                    │
                                                    ▼
                                     Couches ──compose──▶ Sorties
-                                   (compositeur de         (écran, NDI,
+                                   (compositeur de         (écran, Kyber,
                                     layers/groupes)          fichier, Art-Net)
 ```
 
@@ -1062,7 +1062,7 @@ source et la chroma.
 
 ```
 scène ──▶ texture RGBA offscreen ─┬──▶ fenêtre (preview)
-                                  ├──▶ NDI / Spout / Syphon
+                                  ├──▶ Spout (vers Kyber) / Syphon
                                   └──▶ encodeur vidéo (fichier)
 ```
 
@@ -1077,9 +1077,9 @@ Enregistrer en 4K dans une fenêtre de 800 px devient naturel.
 > pixels CPU), et qui décide qu'une frame peut être perdue. Les trois réponses
 > ci-dessous ; leurs raisons au §13.
 
-**Deux familles de sorties, deux traits.** Les sorties **GPU** (preview, Spout, Syphon)
-copient la texture sans quitter la carte. Les sorties **CPU** (NDI, enregistreur,
-Art-Net, séquence d'images) ont besoin d'octets en mémoire, donc d'une relecture
+**Deux familles de sorties, deux traits.** Les sorties **GPU** (preview, Syphon)
+copient la texture sans quitter la carte. Les sorties **CPU** (flux Spout vers Kyber,
+enregistreur, Art-Net, séquence d'images) ont besoin d'octets en mémoire, donc d'une relecture
 GPU → CPU (§8.2) — l'opération la plus chère du pipeline. Un trait par famille : une
 sortie ne peut pas recevoir la mauvaise forme de frame, c'est le compilateur qui le
 garantit, pas un `match` à l'exécution.
@@ -1130,7 +1130,7 @@ pub enum OutputSink {
 ```
 
 **Erreurs : deux régimes, comme partout (§18.1).** L'**ouverture** d'une sortie —
-bibliothèque NDI absente, fichier impossible à créer, surface refusée, backend
+binaire ffmpeg absent, fichier impossible à créer, surface refusée, backend
 incompatible avec Spout — est de l'édition : le constructeur rend un `Result`, le refus
 est clair. **`submit` et `encode` ne rendent rien** : une erreur par frame à 60 fps est
 un flot inexploitable. Une panne en cours de route se lit dans `status()`. Une sortie
@@ -1156,15 +1156,14 @@ deux relectures. L'anneau du §8.2 n'existe qu'à un endroit.
 **Une seule passe de conversion vers 8 bits sRGB**, composant de `output` partagé par
 trois consommateurs : la preview (vers sa surface), Spout/Syphon (vers la texture
 partagée) et le chemin CPU (vers la texture relue). Elle convertit **avant** la
-relecture : on lit 4 octets par pixel au lieu de 8, et NDI, ffmpeg et Art-Net
+relecture : on lit 4 octets par pixel au lieu de 8, et Spout, ffmpeg et Art-Net
 consomment tous du 8 bits. La règle du §21 tient : tout l'intermédiaire reste
 `Rgba16Float` linéaire, seules les cibles **finales** sont 8 bits encodées sRGB.
 
-**Une `CpuFrame` est en alpha droit.** Prévu pour l'étape NDI, ce choix a dû être
-avancé par la sortie PNG : dé-prémultiplier se fait **en linéaire, avant** l'encodage
+**Une `CpuFrame` est en alpha droit.** Ce choix a été imposé par la sortie PNG : dé-prémultiplier se fait **en linéaire, avant** l'encodage
 sRGB. Après la passe, c'est trop tard — diviser des octets sRGB par l'alpha donne une
 autre image. L'ordre de `linear_premul_to_srgb8` s'impose donc à la passe, et cette
-fonction lui sert de référence CPU dans les tests. Si un récepteur NDI veut du
+fonction lui sert de référence CPU dans les tests. Si un récepteur veut du
 prémultiplié, c'est sa sortie qui le recalculera. Les cibles opaques (preview) gardent
 le RGB prémultiplié : une zone transparente s'y lit sur du noir (§8.3).
 
@@ -1200,23 +1199,23 @@ du §8.2 ; en `Fixed`, la relecture reste **synchrone**.
 
 ### 8.1 Partage inter-applications
 
-Aucune techno n'est multiplateforme, sauf NDI :
+Aucune techno n'est multiplateforme :
 
 | Techno | Plateforme | Mécanisme |
 |---|---|---|
-| **NDI** | Linux / macOS / Windows | réseau, coût CPU d'encodage |
 | **Spout** | Windows uniquement | partage GPU local, latence nulle |
 | **Syphon** | macOS uniquement | partage GPU local, latence nulle |
 
 ```rust
-mod ndi;                                    // partout
 #[cfg(windows)]            mod spout;
 #[cfg(target_os = "macos")] mod syphon;
 ```
 
-**Stratégie : Spout d'abord, sous Windows, par le chemin CPU.** C'est lui qui alimente KyberFrog
-(§8.5), le réseau à très basse latence que nous visons. NDI suit pour les récepteurs qui ne parlent
-pas Kyber. La copie directe entre GPU reste une **optimisation tardive** — elle expose des
+**Stratégie : Spout, sous Windows, par le chemin CPU.** C'est lui qui alimente KyberFrog (§8.5),
+le réseau à très basse latence que nous visons. **Kyber remplace NDI pour le moment :** aucune
+sortie NDI n'est prévue, ce qui laisse le SDK propriétaire hors d'un projet sous AGPL-3.0. Le prix :
+un récepteur qui ne parle pas Kyber ne reçoit rien, et le réseau n'existe que depuis Windows. La
+copie directe entre GPU reste une **optimisation tardive** — elle expose des
 handles de textures natives (D3D11, IOSurface) dont la récupération depuis wgpu exige
 de descendre dans `wgpu-hal`, en `unsafe` spécifique à chaque backend.
 
@@ -1389,7 +1388,7 @@ acceptable pour un contrôle.
 
 **Le moteur a sa propre échéance ; la preview n'est qu'une consommatrice.** wgpu 30
 répond `Occluded` quand une fenêtre est masquée ou réduite : si la synchronisation de
-l'écran rythmait la boucle, réduire la fenêtre risquerait d'arrêter NDI et
+l'écran rythmait la boucle, réduire la fenêtre risquerait d'arrêter les flux et
 l'enregistrement. `app` cadence donc `Engine` sur une échéance (`ControlFlow::WaitUntil`,
 60 fps cible), et une preview indisponible saute sa frame sans rien ralentir.
 
@@ -1646,7 +1645,7 @@ menu à la vraie souris, deux machines sur un vrai réseau, et la latence totale
 récepteur, que le banc de KyberFrog mesurerait.
 
 **Non couvert.** L'alpha sur le réseau. L'émission depuis Linux et macOS, faute de Spout. Les
-récepteurs NDI : NDI reste au backlog. Le nom d'un flux ne se change pas dans le menu, seulement
+récepteurs qui ne parlent pas Kyber : Kyber remplace NDI pour le moment (§8.1). Le nom d'un flux ne se change pas dans le menu, seulement
 dans `sorties.txt`. Une forte réduction reste bilinéaire et crénelle un peu (§8.3). La copie
 directe entre GPU et Spout : à reconsidérer si la mesure l'exige (`S2`).
 
@@ -1838,7 +1837,7 @@ couches complètes empilées.
 | 8 | ✅ Audio → features → `Signal`, BPM calculé, déclenchements (§7, §7.1) | **visuel audio-réactif** — *fait* : `cargo run`, clic droit sur un potentiomètre, `Suivre` |
 | 9 | ✅ Feedback : un clip qui relit l'image finale (§6.1) | **traînées, échos, complexité organique** — *fait* : `cargo run`, famille `Échos` de la bibliothèque |
 | 10 | ✅ Enregistrement (readback + ffmpeg) | fichier vidéo — *fait* |
-| 11 | ✅ Flux réseau par Spout et KyberFrog (§8.5) ; NDI et Syphon restent à faire | intégration VJ |
+| 11 | ✅ Flux réseau par Spout et KyberFrog (§8.5), à la place de NDI ; Syphon reste à faire | intégration VJ |
 | 12 | `VideoLayer` | clips vidéo comme couches |
 | 13 | `scene3d` : maillages, caméra, lumières, culling | scène 3D comme source de clip |
 | 14 | Art-Net / DMX en sortie | pilotage d'éclairage physique |
@@ -1850,7 +1849,7 @@ couches complètes empilées.
 insérées quand le plan a révélé qu'aucune étape ne couvrait l'interface. On y ouvre
 l'application, on déclenche des clips dans une grille, on règle leurs paramètres, on
 envoie l'image sur un projecteur, on retrouve son travail, et le son pilote l'image.
-L'éditeur de nœuds, l'enregistrement, NDI, Spout, la vidéo, la 3D et le MIDI/OSC
+L'éditeur de nœuds, l'enregistrement, Spout, la vidéo, la 3D et le MIDI/OSC
 viennent ensuite.
 
 **Les étapes clés :** la 4 (la grille devient le squelette organisationnel, avant même
@@ -1906,7 +1905,7 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
+| 1 | Syphon, copie directe vers Spout | macOS, moins de latence vers Kyber | grande |
 | 2 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
 | 3 | Scène 3D, étape 13 | | très grande |
 | 4 | Art-Net / DMX, étape 14 | | moyenne |
@@ -1964,7 +1963,8 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Les gestes sur le spectre se calculent en coordonnées du tracé** (§23.7) | ni Hz ni pixels : un même geste vaut sur toutes les échelles, et se teste sans egui |
 | **Un `Signal` lit l'audio dans `Ctx`, pas dans le triple buffer** (§7, §20.1) | le buffer se lit une fois par frame, à l'étape 2 : deux lectures pendant l'évaluation verraient deux spectres, et le rendu ne serait plus déterministe |
 | **`Graph::replace`, plutôt qu'un `Param` partagé** (§3bis.6) | un `Signal` est opaque dans le graphe ; le remplacer garde son identifiant, ses dépendances et son état, donc le compte d'un trig qu'on règle en jouant |
-| **Spout avant NDI, par le chemin CPU** (§8.1, §8.5) | Spout alimente KyberFrog, le réseau visé, et sert aussi les logiciels locaux ; garder Vulkan évite `wgpu-hal` et ses fautes de synchronisation. Remplace « NDI avant Spout » |
+| **Kyber remplace NDI pour le moment** (§8.1) | KyberFrog porte déjà le réseau à très basse latence, sous la même licence ; NDI ajouterait un SDK propriétaire pour les seuls récepteurs qui ne parlent pas Kyber |
+| **Spout par le chemin CPU** (§8.1, §8.5) | Spout alimente KyberFrog et sert aussi les logiciels locaux ; garder Vulkan évite `wgpu-hal` et ses fautes de synchronisation |
 | **KyberFrog en processus séparé** (§8.5) | il n'a pas d'API d'injection et sa chaîne de forks est lourde à compiler ; Spout suffit, et laisse les deux projets évoluer seuls |
 | **La résolution et la cadence d'un flux vivent dans FrogenX** (§8.5) | un émetteur KyberFrog n'en a pas : la source impose les siennes |
 | **`StreamFormat` n'est pas un `Param`** (§8.5) | un flux se règle d'un geste ; le moduler réallouerait à chaque image et relancerait l'encodeur distant |
@@ -1972,14 +1972,14 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Un flux réseau est opaque** (§8.5) | l'alpha ne traverse pas l'encodeur, et un alpha droit écrasé montrerait des bords durs |
 | **Un thread attend le GPU pour la relecture en direct** (§8.2, §8.5) | l'anneau seul retarderait chaque image d'une à deux frames ; le retard suit ainsi le travail du GPU |
 | **Deux traits de sortie, `GpuSink` et `CpuSink`**, réunis dans `enum OutputSink` (§8.0) | une sortie ne peut pas recevoir la mauvaise forme de frame, garanti à la compilation ; la relecture GPU → CPU, l'opération la plus chère, n'est payée que si une sortie CPU est active |
-| **Une relecture partagée par format** (`Arc<[u8]>`) entre les sorties CPU (§8.0, §8.2, §8.5) | NDI + enregistrement actifs ne paient pas deux relectures ; l'anneau du §8.2 n'existe qu'à un endroit |
+| **Une relecture partagée par format** (`Arc<[u8]>`) entre les sorties CPU (§8.0, §8.2, §8.5) | un flux et un enregistrement au même format ne paient pas deux relectures ; l'anneau du §8.2 n'existe qu'à un endroit |
 | **Pas de `Result` par frame** : ouverture → `Result`, puis `status()` (`Active`/`Degraded`/`Failed`) (§8.0) | une erreur par frame contredit le §18.1 ; un échec silencieux perd un enregistrement sans que personne ne le voie — le statut le rend visible sans interrompre |
 | **`GpuSink` en deux phases** (`encode` / `after_submit`) (§8.0) | `surface.present()`, le signal Spout et la publication Syphon viennent tous **après** `queue.submit` ; une seule méthode obligerait chaque sortie à soumettre son propre encodeur |
 | **Politique de perte portée par l'étage `Outputs`**, pas par chaque sortie (§8.0) | `Realtime` perd et compte, `Fixed` attend : écrit une fois et testé ; décidé six fois, une erreur suffirait à trouer un rendu offline |
 | **`index` de frame croissant** dans chaque frame de sortie (§8.0) | rend une perte détectable par la sortie elle-même, et le test « sans perte en `Fixed` » exact |
 | **Passe de conversion 8 bits sRGB unique**, avant la relecture (§8.0, §21) | trois consommateurs (preview, Spout/Syphon, chemin CPU) ; convertir avant de relire divise par deux les octets lus |
 | **`unsafe` confiné à `output`**, modules Spout/Syphon sous `cfg` (§8.1, §10) | l'interop de textures natives l'exige (`as_hal`, `create_texture_from_hal`) ; le confiner garde le reste du projet sûr et la surface de risque lisible |
-| **`CpuFrame` en alpha droit**, avancé de l'étape NDI à la sortie PNG (§8.0) | dé-prémultiplier doit se faire en linéaire, avant l'encodage sRGB : après la passe de conversion, c'est trop tard |
+| **`CpuFrame` en alpha droit**, imposé par la sortie PNG (§8.0) | dé-prémultiplier doit se faire en linéaire, avant l'encodage sRGB : après la passe de conversion, c'est trop tard |
 | **Crate `app` : bibliothèque `Engine` + binaire `winit`**, `output` ne connaît pas `winit` (§8.3) | la boucle d'événements prend le contrôle du thread principal, ce qu'une bibliothèque ne peut pas s'approprier ; `Engine` sans fenêtre reste testable et sert le rendu offline |
 | **`winit` 0.30** (§11) | imposé par `egui-wgpu` pour wgpu 30 ; la 0.31 est en bêta |
 | **La passe de conversion suit le format de sa cible** (`is_srgb()`) (§8.3) | surface `*Srgb` et texture `Unorm` lue comme du sRGB coexistent : décider au cas par cas évite le double encodage, qui délave l'image |
@@ -2738,7 +2738,7 @@ cette séparation, l'ordre de génération influencerait le résultat.
 │  lecture seule      │
 └──────────┬──────────┘
            ▼
-┌─ un thread par CpuSink ─┐   NDI, pipe ffmpeg, Art-Net — file bornée tenue par Outputs
+┌─ un thread par CpuSink ─┐   Spout, pipe ffmpeg, Art-Net — file bornée tenue par Outputs
 └─────────────────────────┘
 ```
 
@@ -2784,7 +2784,7 @@ et de superpositions, l'erreur est visible partout.
 |---|---|
 | Palettes, UI, patchs | sRGB (ce que l'humain lit et saisit) |
 | Textures de couches, composition, post-fx | **linéaire**, `Rgba16Float` |
-| Sortie écran / NDI / fichier | sRGB (conversion finale) |
+| Sortie écran / flux / fichier | sRGB (conversion finale) |
 
 **Format des cibles offscreen : `Rgba16Float`.** Le `Rgba8Unorm` en linéaire produit du
 banding dans les tons sombres, précisément là où les dégradés lents de ce logiciel se

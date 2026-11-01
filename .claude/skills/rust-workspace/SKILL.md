@@ -22,8 +22,8 @@ crates/composition/  grille, tempo, Trig, Command              ← core, osc, sh
 crates/audio/        cpal, FFT, spectre, features, BPM         ← core               ✅
 crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
-crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink ← layer, render, wgpu ✅
-                     à venir : NDI / Spout / Syphon / recorder
+crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink, FfmpegSink, SpoutSink ← layer, render, wgpu ✅
+                     à venir : Syphon
 crates/library/      clips prédéfinis, grille de départ        ← core, osc, shape, composition ✅
 crates/patch/        format de fichier, Composition ↔ JSON     ← core, osc, shape, composition, serde_json ✅
 crates/ui/           egui : grille, bibliothèque, tempo, monitor, réglages ; rend des Command ← core, osc, composition, library, egui ✅
@@ -97,7 +97,6 @@ d'une dépendance. Avant d'ajouter une crate, se demander si le déterminisme en
 Cible : Linux, macOS, Windows à parité. Le code spécifique passe par `cfg` :
 
 ```rust
-mod ndi;                                     // partout
 #[cfg(windows)]             mod spout;
 #[cfg(target_os = "macos")] mod syphon;
 ```

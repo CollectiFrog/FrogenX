@@ -63,7 +63,7 @@ pub trait GpuSink {
     fn status(&self) -> SinkStatus;
 }
 
-/// Une sortie qui a besoin d'octets en mémoire : NDI, enregistreur, Art-Net,
+/// Une sortie qui a besoin d'octets en mémoire : flux Spout, enregistreur, Art-Net,
 /// séquence d'images.
 ///
 /// `submit` est appelée sur le thread propre à la sortie : elle peut bloquer

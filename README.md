@@ -9,7 +9,8 @@ Des **signaux** (oscillateurs, LFO, features audio) modulent des **paramètres**
 
 - Rendu temps réel GPU (wgpu) — Linux, macOS, Windows
 - Modulation audio-réactive
-- Sortie plein écran sur un second écran ; à venir : NDI / Spout / Syphon, enregistrement
+- Sortie plein écran sur un second écran, flux réseau par Spout et KyberFrog, enregistrement
+  vidéo ; à venir : Syphon
 
 ## Documentation
 
