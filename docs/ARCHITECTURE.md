@@ -1229,7 +1229,7 @@ directe.
 
 | | Spout (Windows) | Syphon (macOS) | Linux |
 |---|---|---|---|
-| Partagé | texture **D3D11**, handle partagé DXGI | texture Metal adossée à une **IOSurface** | pas de standard équivalent : DMA-BUF via PipeWire plus tard, NDI d'ici là |
+| Partagé | texture **D3D11**, handle partagé DXGI | texture Metal adossée à une **IOSurface** | pas de standard équivalent : DMA-BUF via PipeWire plus tard, rien d'ici là |
 | Backend wgpu | **DX12** (interop vers D3D11) ; Vulkan possible mais bien plus lourd | Metal (seul backend) | — |
 | Liaison | bibliothèque C++ SpoutDX, ou protocole Spout réimplémenté sur la crate `windows` | `Syphon.framework` (BSD) via `objc2`, embarqué dans le bundle | — |
 
@@ -1689,7 +1689,7 @@ frogenx/
 ├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre ✅ (core, osc, shape, composition, serde_json)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, FeedbackRenderer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
-├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, relecture en direct, flux, SpoutSink, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu, windows) ; à venir : NDI / Syphon / Art-Net / recorder
+├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, relecture en direct, flux, SpoutSink, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu, windows) ; `FfmpegSink` ✅ ; à venir : Syphon / Art-Net
 ├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages, éditeur de nœuds ; rend des Command ✅ (library, composition, shape, osc, core, egui)
 └── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit, egui-wgpu, egui-winit ✅
 ```
@@ -1984,7 +1984,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **`winit` 0.30** (§11) | imposé par `egui-wgpu` pour wgpu 30 ; la 0.31 est en bêta |
 | **La passe de conversion suit le format de sa cible** (`is_srgb()`) (§8.3) | surface `*Srgb` et texture `Unorm` lue comme du sRGB coexistent : décider au cas par cas évite le double encodage, qui délave l'image |
 | **Letterbox pour la preview** (§8.3) | étirer ment sur la sortie, recadrer cache les bords sans le dire |
-| **Le moteur a sa propre échéance**, pas la synchro de l'écran (§8.3) | wgpu répond `Occluded` sur une fenêtre masquée : réduire la preview ne doit pas arrêter NDI ni l'enregistrement |
+| **Le moteur a sa propre échéance**, pas la synchro de l'écran (§8.3) | wgpu répond `Occluded` sur une fenêtre masquée : réduire la preview ne doit pas arrêter les flux ni l'enregistrement |
 | **Tests GPU exécutés un par un** (§24.3) | des devices wgpu ouverts en parallèle bloquent environ 3 % des exécutions, défaut antérieur à l'étape 6 et de cause non identifiée ; un réglage unique évite qu'un futur test GPU l'oublie |
 | **`Mailbox`, sinon `Fifo`, jamais `Immediate`** (§8.3) | `Immediate` déchire l'image sur un projecteur ; `Fifo` existe partout |
 | **Sortie plein écran : fenêtre sans bordure** (§8.4) | le mode vidéo ne change pas : pas de noir à l'ouverture, et l'interface reste utilisable sur l'autre écran ; le plein écran exclusif ferait risquer une perte à chaque changement de fenêtre, sur scène |
