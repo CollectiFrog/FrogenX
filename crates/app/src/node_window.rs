@@ -4,11 +4,11 @@
 
 use crate::gui::paint;
 use frogenx_app::Engine;
-use frogenx_composition::ClipId;
+use frogenx_composition::{ClipId, IdMap};
 use frogenx_layer::Gpu;
 use frogenx_output::{FormatPreference, PresentSurface};
 use frogenx_ui::nodes::{editor, EditorState, EditorView};
-use frogenx_ui::theme;
+use frogenx_ui::{theme, HistoryRequest};
 use std::sync::Arc;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
@@ -92,6 +92,19 @@ impl NodeWindow {
             _ => {}
         }
         false
+    }
+
+    pub fn take_history_request(&mut self) -> Option<HistoryRequest> {
+        self.state.history.take()
+    }
+
+    pub fn pointer_held(&self) -> bool {
+        self.ctx.input(|i| i.pointer.any_down())
+    }
+
+    /// La grille a été restaurée : la place des nœuds suit.
+    pub fn remap(&mut self, map: &IdMap) {
+        self.state.remap(map);
     }
 
     pub fn forget_grid(&mut self) {

@@ -15,10 +15,11 @@
 //! ```
 
 pub mod file_flow;
+pub mod history;
 pub mod last_patch;
 
 use frogenx_composition::{
-    sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, LayerId,
+    sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, IdMap, LayerId,
 };
 use frogenx_core::{AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
 use frogenx_layer::{
@@ -30,7 +31,16 @@ use frogenx_output::{
 };
 use frogenx_render::{Compositor, LayerInput};
 use glam::UVec2;
+use history::{History, Restore};
 use std::time::{Duration, Instant};
+
+/// Ce qu'on vient d'annuler ou de rétablir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undone {
+    pub label: &'static str,
+    /// Les identifiants ont changé : l'interface garde sa sélection par cette table.
+    pub map: IdMap,
+}
 
 /// La politique de perte suit l'horloge (§8.0) : `Realtime` perd et compte,
 /// `Fixed` attend.
@@ -203,6 +213,9 @@ pub struct Engine {
     refused_commands: u32,
     /// La grille diffère du fichier : jouer n'en fait pas partie (§23.8).
     dirty: bool,
+    steps: History,
+    /// Un bouton de souris est tenu : le pas d'annulation reste ouvert (§23.11).
+    gesture_held: bool,
     bpm: f32,
     /// Les features de la prochaine frame. Vides sans entrée audio, écrites à
     /// la main par un rendu offline : c'est ce qui garde le déterminisme (§20.3).
@@ -215,6 +228,8 @@ impl Engine {
         let history = FrameHistory::new(&gpu, size);
         let outputs = Outputs::new(&gpu, drop_policy(clock.mode()));
         let bpm = composition.bpm();
+        let mut steps = History::default();
+        steps.reset(frogenx_patch::to_json(&composition).ok());
         Self {
             gpu,
             clock,
@@ -229,6 +244,8 @@ impl Engine {
             placements: Vec::new(),
             refused_commands: 0,
             dirty: false,
+            steps,
+            gesture_held: false,
             bpm,
             audio: AudioFeatures::default(),
         }
@@ -285,8 +302,61 @@ impl Engine {
         self.commands.clear();
         self.placements.clear();
         self.bpm = composition.bpm();
+        self.steps.reset(frogenx_patch::to_json(&composition).ok());
         self.composition = composition;
         self.dirty = false;
+    }
+
+    /// Un bouton de souris est-il tenu ? Tant qu'il l'est, les modifications font
+    /// un seul pas d'annulation (§23.11).
+    pub fn set_gesture(&mut self, held: bool) {
+        self.gesture_held = held;
+    }
+
+    /// Ferme le pas ouvert sur l'état de la grille.
+    fn commit_step(&mut self) {
+        if self.steps.has_pending() {
+            self.steps
+                .commit(frogenx_patch::to_json(&self.composition).ok());
+        }
+    }
+
+    /// Le nom de ce qu'annulerait [`Self::undo`].
+    pub fn undo_label(&self) -> Option<&'static str> {
+        self.steps.undo_label()
+    }
+
+    pub fn redo_label(&self) -> Option<&'static str> {
+        self.steps.redo_label()
+    }
+
+    /// Annule le dernier pas. Rend son nom et les nouveaux identifiants.
+    pub fn undo(&mut self) -> Option<Undone> {
+        self.commit_step();
+        let restaure = self.steps.undo()?;
+        self.restore(restaure)
+    }
+
+    /// Rétablit le dernier pas annulé.
+    pub fn redo(&mut self) -> Option<Undone> {
+        self.commit_step();
+        let restaure = self.steps.redo()?;
+        self.restore(restaure)
+    }
+
+    /// Remplace la grille par une image, en reprenant ce qui joue. Ce qui
+    /// attendait dans les files visait l'ancienne grille.
+    fn restore(&mut self, restaure: Restore) -> Option<Undone> {
+        let mut grille = frogenx_patch::from_json(&restaure.json).ok()?;
+        let map = grille.adopt_from(&self.composition);
+        self.commands.clear();
+        self.placements.clear();
+        self.composition = grille;
+        self.dirty = !self.steps.at_saved();
+        Some(Undone {
+            label: restaure.label,
+            map,
+        })
     }
 
     /// Remplace la grille par une grille d'usine et joue sa première colonne.
@@ -303,7 +373,14 @@ impl Engine {
         self.dirty
     }
 
+    /// Le fichier vient d'être écrit (`false`), ou l'écriture a échoué (`true`).
     pub fn set_dirty(&mut self, dirty: bool) {
+        self.commit_step();
+        if dirty {
+            self.steps.mark_unsaved();
+        } else {
+            self.steps.mark_saved();
+        }
         self.dirty = dirty;
     }
 
@@ -312,7 +389,10 @@ impl Engine {
         let instant = self.clock.t();
         for command in self.commands.drain(..) {
             if self.composition.apply(command, instant) {
-                self.dirty |= command.is_edit();
+                if command.is_edit() {
+                    self.dirty = true;
+                    self.steps.note(command.label());
+                }
             } else {
                 self.refused_commands = self.refused_commands.saturating_add(1);
             }
@@ -320,9 +400,14 @@ impl Engine {
         for (layer, column, clip) in self.placements.drain(..) {
             if self.composition.place_clip(layer, column, clip).is_some() {
                 self.dirty = true;
+                self.steps.note("Pose d'un clip");
             } else {
                 self.refused_commands = self.refused_commands.saturating_add(1);
             }
+        }
+
+        if self.steps.tick(self.gesture_held) {
+            self.commit_step();
         }
 
         // Pas une modification du fichier : le choix de suivre en est une (§7.1).

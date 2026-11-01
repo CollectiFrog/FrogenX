@@ -402,6 +402,16 @@ impl Composition {
         true
     }
 
+    /// Pose le clip actif sans le faire repartir : une grille restaurée reprend ce
+    /// qui jouait (§23.11). Sans effet si `clip` n'est pas sur `layer`.
+    pub fn set_active_clip(&mut self, layer: LayerId, clip: Option<ClipId>) {
+        if let Some(l) = self.layer_mut(layer) {
+            if clip.is_none_or(|c| l.holds(c)) {
+                l.active = clip;
+            }
+        }
+    }
+
     /// Vide `layer` : elle ne contribue plus à l'image.
     pub fn clear_layer(&mut self, layer: LayerId) -> bool {
         let Some(l) = self.layer_mut(layer) else {

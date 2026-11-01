@@ -140,6 +140,43 @@ pub enum Command {
 }
 
 impl Command {
+    /// Son nom dans le menu `Édition` (§23.11).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::TriggerClip { .. } | Self::TriggerColumn { .. } | Self::ClearLayer { .. } => {
+                "Jeu"
+            }
+            Self::ResetTrigCount(_) => "Recalage",
+            Self::SetLayerOpacity { .. }
+            | Self::SetParam { .. }
+            | Self::SetDepth { .. }
+            | Self::SetClipSpeed { .. }
+            | Self::SetTargetBase { .. }
+            | Self::SetTargetDepth { .. }
+            | Self::SetNodeValue { .. } => "Réglage",
+            Self::AddColumn => "Ajout d'une colonne",
+            Self::RemoveColumn { .. } => "Retrait d'une colonne",
+            Self::AddLayer => "Ajout d'une piste",
+            Self::RemoveLayer { .. } => "Retrait d'une piste",
+            Self::RemoveClip { .. } => "Retrait d'un clip",
+            Self::SetActiveDeck(_) => "Changement de deck",
+            Self::SetBpm(_) | Self::TapTempo | Self::SetTempoFollow(_) => "Tempo",
+            Self::AddTrig | Self::AddTrigAt { .. } => "Ajout d'un trig",
+            Self::RemoveTrig(_) => "Retrait d'un trig",
+            Self::SetTrigParam { .. } | Self::SetTrigTarget { .. } => "Réglage d'un trig",
+            Self::SetAnalysisMethod(_)
+            | Self::SetFreqScale(_)
+            | Self::SetAmpScale(_)
+            | Self::SetAnalysisWindow(_) => "Analyse audio",
+            Self::SetAudioModulation { .. } => "Source audio",
+            Self::AddNode { .. } => "Ajout d'un nœud",
+            Self::RemoveNode { .. } => "Retrait d'un nœud",
+            Self::Connect { .. } | Self::Disconnect { .. } => "Câblage",
+            Self::AddEffect { .. } => "Ajout d'un effet",
+            Self::RemoveEffect { .. } => "Retrait d'un effet",
+        }
+    }
+
     /// Change-t-elle ce qu'un fichier enregistre (§23.8) ? Déclencher est jouer,
     /// pas modifier. Sans cas par défaut : une nouvelle commande oblige à trancher.
     pub fn is_edit(&self) -> bool {

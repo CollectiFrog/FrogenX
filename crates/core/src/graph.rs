@@ -251,6 +251,28 @@ impl Graph {
         self.is_live(node) && self.is_live(source) && node != source && !self.reaches(source, node)
     }
 
+    /// Reprend la mémoire de `ancien`, si ses nœuds sont les mêmes, type par type.
+    /// Rend `false` sans rien toucher sinon : une grille restaurée ne doit pas
+    /// hériter d'un état qui ne lui correspond pas (§23.11).
+    pub fn adopt_state(&mut self, ancien: &Graph) -> bool {
+        let (a, b) = (self.nodes(), ancien.nodes());
+        let meme_forme = a.len() == b.len()
+            && a.iter().zip(&b).all(|(x, y)| {
+                x.spec.kind == y.spec.kind
+                    && self.node_state(x.id).len() == ancien.node_state(y.id).len()
+            });
+        if !meme_forme {
+            return false;
+        }
+        for (x, y) in a.iter().zip(&b) {
+            let slot = &self.slots[x.id.index() as usize];
+            let (debut, fin) = (slot.state_off, slot.state_off + slot.state_len);
+            self.state[debut..fin].copy_from_slice(ancien.node_state(y.id));
+            self.cache[x.id.index() as usize] = ancien.value(y.id);
+        }
+        true
+    }
+
     /// La mémoire d'un nœud, vide pour un nœud périmé. Pour l'affichage : un
     /// `Signal` documente ses slots, c'est son seul contrat de lecture.
     pub fn node_state(&self, node: NodeId) -> &[f32] {

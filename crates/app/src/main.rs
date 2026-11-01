@@ -27,7 +27,7 @@ use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
 use frogenx_output::{MonitorSink, OutputSink};
-use frogenx_ui::OutputRequest;
+use frogenx_ui::{HistoryRequest, OutputRequest};
 use glam::UVec2;
 use gui::Gui;
 use node_window::NodeWindow;
@@ -262,6 +262,7 @@ impl Running {
         if let Some(fenetre) = &mut self.nodes {
             fenetre.draw(&mut self.engine, self.gui.selected_clip());
         }
+        self.apply_history();
         self.last = now;
         self.frames += 1;
         self.deadline = next_deadline(self.deadline, now, FRAME_PERIOD);
@@ -276,6 +277,28 @@ impl Running {
             }
             Some(Action::Tap) => self.engine.push(Command::TapTempo),
             None => {}
+        }
+    }
+
+    /// Annuler ou rétablir, demandé d'une fenêtre ou de l'autre. Un bouton tenu dans
+    /// l'une ou l'autre garde le pas ouvert (§23.11).
+    fn apply_history(&mut self) {
+        let editeur = self.nodes.as_mut();
+        let tenu = editeur.as_ref().is_some_and(|f| f.pointer_held());
+        let demande = editeur.and_then(|f| f.take_history_request());
+        let demande = self.gui.take_history_request().or(demande);
+        self.engine.set_gesture(tenu || self.gui.pointer_held());
+        let (fait, verbe) = match demande {
+            Some(HistoryRequest::Undo) => (self.engine.undo(), "Annulé"),
+            Some(HistoryRequest::Redo) => (self.engine.redo(), "Rétabli"),
+            None => return,
+        };
+        if let Some(fait) = fait {
+            self.gui.remap(&fait.map);
+            if let Some(fenetre) = &mut self.nodes {
+                fenetre.remap(&fait.map);
+            }
+            self.files.set_status(format!("{verbe} : {}", fait.label));
         }
     }
 

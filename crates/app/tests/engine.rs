@@ -1071,6 +1071,234 @@ fn un_effet_ajoute_change_l_image_a_la_frame_suivante() {
     assert_eq!(bord(1)[3], 0, "réduit au dixième, il n'y arrive plus");
 }
 
+/// Une grille de départ, qui joue, en temps fixe.
+fn scene(gpu: Gpu) -> Engine {
+    let grille = frogenx_library::starter();
+    let mut moteur = Engine::new(gpu, Clock::fixed(60.0), SIZE, grille);
+    let colonne = moteur.composition().columns()[0];
+    moteur.push(Command::TriggerColumn { column: colonne });
+    moteur.frame(0.0);
+    moteur
+}
+
+fn frames(moteur: &mut Engine, n: usize) {
+    for _ in 0..n {
+        moteur.frame(0.0);
+    }
+}
+
+#[test]
+fn annuler_rend_le_reglage_d_avant_et_retablir_le_refait() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    assert_eq!(m.undo_label(), None);
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 2);
+    assert_eq!(m.bpm(), 90.0);
+
+    assert_eq!(m.undo().unwrap().label, "Tempo");
+    frames(&mut m, 1);
+    assert_eq!(m.bpm(), 120.0);
+    assert_eq!(m.redo_label(), Some("Tempo"));
+
+    assert_eq!(m.redo().unwrap().label, "Tempo");
+    frames(&mut m, 1);
+    assert_eq!(m.bpm(), 90.0);
+}
+
+#[test]
+fn un_potentiometre_tourne_s_annule_en_une_fois() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    m.set_gesture(true);
+    for i in 0..30 {
+        m.push(Command::SetBpm(100.0 + i as f32));
+        m.frame(0.0);
+    }
+    m.set_gesture(false);
+    frames(&mut m, 20);
+    assert!(m.undo().is_some());
+    frames(&mut m, 1);
+    assert_eq!(m.bpm(), 120.0);
+    assert_eq!(m.undo_label(), None, "un seul pas");
+}
+
+#[test]
+fn deux_gestes_separes_font_deux_pas() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 20);
+    m.push(Command::AddColumn);
+    frames(&mut m, 20);
+    assert_eq!(m.undo_label(), Some("Ajout d'une colonne"));
+    m.undo();
+    assert_eq!(m.undo_label(), Some("Tempo"));
+}
+
+#[test]
+fn annuler_ferme_d_abord_le_pas_en_cours() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    m.push(Command::SetBpm(90.0));
+    m.frame(0.0);
+    assert!(m.undo().is_some(), "sans attendre le calme");
+    frames(&mut m, 1);
+    assert_eq!(m.bpm(), 120.0);
+}
+
+#[test]
+fn jouer_ne_cree_pas_de_pas() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    let colonne = m.composition().columns()[1];
+    m.push(Command::TriggerColumn { column: colonne });
+    frames(&mut m, 30);
+    assert_eq!(m.undo_label(), None);
+}
+
+#[test]
+fn annuler_ne_change_pas_ce_qui_joue() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 20);
+    let colonne = m.composition().columns()[1];
+    m.push(Command::TriggerColumn { column: colonne });
+    frames(&mut m, 5);
+
+    let noms = |m: &Engine| {
+        let c = m.composition();
+        c.all_layers()
+            .iter()
+            .filter_map(|l| c.layer(*l)?.active_clip())
+            .filter_map(|id| c.clip(id).map(|clip| clip.name.clone()))
+            .collect::<Vec<_>>()
+    };
+    let avant = noms(&m);
+    m.undo();
+    frames(&mut m, 1);
+    assert_eq!(noms(&m), avant);
+}
+
+#[test]
+fn l_image_ne_saute_pas_quand_on_annule_ailleurs() {
+    let Some(gpu) = gpu() else { return };
+    let Some(gpu2) = self::gpu() else { return };
+    let rendre = |gpu: Gpu, annule: bool| {
+        let mut m = Engine::new(gpu, Clock::fixed(60.0), SIZE, frogenx_library::starter());
+        let recu = Recu::default();
+        m.add_output(OutputSink::Cpu(Box::new(recu.clone())))
+            .unwrap();
+        let colonne = m.composition().columns()[0];
+        m.push(Command::TriggerColumn { column: colonne });
+        frames(&mut m, 30);
+        // Un tempo inchangé d'une grille à l'autre : seul l'aller-retour diffère.
+        m.push(Command::AddColumn);
+        frames(&mut m, 20);
+        if annule {
+            m.undo();
+            m.redo();
+        }
+        frames(&mut m, 10);
+        m.finish();
+        let frames = recu.0.lock().unwrap();
+        frames.last().unwrap().pixels.to_vec()
+    };
+    assert_eq!(rendre(gpu, false), rendre(gpu2, true));
+}
+
+#[test]
+fn revenir_a_l_etat_enregistre_retire_le_marqueur() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    assert!(!m.is_dirty());
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 20);
+    assert!(m.is_dirty());
+    m.undo();
+    assert!(!m.is_dirty());
+    m.redo();
+    assert!(m.is_dirty());
+}
+
+#[test]
+fn enregistrer_deplace_l_etat_propre() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 2);
+    m.set_dirty(false);
+    m.undo();
+    assert!(m.is_dirty(), "le fichier contient le tempo annulé");
+}
+
+#[test]
+fn poser_un_clip_s_annule() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    let (piste, colonne) = (
+        m.composition().all_layers()[0],
+        m.composition().columns()[1],
+    );
+    let avant = m.composition().layer(piste).unwrap().cell(1);
+    m.place(piste, colonne, carre(Graph::new(), 1.0, 0.0));
+    frames(&mut m, 20);
+    assert_eq!(m.undo_label(), Some("Pose d'un clip"));
+    m.undo();
+    let c = m.composition();
+    let piste = c.all_layers()[0];
+    assert_eq!(c.layer(piste).unwrap().cell(1).is_some(), avant.is_some());
+}
+
+#[test]
+fn un_cablage_s_annule_et_la_selection_suit() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    let c = m.composition();
+    let piste = c.all_layers()[1];
+    let clip = c.layer(piste).unwrap().cell(0).unwrap();
+    let avant = c.clip(clip).unwrap().effects.len();
+    m.push(Command::AddEffect {
+        clip,
+        kind: EffectKind::Smooth,
+    });
+    frames(&mut m, 20);
+    assert_eq!(m.composition().clip(clip).unwrap().effects.len(), avant + 1);
+
+    let fait = m.undo().unwrap();
+    assert_eq!(fait.label, "Ajout d'un effet");
+    let neuf = fait.map.clip(clip).expect("le clip existe toujours");
+    assert_eq!(m.composition().clip(neuf).unwrap().effects.len(), avant);
+}
+
+#[test]
+fn ouvrir_un_fichier_vide_l_historique() {
+    let Some(gpu) = gpu() else { return };
+    let mut m = scene(gpu);
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 20);
+    m.replace_composition(frogenx_library::starter());
+    assert_eq!(m.undo_label(), None);
+    assert!(m.undo().is_none());
+}
+
+#[test]
+fn une_grille_qui_ne_s_enregistre_pas_ne_s_annule_pas_et_ne_panique_pas() {
+    let Some(gpu) = gpu() else { return };
+    let mut c = Composition::new();
+    let deck = c.add_deck("test");
+    let groupe = c.add_layer_group(deck).unwrap();
+    c.add_layer(groupe).unwrap();
+    c.graph_mut()
+        .add(Box::new(Compteur(Arc::new(AtomicU32::new(0)))));
+    let (mut m, _) = moteur(gpu, c);
+    m.push(Command::SetBpm(90.0));
+    frames(&mut m, 20);
+    assert!(m.undo().is_none());
+    assert_eq!(m.bpm(), 90.0);
+}
+
 #[test]
 fn le_temps_reel_refuse_une_sortie_cpu() {
     let Some(gpu) = gpu() else { return };

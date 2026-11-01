@@ -21,6 +21,7 @@ use egui::{
     Align, Button, CornerRadius, Label, Layout, Margin, Pos2, Rect, Response, RichText, Sense,
     Stroke, Ui, UiBuilder,
 };
+use frogenx_composition::IdMap;
 use frogenx_composition::{
     Clip, ClipId, ColumnId, Command, Composition, LayerId, Transport, TrigId,
 };
@@ -79,6 +80,41 @@ pub enum OutputRequest {
     Close,
 }
 
+/// Annuler ou rétablir : `app` tient l'historique (§23.11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryRequest {
+    Undo,
+    Redo,
+}
+
+/// Ce que l'historique permet, en mots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HistoryView {
+    pub undo: Option<&'static str>,
+    pub redo: Option<&'static str>,
+}
+
+/// Ctrl+Z, puis Ctrl+Y ou Ctrl+Maj+Z. Hors d'un champ, qui garde les siens.
+pub fn history_shortcut(ui: &mut Ui) -> Option<HistoryRequest> {
+    if ui.ctx().egui_wants_keyboard_input() {
+        return None;
+    }
+    let ctrl = egui::Modifiers::COMMAND;
+    let raccourci = |m, k| egui::KeyboardShortcut::new(m, k);
+    ui.input_mut(|i| {
+        // Le plus précis d'abord : Ctrl+Z accepterait aussi Ctrl+Maj+Z.
+        if i.consume_shortcut(&raccourci(ctrl | egui::Modifiers::SHIFT, egui::Key::Z))
+            || i.consume_shortcut(&raccourci(ctrl, egui::Key::Y))
+        {
+            Some(HistoryRequest::Redo)
+        } else if i.consume_shortcut(&raccourci(ctrl, egui::Key::Z)) {
+            Some(HistoryRequest::Undo)
+        } else {
+            None
+        }
+    })
+}
+
 /// L'état du fichier, déjà mis en mots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileView<'a> {
@@ -126,6 +162,8 @@ pub struct UiState {
     pub show_audio: bool,
     /// L'utilisateur a demandé l'éditeur de nœuds : `app` ouvre sa fenêtre.
     pub open_nodes: bool,
+    /// Annuler ou rétablir, demandé cette frame.
+    pub history: Option<HistoryRequest>,
     /// Le trig réglé dans le panneau flottant ; aucun : le spectre reste dégagé.
     pub selected_trig: Option<TrigId>,
     /// Le geste en cours sur le spectre.
@@ -141,6 +179,15 @@ pub struct UiState {
 impl UiState {
     /// La grille a été remplacée : ses identifiants visaient l'ancienne, et
     /// pourraient coïncider avec ceux de la nouvelle (§23.8).
+    /// La grille a été restaurée : la sélection suit, ou disparaît avec son clip.
+    pub fn remap(&mut self, map: &IdMap) {
+        self.selected = self
+            .selected
+            .and_then(|(layer, clip)| Some((map.layer(layer)?, map.clip(clip)?)));
+        self.selected_trig = self.selected_trig.and_then(|t| map.trig(t));
+        self.zone_gesture = None;
+    }
+
     pub fn forget_grid(&mut self) {
         self.selected = None;
         self.selected_trig = None;
@@ -159,6 +206,7 @@ impl Default for UiState {
             show_library: true,
             show_audio: true,
             open_nodes: false,
+            history: None,
             selected_trig: None,
             zone_gesture: None,
             known_trigs: None,
@@ -192,6 +240,7 @@ pub struct FrameView<'a> {
     pub time: f64,
     /// Le tempo détecté dans le son, `0` s'il n'y en a pas (§7.1).
     pub detected_bpm: f32,
+    pub history: HistoryView,
 }
 
 /// Dessine toute l'interface et remplit `commands`, `placements`, `output` et
@@ -209,6 +258,8 @@ pub fn draw(
         confirmation(ui, view.file.title, file);
     } else if ui.input_mut(|i| i.consume_shortcut(&SAVE_SHORTCUT)) {
         *file = Some(FileRequest::Save);
+    } else if let Some(demande) = history_shortcut(ui) {
+        state.history = Some(demande);
     }
     let entete = egui::Frame::new()
         .fill(theme::HEADER)
@@ -312,6 +363,7 @@ fn header(
         wordmark(ui);
         ui.add_space(14.0);
         ui.menu_button("Fichier", |ui| file_menu(ui, file));
+        ui.menu_button("Édition", |ui| history_menu(ui, state, view.history));
         ui.menu_button("Affichage", |ui| {
             ui.checkbox(&mut state.show_grid, "Grille");
             ui.checkbox(&mut state.show_monitor, "Monitor");
@@ -363,6 +415,24 @@ fn header(
             ui.label(discret(view.output.status));
         });
     });
+}
+
+/// Nomme ce qui va changer : un geste à l'aveugle ne se rattrape pas sur scène.
+fn history_menu(ui: &mut Ui, state: &mut UiState, view: HistoryView) {
+    let entrees = [
+        ("Annuler", view.undo, HistoryRequest::Undo),
+        ("Rétablir", view.redo, HistoryRequest::Redo),
+    ];
+    for (verbe, nom, demande) in entrees {
+        let libelle = nom.map_or(verbe.to_string(), |n| format!("{verbe} : {n}"));
+        if ui
+            .add_enabled(nom.is_some(), Button::new(libelle))
+            .clicked()
+        {
+            state.history = Some(demande);
+            ui.close();
+        }
+    }
 }
 
 fn file_menu(ui: &mut Ui, file: &mut Option<FileRequest>) {
@@ -834,6 +904,10 @@ mod tests {
                             confirming,
                         },
                         detected_bpm: 127.5,
+                        history: HistoryView {
+                            undo: Some("Câblage"),
+                            redo: None,
+                        },
                     };
                     draw(
                         ui,
@@ -1124,6 +1198,76 @@ mod tests {
         assert_eq!(etat.selected, None);
         assert_eq!(etat.zone_gesture, None);
         assert_eq!(etat.known_trigs, None);
+    }
+
+    #[test]
+    fn le_menu_edition_nomme_ce_qu_il_annule() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Édition").click();
+        h.run();
+        h.get_by_label("Annuler : Câblage").click();
+        h.run();
+        assert_eq!(h.state().ui.history, Some(HistoryRequest::Undo));
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn rien_a_retablir_laisse_le_menu_inactif() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Édition").click();
+        h.run();
+        h.get_by_label("Rétablir").click();
+        h.run();
+        assert_eq!(h.state().ui.history, None);
+    }
+
+    #[test]
+    fn les_raccourcis_annulent_et_retablissent() {
+        let ctrl = egui::Modifiers::COMMAND;
+        for (mods, touche, attendu) in [
+            (ctrl, egui::Key::Z, HistoryRequest::Undo),
+            (ctrl, egui::Key::Y, HistoryRequest::Redo),
+            (
+                ctrl | egui::Modifiers::SHIFT,
+                egui::Key::Z,
+                HistoryRequest::Redo,
+            ),
+        ] {
+            let g = grille();
+            let mut h = harness(&g.composition);
+            h.key_press_modifiers(mods, touche);
+            h.run();
+            assert_eq!(h.state().ui.history, Some(attendu), "{mods:?} {touche:?}");
+        }
+    }
+
+    #[test]
+    fn la_question_du_fichier_bloque_les_raccourcis() {
+        let g = grille();
+        let mut h = harness_fichier(&g.composition, true);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert_eq!(h.state().ui.history, None);
+    }
+
+    #[test]
+    fn la_selection_suit_la_grille_restauree() {
+        let g = grille();
+        let mut etat = UiState {
+            selected: Some((g.piste, g.clips[0])),
+            ..UiState::default()
+        };
+        let map = IdMap {
+            layers: vec![(g.piste, g.piste)],
+            clips: vec![(g.clips[0], g.clips[1])],
+            trigs: Vec::new(),
+        };
+        etat.remap(&map);
+        assert_eq!(etat.selected, Some((g.piste, g.clips[1])));
+        etat.remap(&IdMap::default());
+        assert_eq!(etat.selected, None, "le clip a disparu");
     }
 
     #[test]

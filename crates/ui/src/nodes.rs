@@ -4,13 +4,13 @@
 //! [`editor`] lit la grille et remplit une liste de `Command`. Ce qu'il montre se
 //! calcule à part ([`boxes`], [`auto_positions`]), sans egui : ça se teste seul.
 
-use crate::theme;
+use crate::{theme, HistoryRequest};
 use egui::{
     Align2, Color32, DragValue, FontId, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, Ui,
     UiBuilder, Vec2, WidgetInfo,
 };
 use frogenx_composition::{
-    ClipId, ClipParam, ClipSource, Command, Composition, GraphScope, NodeKind, NodeValue,
+    ClipId, ClipParam, ClipSource, Command, Composition, GraphScope, IdMap, NodeKind, NodeValue,
     ParamTarget,
 };
 use frogenx_core::{FeatureKind, NodeId, Param, SpecValue, CHROMA_NOTES};
@@ -52,9 +52,27 @@ pub struct EditorState {
     positions: HashMap<(GraphScope, NodeId), Pos2>,
     /// Le fil en cours de tirage : la sortie d'où il part.
     dragging: Option<NodeId>,
+    /// Annuler ou rétablir, demandé cette frame (§23.11).
+    pub history: Option<HistoryRequest>,
 }
 
 impl EditorState {
+    /// La grille a été restaurée : les nœuds d'un clip gardent leur place.
+    pub fn remap(&mut self, map: &IdMap) {
+        let places = std::mem::take(&mut self.positions);
+        self.positions = places
+            .into_iter()
+            .filter_map(|((scope, node), p)| {
+                let scope = match scope {
+                    GraphScope::Clip(clip) => GraphScope::Clip(map.clip(clip)?),
+                    regie => regie,
+                };
+                Some(((scope, node), p))
+            })
+            .collect();
+        self.dragging = None;
+    }
+
     /// La grille a été remplacée : les identifiants ne désignent plus rien.
     pub fn forget_grid(&mut self) {
         self.positions.clear();
@@ -829,6 +847,9 @@ pub fn editor(
     view: &EditorView<'_>,
     commands: &mut Vec<Command>,
 ) {
+    if let Some(demande) = crate::history_shortcut(ui) {
+        state.history = Some(demande);
+    }
     egui::Panel::top("onglets").show(ui, |ui| {
         ui.horizontal(|ui| {
             let titre = match view.selected.and_then(|id| view.composition.clip(id)) {
@@ -1267,6 +1288,31 @@ mod tests {
                 kind: NodeKind::Lfo
             }]
         );
+    }
+
+    #[test]
+    fn ctrl_z_fonctionne_aussi_dans_l_editeur() {
+        let g = grille();
+        let mut h = harness(&g.c, Some(g.clip), Tab::Clip);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run();
+        assert_eq!(h.state().editeur.history, Some(HistoryRequest::Undo));
+    }
+
+    #[test]
+    fn une_grille_restauree_garde_la_place_des_noeuds_de_ses_clips() {
+        let g = grille();
+        let noeud = Graph::new().add(Box::new(frogenx_core::Constant(0.0)));
+        let mut e = EditorState::default();
+        e.positions
+            .insert((GraphScope::Clip(g.clip), noeud), Pos2::ZERO);
+        e.remap(&IdMap {
+            clips: vec![(g.clip, g.clip)],
+            ..Default::default()
+        });
+        assert_eq!(e.positions.len(), 1);
+        e.remap(&IdMap::default());
+        assert!(e.positions.is_empty(), "le clip a disparu");
     }
 
     #[test]

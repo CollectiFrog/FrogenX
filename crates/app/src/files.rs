@@ -104,6 +104,11 @@ impl Files {
         &self.status
     }
 
+    /// Ce que vient de faire l'historique : un Ctrl+Z accidentel doit se voir.
+    pub fn set_status(&mut self, status: String) {
+        self.status = status;
+    }
+
     pub fn title(&self, dirty: bool) -> String {
         title(self.flow.path(), dirty)
     }

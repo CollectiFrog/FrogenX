@@ -4,11 +4,12 @@
 //! fait le lien : les événements `winit` vers egui, le dessin vers la surface.
 
 use frogenx_app::{describe_outputs, Engine};
-use frogenx_composition::ClipId;
+use frogenx_composition::{ClipId, IdMap};
 use frogenx_layer::Gpu;
 use frogenx_output::{FormatPreference, PresentSurface};
 use frogenx_ui::{
-    theme, FileRequest, FileView, FrameView, Monitor, OutputRequest, OutputView, UiState,
+    theme, FileRequest, FileView, FrameView, HistoryRequest, HistoryView, Monitor, OutputRequest,
+    OutputView, UiState,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -178,6 +179,10 @@ impl Gui {
             output: sortie,
             file: fichier,
             detected_bpm: engine.audio().bpm,
+            history: HistoryView {
+                undo: engine.undo_label(),
+                redo: engine.redo_label(),
+            },
         };
         let mut commands = Vec::new();
         let mut placements = Vec::new();
@@ -221,6 +226,21 @@ impl Gui {
         self.presented += u64::from(presente);
         self.spent += debut.elapsed();
         demandes
+    }
+
+    /// Annuler ou rétablir, demandé depuis la dernière lecture.
+    pub fn take_history_request(&mut self) -> Option<HistoryRequest> {
+        self.state.history.take()
+    }
+
+    /// Un bouton de souris est-il tenu ? Il délimite un pas d'annulation.
+    pub fn pointer_held(&self) -> bool {
+        self.ctx.input(|i| i.pointer.any_down())
+    }
+
+    /// La grille a été restaurée : la sélection la suit.
+    pub fn remap(&mut self, map: &IdMap) {
+        self.state.remap(map);
     }
 
     /// `true` une fois par demande d'ouvrir l'éditeur de nœuds.

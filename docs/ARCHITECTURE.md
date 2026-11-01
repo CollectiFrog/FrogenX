@@ -1577,34 +1577,34 @@ qui les livre (skill `doc-sync`).
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
+| Annuler et rétablir | 100 pas, un par geste, sans faire sauter l'image, Ctrl+Z et menu `Édition` (§23.11) |
 | Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
 
 **À faire, dans l'ordre conseillé**
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Annuler et rétablir | l'architecture par `Command` le permet ; rien n'est branché | moyenne |
-| 2 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
-| 3 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
-| 4 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
-| 5 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 6 | Recalage de la phase du tempo |
-| 7 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 8 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
-| 9 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
-| 10 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 11 | Scène 3D, étape 13 | | très grande |
-| 12 | Art-Net / DMX, étape 14 | | moyenne |
-| 13 | Scripting Lua, étape 15 | | moyenne |
-| 14 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 15 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
+| 2 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
+| 3 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
+| 4 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 5 | Recalage de la phase du tempo |
+| 6 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 7 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
+| 8 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
+| 9 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 10 | Scène 3D, étape 13 | | très grande |
+| 11 | Art-Net / DMX, étape 14 | | moyenne |
+| 12 | Scripting Lua, étape 15 | | moyenne |
+| 13 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 14 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
 | Point | État |
 |---|---|
 | BPM, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
-| Menus `Sortie` et `Fichier`, clic droit des potentiomètres, fils de l'éditeur, à la vraie souris | validés par clics simulés seulement |
+| Menus `Sortie`, `Fichier` et `Édition`, clic droit des potentiomètres, fils de l'éditeur, Ctrl+Z, à la vraie souris et au vrai clavier | validés par clics simulés seulement |
 | Projecteur, câble débranché, écran à une autre fréquence | jamais essayés (§8.4) |
 | Linux et macOS | jamais essayés |
 
@@ -3351,6 +3351,20 @@ fichier : chaque pas porte un numéro, comparé à celui de la dernière sauvega
 **Le geste.** Ctrl+Z annule, Ctrl+Y ou Ctrl+Maj+Z rétablit, dans l'interface comme dans l'éditeur
 de nœuds, sauf pendant une saisie dans un champ, qui garde les siens. Le menu `Édition` nomme ce
 qui va être annulé, et l'en-tête dit ce qui vient de l'être : un Ctrl+Z accidentel se voit.
+
+**Ce qui est vérifié, et comment.** `History` se teste sans grille : gestes groupés, limite de 100
+pas, retour à l'état enregistré. `adopt_from` se teste sans GPU : clip actif et phase repris, seul
+le clip modifié qui repart, colonne et piste retirées retrouvées par leur nom. Sur le GPU, une
+grille annulée puis rétablie rend la même image au pixel près que si on n'y avait pas touché, et
+annuler ne change pas ce qui joue. Le menu et les raccourcis se testent par touches simulées, dans
+les deux fenêtres. L'application tourne à 60 fps avec l'éditeur ouvert.
+
+**Pas encore essayés :** Ctrl+Z dans la vraie fenêtre et à la vraie souris, sur un vrai geste.
+
+**Non couvert.** Annuler une colonne retirée rend ses clips neufs, phases à zéro, puisqu'ils
+n'existent plus dans la grille qui joue. Une grille qui contiendrait un `Signal` absent de la table
+ne s'enregistre pas, donc ne s'annule pas : c'est sans effet, et sans panique. La place des nœuds
+n'est pas concernée, puisqu'elle n'est pas dans le fichier.
 
 ---
 

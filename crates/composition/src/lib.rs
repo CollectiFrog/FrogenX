@@ -38,6 +38,7 @@
 pub mod analysis;
 pub mod clip;
 pub mod command;
+pub mod continuity;
 pub mod crossfader;
 pub mod hierarchy;
 pub mod ids;
@@ -53,6 +54,7 @@ pub use clip::{
     WipeDirection, MAX_CLIP_SPEED,
 };
 pub use command::Command;
+pub use continuity::IdMap;
 pub use crossfader::{CrossFader, FadeCurve};
 pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup, MIN_TEMPO_CONFIDENCE};
 pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
