@@ -23,8 +23,8 @@ use frogenx_composition::{
 };
 use frogenx_core::{AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph};
 use frogenx_layer::{
-    BlendParams, FeedbackRenderer, FeedbackStep, FrameHistory, Gpu, RenderLayer, ShapeContent,
-    ShapeRenderer,
+    BlendParams, FeedbackRenderer, FeedbackStep, FrameHistory, Gpu, MixKind, MixRenderer,
+    RenderLayer, ShapeContent, ShapeRenderer,
 };
 use frogenx_output::{
     DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs, SinkStatus,
@@ -140,6 +140,11 @@ struct Track {
     renderer: ShapeRenderer,
     /// Créé au premier feedback de la piste : la plupart n'en auront jamais.
     feedback: Option<FeedbackRenderer>,
+    /// Le clip qui sort d'une transition, et leur mélange : créés à la première
+    /// de la piste (§3bis.2).
+    outgoing: Option<ShapeRenderer>,
+    outgoing_feedback: Option<FeedbackRenderer>,
+    mix: Option<MixRenderer>,
 }
 
 /// Le clip actif d'une piste, vu par le compositeur le temps d'une frame.
@@ -154,6 +159,15 @@ enum ClipLayer<'a> {
         step: FeedbackStep,
         blend: BlendParams,
     },
+    /// Deux clips mélangés : chacun garde son graphe, l'appel n'en porte qu'un.
+    Mix {
+        incoming: (Box<ClipLayer<'a>>, &'a Graph),
+        outgoing: (Box<ClipLayer<'a>>, &'a Graph),
+        renderer: &'a mut MixRenderer,
+        amount: f32,
+        kind: MixKind,
+        blend: BlendParams,
+    },
 }
 
 impl RenderLayer for ClipLayer<'_> {
@@ -163,6 +177,24 @@ impl RenderLayer for ClipLayer<'_> {
                 renderer, content, ..
             } => renderer.prepare(content, t, ctx, g, gpu),
             Self::Feedback { renderer, step, .. } => renderer.prepare(step, gpu),
+            Self::Mix {
+                incoming,
+                outgoing,
+                renderer,
+                amount,
+                kind,
+                ..
+            } => {
+                incoming.0.prepare(t, ctx, incoming.1, gpu);
+                outgoing.0.prepare(t, ctx, outgoing.1, gpu);
+                renderer.prepare(
+                    gpu,
+                    incoming.0.output(),
+                    outgoing.0.output(),
+                    *amount,
+                    *kind,
+                );
+            }
         }
     }
 
@@ -170,6 +202,16 @@ impl RenderLayer for ClipLayer<'_> {
         match self {
             Self::Shape { renderer, .. } => renderer.encode(encoder),
             Self::Feedback { renderer, .. } => renderer.encode(encoder),
+            Self::Mix {
+                incoming,
+                outgoing,
+                renderer,
+                ..
+            } => {
+                incoming.0.encode(encoder);
+                outgoing.0.encode(encoder);
+                renderer.encode(encoder);
+            }
         }
     }
 
@@ -177,12 +219,15 @@ impl RenderLayer for ClipLayer<'_> {
         match self {
             Self::Shape { renderer, .. } => renderer.output(),
             Self::Feedback { renderer, .. } => renderer.output(),
+            Self::Mix { renderer, .. } => renderer.output(),
         }
     }
 
     fn blend(&self) -> BlendParams {
         match self {
-            Self::Shape { blend, .. } | Self::Feedback { blend, .. } => *blend,
+            Self::Shape { blend, .. } | Self::Feedback { blend, .. } | Self::Mix { blend, .. } => {
+                *blend
+            }
         }
     }
 
@@ -190,6 +235,50 @@ impl RenderLayer for ClipLayer<'_> {
     fn resize(&mut self, size: UVec2, gpu: &Gpu) {
         if let Self::Shape { renderer, .. } = self {
             renderer.resize(size, gpu);
+        }
+    }
+}
+
+/// Ce qu'il faut pour dessiner un clip : les ressources d'une frame.
+struct Drawing<'a> {
+    gpu: &'a Gpu,
+    size: UVec2,
+    history: &'a FrameHistory,
+    composition: &'a Composition,
+    dt: f64,
+    blend: BlendParams,
+}
+
+impl<'a> Drawing<'a> {
+    fn layer(
+        &self,
+        clip: &'a Clip,
+        renderer: &'a mut ShapeRenderer,
+        feedback: &'a mut Option<FeedbackRenderer>,
+    ) -> ClipLayer<'a> {
+        match &clip.source {
+            ClipSource::Shape {
+                generator, style, ..
+            } => ClipLayer::Shape {
+                renderer,
+                content: ShapeContent {
+                    generator: generator.as_ref(),
+                    effects: &clip.effects,
+                    style: *style,
+                },
+                blend: self.blend,
+            },
+            ClipSource::Feedback { graph, params } => {
+                // Comme le graphe du clip : sa vitesse multiplie son temps.
+                let vitesse = sanitize_speed(clip.speed.get(self.composition.graph()));
+                let (gpu, taille, history) = (self.gpu, self.size, self.history);
+                ClipLayer::Feedback {
+                    renderer: feedback
+                        .get_or_insert_with(|| FeedbackRenderer::new(gpu, taille, history)),
+                    step: params.step(graph, self.dt * vitesse as f64),
+                    blend: self.blend,
+                }
+            }
         }
     }
 }
@@ -426,18 +515,22 @@ impl Engine {
         // donc à la frame suivante, une de retard sur le spectre.
         self.composition.trig_commands(&mut self.commands);
         self.composition.layers_in_order(&mut self.order);
+        self.composition.advance_transitions(dt, self.bpm);
         for layer in &self.order {
             let actif = self.composition.layer(*layer).and_then(|l| l.active_clip());
-            let Some(id) = actif else { continue };
-            // Lue dans le graphe de composition, déjà évalué (§3bis.2).
-            let vitesse = self.composition.clip(id).map_or(1.0, |clip| {
-                sanitize_speed(clip.speed.get(self.composition.graph()))
-            });
-            if let Some(clip) = self.composition.clip_mut(id) {
-                let graph = clip.graph_mut();
-                graph.set_bpm(self.bpm);
-                graph.set_audio(self.audio.clone());
-                graph.eval_frame(t, dt * vitesse as f64);
+            // Un clip qui sort continue de jouer jusqu'à la fin de la transition.
+            let sortant = self.composition.outgoing_clip(*layer);
+            for id in actif.into_iter().chain(sortant) {
+                // Lue dans le graphe de composition, déjà évalué (§3bis.2).
+                let vitesse = self.composition.clip(id).map_or(1.0, |clip| {
+                    sanitize_speed(clip.speed.get(self.composition.graph()))
+                });
+                if let Some(clip) = self.composition.clip_mut(id) {
+                    let graph = clip.graph_mut();
+                    graph.set_bpm(self.bpm);
+                    graph.set_audio(self.audio.clone());
+                    graph.eval_frame(t, dt * vitesse as f64);
+                }
             }
         }
         self.sync_tracks();
@@ -452,27 +545,37 @@ impl Engine {
             let Some(clip) = piste.active_clip().and_then(|id| composition.clip(id)) else {
                 continue;
             };
-            let couche = match &clip.source {
-                ClipSource::Shape {
-                    generator, style, ..
-                } => ClipLayer::Shape {
-                    renderer: &mut track.renderer,
-                    content: ShapeContent {
-                        generator: generator.as_ref(),
-                        effects: &clip.effects,
-                        style: *style,
-                    },
-                    blend: piste.blend,
-                },
-                ClipSource::Feedback { graph, params } => {
-                    // Comme le graphe du clip : sa vitesse multiplie son temps.
-                    let vitesse = sanitize_speed(clip.speed.get(composition.graph()));
-                    let (gpu, taille, history) = (&self.gpu, self.size, &self.history);
-                    ClipLayer::Feedback {
+            let dessin = Drawing {
+                gpu: &self.gpu,
+                size: self.size,
+                history: &self.history,
+                composition,
+                dt,
+                blend: piste.blend,
+            };
+            let transition = composition
+                .transition_view(track.layer)
+                .and_then(|v| Some((v, composition.clip(v.from)?)));
+            let entrant = dessin.layer(clip, &mut track.renderer, &mut track.feedback);
+            let couche = match transition {
+                None => entrant,
+                Some((vue, sortant)) => {
+                    let (gpu, taille) = (&self.gpu, self.size);
+                    let sortie = dessin.layer(
+                        sortant,
+                        track
+                            .outgoing
+                            .get_or_insert_with(|| ShapeRenderer::new(gpu, taille)),
+                        &mut track.outgoing_feedback,
+                    );
+                    ClipLayer::Mix {
+                        incoming: (Box::new(entrant), clip.graph()),
+                        outgoing: (Box::new(sortie), sortant.graph()),
                         renderer: track
-                            .feedback
-                            .get_or_insert_with(|| FeedbackRenderer::new(gpu, taille, history)),
-                        step: params.step(graph, dt * vitesse as f64),
+                            .mix
+                            .get_or_insert_with(|| MixRenderer::new(gpu, taille)),
+                        amount: vue.amount,
+                        kind: vue.kind,
                         blend: piste.blend,
                     }
                 }
@@ -520,6 +623,9 @@ impl Engine {
                         layer: *layer,
                         renderer: ShapeRenderer::new(&self.gpu, self.size),
                         feedback: None,
+                        outgoing: None,
+                        outgoing_feedback: None,
+                        mix: None,
                     },
                 ),
             }

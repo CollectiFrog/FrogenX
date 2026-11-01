@@ -28,14 +28,16 @@ pub mod render_layer;
 pub mod shape_layer;
 pub mod space;
 pub mod tessellate;
+pub mod transition;
 
 pub use feedback::{FeedbackRenderer, FrameHistory};
 pub use frogenx_shape::{
-    srgb_to_linear, BlendMode, BlendParams, ColorParam, FeedbackParams, FeedbackStep, ShapeStyle,
-    StrokeStyle,
+    srgb_to_linear, BlendMode, BlendParams, ColorParam, FeedbackParams, FeedbackStep, MixKind,
+    ShapeStyle, StrokeStyle,
 };
 pub use gpu::{Gpu, LAYER_FORMAT};
 pub use render_layer::{RenderDiagnostics, RenderLayer};
 pub use shape_layer::{ShapeContent, ShapeLayer, ShapeRenderer};
 pub use space::normalized_to_ndc;
 pub use tessellate::{Mesh, Tessellator};
+pub use transition::{mix_coverage, MixRenderer};

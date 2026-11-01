@@ -69,5 +69,6 @@ pub use path::{Contour, Path};
 pub use primitives::{Arc, Ellipse, Polygon, Rect, Star};
 pub use spec::{generator_from_spec, op_from_spec, EffectKind};
 pub use style::{
-    srgb_to_linear, BlendMode, BlendParams, ColorParam, ShapeStyle, StrokeStyle, COLOR_CHANNELS,
+    srgb_to_linear, BlendMode, BlendParams, ColorParam, MixKind, ShapeStyle, StrokeStyle,
+    COLOR_CHANNELS,
 };

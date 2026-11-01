@@ -4,7 +4,8 @@
 use frogenx_core::{FeatureKind, Graph, Param};
 use frogenx_osc::AudioFeature;
 use frogenx_shape::{
-    ColorParam, FeedbackParams, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle, COLOR_CHANNELS,
+    ColorParam, FeedbackParams, MixKind, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle,
+    COLOR_CHANNELS,
 };
 
 use crate::crossfader::FadeCurve;
@@ -54,6 +55,36 @@ pub enum ClipTransition {
         curve: FadeCurve,
         direction: WipeDirection,
     },
+}
+
+/// Le choix d'une transition, copiable : ce qu'une commande transporte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionKind {
+    Cut,
+    Fade,
+    Wipe(WipeDirection),
+}
+
+impl TransitionKind {
+    pub const ALL: [TransitionKind; 6] = [
+        TransitionKind::Cut,
+        TransitionKind::Fade,
+        TransitionKind::Wipe(WipeDirection::Left),
+        TransitionKind::Wipe(WipeDirection::Right),
+        TransitionKind::Wipe(WipeDirection::Up),
+        TransitionKind::Wipe(WipeDirection::Down),
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TransitionKind::Cut => "Coupure",
+            TransitionKind::Fade => "Fondu",
+            TransitionKind::Wipe(WipeDirection::Left) => "Volet vers la gauche",
+            TransitionKind::Wipe(WipeDirection::Right) => "Volet vers la droite",
+            TransitionKind::Wipe(WipeDirection::Up) => "Volet vers le haut",
+            TransitionKind::Wipe(WipeDirection::Down) => "Volet vers le bas",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +146,9 @@ fn color_descs(color: ColorParam) -> impl Iterator<Item = ParamDesc> {
             value,
         })
 }
+
+/// La durée proposée pour une nouvelle transition, en battements.
+pub const DEFAULT_TRANSITION_BEATS: f32 = 2.0;
 
 /// La vitesse maximale d'un clip, appliquée à la lecture (§18.4).
 pub const MAX_CLIP_SPEED: f32 = 4.0;
@@ -364,6 +398,69 @@ impl Clip {
     pub fn with_effect(mut self, op: Box<dyn ShapeOp>) -> Self {
         self.effects.push(op);
         self
+    }
+
+    pub fn transition_kind(&self) -> TransitionKind {
+        match &self.transition {
+            ClipTransition::Cut => TransitionKind::Cut,
+            ClipTransition::Fade { .. } => TransitionKind::Fade,
+            ClipTransition::Wipe { direction, .. } => TransitionKind::Wipe(*direction),
+        }
+    }
+
+    /// La part de transition parcourue par battement. `None` pour une coupure, ou
+    /// si elle n'a pas de sens : la transition se termine alors net (§18.4).
+    pub(crate) fn transition_rate(&self) -> Option<f32> {
+        let phase = match &self.transition {
+            ClipTransition::Cut => return None,
+            ClipTransition::Fade { phase, .. } | ClipTransition::Wipe { phase, .. } => phase,
+        };
+        Some(phase.speed.get(self.graph())).filter(|v| v.is_finite() && *v > 0.0)
+    }
+
+    /// La durée de sa transition, en battements.
+    pub fn transition_beats(&self) -> f32 {
+        self.transition_rate()
+            .map_or(DEFAULT_TRANSITION_BEATS, |rate| 1.0 / rate)
+    }
+
+    /// La courbe et le type de mélange de sa transition, si elle en a une.
+    pub(crate) fn transition_mix(&self) -> Option<(FadeCurve, MixKind)> {
+        Some(match &self.transition {
+            ClipTransition::Cut => return None,
+            ClipTransition::Fade { curve, .. } => (*curve, MixKind::Fade),
+            ClipTransition::Wipe {
+                curve, direction, ..
+            } => (
+                *curve,
+                match direction {
+                    WipeDirection::Left => MixKind::WipeLeft,
+                    WipeDirection::Right => MixKind::WipeRight,
+                    WipeDirection::Up => MixKind::WipeUp,
+                    WipeDirection::Down => MixKind::WipeDown,
+                },
+            ),
+        })
+    }
+
+    /// Choisit sa transition, en battements. Rend `false` si la durée n'a pas de
+    /// sens.
+    pub fn set_transition(&mut self, kind: TransitionKind, beats: f32) -> bool {
+        if !beats.is_finite() || beats <= 0.0 {
+            return false;
+        }
+        let phase = PositionSignal::fixed_speed(1.0 / beats);
+        let curve = FadeCurve::SmoothStep;
+        self.transition = match kind {
+            TransitionKind::Cut => ClipTransition::Cut,
+            TransitionKind::Fade => ClipTransition::Fade { phase, curve },
+            TransitionKind::Wipe(direction) => ClipTransition::Wipe {
+                phase,
+                curve,
+                direction,
+            },
+        };
+        true
     }
 
     pub fn with_transition(mut self, transition: ClipTransition) -> Self {

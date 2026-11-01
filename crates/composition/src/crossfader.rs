@@ -21,7 +21,7 @@ pub enum FadeCurve {
 
 impl FadeCurve {
     /// Applique la courbe à une phase déjà bornée dans `[0, 1]`.
-    fn apply(&self, phase: f32) -> f32 {
+    pub(crate) fn apply(&self, phase: f32) -> f32 {
         match self {
             FadeCurve::Linear => phase,
             FadeCurve::SmoothStep => phase * phase * (3.0 - 2.0 * phase),

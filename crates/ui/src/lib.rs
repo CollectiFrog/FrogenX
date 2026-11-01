@@ -1201,6 +1201,65 @@ mod tests {
     }
 
     #[test]
+    fn la_transition_d_un_clip_se_choisit_dans_son_panneau() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Transition")
+            .click();
+        h.run();
+        h.get_by_label("Fondu").click();
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetClipTransition {
+                clip: g.clips[0],
+                kind: frogenx_composition::TransitionKind::Fade,
+                beats: frogenx_composition::DEFAULT_TRANSITION_BEATS,
+            }]
+        );
+    }
+
+    #[test]
+    fn une_coupure_n_a_pas_de_duree_a_regler() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        assert!(h.query_by_label("Fondu").is_none(), "menu fermé");
+        assert!(h
+            .query_by_role_and_label(egui::accesskit::Role::SpinButton, "Transition")
+            .is_none());
+    }
+
+    #[test]
+    fn la_duree_d_une_transition_se_regle_en_temps() {
+        let mut g = grille();
+        let kind = frogenx_composition::TransitionKind::Fade;
+        g.composition
+            .clip_mut(g.clips[0])
+            .unwrap()
+            .set_transition(kind, 2.0);
+        let mut h = harness(&g.composition);
+        h.get_by_label("Alpha").click();
+        h.run();
+        h.state_mut().commands.clear();
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Transition")
+            .set_value_accesskit(8.0);
+        h.run();
+        assert_eq!(
+            h.state().commands,
+            vec![Command::SetClipTransition {
+                clip: g.clips[0],
+                kind,
+                beats: 8.0,
+            }]
+        );
+    }
+
+    #[test]
     fn le_menu_edition_nomme_ce_qu_il_annule() {
         let g = grille();
         let mut h = harness(&g.composition);

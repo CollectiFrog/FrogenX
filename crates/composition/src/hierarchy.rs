@@ -15,7 +15,7 @@ use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId}
 use crate::transport::{sanitize_bpm, TempoController};
 use crate::trig::Trig;
 use frogenx_core::{AudioFeatures, Graph, Param, DEFAULT_BPM};
-use frogenx_shape::BlendParams;
+use frogenx_shape::{BlendParams, MixKind};
 
 /// Sous cette fiabilité, un tempo détecté ne déforme pas le set (§7.1).
 pub const MIN_TEMPO_CONFIDENCE: f32 = 0.3;
@@ -59,6 +59,8 @@ pub struct Layer {
     /// courte que la grille si ses dernières cases n'ont jamais servi.
     cells: Vec<Option<ClipId>>,
     active: Option<ClipId>,
+    /// Le clip qui sort, et la part de la transition parcourue (§3bis.2).
+    transition: Option<(ClipId, f32)>,
 }
 
 impl Layer {
@@ -68,6 +70,7 @@ impl Layer {
             blend: BlendParams::default(),
             cells: Vec::new(),
             active: None,
+            transition: None,
         }
     }
 
@@ -96,6 +99,10 @@ impl Layer {
     fn forget(&mut self, clip: ClipId) {
         if self.active == Some(clip) {
             self.active = None;
+            self.transition = None;
+        }
+        if self.transition.is_some_and(|(sortant, _)| sortant == clip) {
+            self.transition = None;
         }
     }
 }
@@ -107,6 +114,16 @@ impl Layer {
 /// Son contenu vit dans les cases des pistes : une colonne ne vaut que par sa
 /// position dans la grille.
 pub struct Column;
+
+/// Deux clips à mélanger sur une piste, pour une frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransitionView {
+    /// Le clip qui sort. Celui qui entre est le clip actif.
+    pub from: ClipId,
+    /// La part du clip entrant, courbe appliquée, `[0, 1]`.
+    pub amount: f32,
+    pub kind: MixKind,
+}
 
 /// Racine de la grille — arena par niveau (§3bis.1, raison détaillée dans
 /// `ids.rs`), pas une arena unique pour toute la hiérarchie.
@@ -395,11 +412,61 @@ impl Composition {
         if !l.holds(clip) {
             return false;
         }
-        l.active = Some(clip);
+        let sortant = l.active.replace(clip).filter(|ancien| *ancien != clip);
+        l.transition = None;
+        let progressif = self
+            .clip(clip)
+            .is_some_and(|c| c.transition_mix().is_some());
+        if let (Some(sortant), true) = (sortant, progressif) {
+            if let Some(l) = self.layer_mut(layer) {
+                l.transition = Some((sortant, 0.0));
+            }
+        }
         if let Some(c) = self.clip_mut(clip) {
             c.graph_mut().reset_state();
         }
         true
+    }
+
+    /// Le clip qui sort de `layer`, s'il y a une transition en cours.
+    pub fn outgoing_clip(&self, layer: LayerId) -> Option<ClipId> {
+        self.layer(layer)?.transition.map(|(sortant, _)| sortant)
+    }
+
+    /// Ce que le compositeur doit mélanger sur `layer` cette frame.
+    pub fn transition_view(&self, layer: LayerId) -> Option<TransitionView> {
+        let piste = self.layer(layer)?;
+        let (from, progres) = piste.transition?;
+        let (curve, kind) = self.clip(piste.active?)?.transition_mix()?;
+        Some(TransitionView {
+            from,
+            amount: curve.apply(progres.clamp(0.0, 1.0)),
+            kind,
+        })
+    }
+
+    /// Fait avancer les transitions, en battements : elles suivent le tempo, et
+    /// jamais la vitesse d'un clip, qui les bloquerait à l'arrêt (§3bis.2).
+    pub fn advance_transitions(&mut self, dt: f64, bpm: f32) {
+        let battements = (dt as f32 * bpm / 60.0).max(0.0);
+        for id in self.all_layers() {
+            let Some(piste) = self.layer(id) else {
+                continue;
+            };
+            let Some((sortant, progres)) = piste.transition else {
+                continue;
+            };
+            let rythme = piste
+                .active
+                .and_then(|a| self.clip(a))
+                .and_then(|c| c.transition_rate());
+            let suite = rythme
+                .map(|r| progres + r * battements)
+                .filter(|p| *p < 1.0);
+            if let Some(piste) = self.layer_mut(id) {
+                piste.transition = suite.map(|p| (sortant, p));
+            }
+        }
     }
 
     /// Pose le clip actif sans le faire repartir : une grille restaurée reprend ce
@@ -408,6 +475,7 @@ impl Composition {
         if let Some(l) = self.layer_mut(layer) {
             if clip.is_none_or(|c| l.holds(c)) {
                 l.active = clip;
+                l.transition = None;
             }
         }
     }
@@ -418,6 +486,7 @@ impl Composition {
             return false;
         };
         l.active = None;
+        l.transition = None;
         true
     }
 
@@ -506,6 +575,137 @@ mod tests {
             Box::new(frogenx_shape::Ellipse::circle(0.5)),
             transport,
         )
+    }
+
+    /// Deux clips sur une piste, le second entrant en fondu de 4 temps.
+    fn deux_clips(kind: crate::clip::TransitionKind) -> (Composition, LayerId, ClipId, ClipId) {
+        let mut comp = Composition::new();
+        let deck = comp.add_deck("D");
+        let group = comp.add_layer_group(deck).unwrap();
+        let layer = comp.add_layer(group).unwrap();
+        let a = comp.add_clip(layer, dummy_clip()).unwrap();
+        let b = comp.add_clip(layer, dummy_clip()).unwrap();
+        assert!(comp.clip_mut(b).unwrap().set_transition(kind, 4.0));
+        comp.trigger(layer, a);
+        (comp, layer, a, b)
+    }
+
+    use crate::clip::{TransitionKind, WipeDirection};
+
+    #[test]
+    fn un_fondu_garde_le_clip_sortant_et_avance_en_battements() {
+        let (mut comp, layer, a, b) = deux_clips(TransitionKind::Fade);
+        assert!(comp.trigger(layer, b));
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), Some(b));
+        assert_eq!(comp.outgoing_clip(layer), Some(a));
+
+        // 120 BPM : 2 battements par seconde, la moitié de 4 temps en une seconde.
+        comp.advance_transitions(1.0, 120.0);
+        let vue = comp.transition_view(layer).unwrap();
+        assert_eq!(vue.from, a);
+        assert_eq!(vue.amount, 0.5, "SmoothStep vaut 0.5 au milieu");
+        assert_eq!(vue.kind, MixKind::Fade);
+
+        comp.advance_transitions(1.0, 120.0);
+        assert_eq!(comp.outgoing_clip(layer), None, "terminée");
+        assert_eq!(comp.transition_view(layer), None);
+    }
+
+    #[test]
+    fn la_duree_suit_le_tempo() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Fade);
+        comp.trigger(layer, b);
+        comp.advance_transitions(1.0, 60.0);
+        assert!(comp.outgoing_clip(layer).is_some());
+        comp.advance_transitions(2.9, 60.0);
+        assert!(comp.outgoing_clip(layer).is_some(), "3,9 temps sur 4");
+        comp.advance_transitions(0.2, 60.0);
+        assert!(comp.outgoing_clip(layer).is_none());
+    }
+
+    #[test]
+    fn une_coupure_ne_garde_rien() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Cut);
+        comp.trigger(layer, b);
+        assert_eq!(comp.outgoing_clip(layer), None);
+    }
+
+    #[test]
+    fn redeclencher_le_meme_clip_n_a_pas_de_transition() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Fade);
+        comp.trigger(layer, b);
+        comp.trigger(layer, b);
+        assert_eq!(comp.outgoing_clip(layer), None);
+    }
+
+    #[test]
+    fn sans_clip_precedent_il_n_y_a_rien_a_melanger() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Fade);
+        comp.clear_layer(layer);
+        comp.trigger(layer, b);
+        assert_eq!(comp.outgoing_clip(layer), None);
+    }
+
+    #[test]
+    fn declencher_pendant_une_transition_repart_du_clip_qui_entrait() {
+        let (mut comp, layer, a, b) = deux_clips(TransitionKind::Fade);
+        assert!(comp
+            .clip_mut(a)
+            .unwrap()
+            .set_transition(TransitionKind::Fade, 4.0));
+        comp.trigger(layer, b);
+        comp.advance_transitions(0.5, 120.0);
+        comp.trigger(layer, a);
+        assert_eq!(comp.outgoing_clip(layer), Some(b));
+        assert_eq!(comp.transition_view(layer).unwrap().amount, 0.0);
+    }
+
+    #[test]
+    fn vider_la_piste_coupe_net() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Fade);
+        comp.trigger(layer, b);
+        comp.clear_layer(layer);
+        assert_eq!(comp.outgoing_clip(layer), None);
+    }
+
+    #[test]
+    fn retirer_le_clip_sortant_termine_la_transition() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Fade);
+        comp.trigger(layer, b);
+        let premiere = comp.columns()[0];
+        comp.remove_clip(layer, premiere);
+        assert_eq!(comp.outgoing_clip(layer), None);
+        assert_eq!(comp.layer(layer).unwrap().active_clip(), Some(b));
+    }
+
+    #[test]
+    fn un_volet_rend_sa_direction() {
+        let dir = TransitionKind::Wipe(WipeDirection::Up);
+        let (mut comp, layer, _, b) = deux_clips(dir);
+        comp.trigger(layer, b);
+        assert_eq!(comp.transition_view(layer).unwrap().kind, MixKind::WipeUp);
+    }
+
+    #[test]
+    fn une_duree_sans_sens_est_refusee() {
+        let (mut comp, _, _, b) = deux_clips(TransitionKind::Fade);
+        let clip = comp.clip_mut(b).unwrap();
+        for duree in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(!clip.set_transition(TransitionKind::Fade, duree), "{duree}");
+        }
+        assert_eq!(clip.transition_beats(), 4.0);
+    }
+
+    #[test]
+    fn une_vitesse_de_transition_absurde_termine_net() {
+        let (mut comp, layer, _, b) = deux_clips(TransitionKind::Fade);
+        comp.clip_mut(b).unwrap().transition = crate::clip::ClipTransition::Fade {
+            phase: crate::position::PositionSignal::fixed_speed(f32::NAN),
+            curve: crate::crossfader::FadeCurve::Linear,
+        };
+        comp.trigger(layer, b);
+        comp.advance_transitions(0.01, 120.0);
+        assert_eq!(comp.outgoing_clip(layer), None);
     }
 
     #[test]

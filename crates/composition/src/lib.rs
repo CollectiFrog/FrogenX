@@ -31,8 +31,6 @@
 //!
 //! - `ClipSource::Scene3d`/`Video` (étapes 12-13, §12) : non ajoutés avant
 //!   que `scene3d` et le décodage vidéo n'existent.
-//! - Le rendu de `ClipTransition::Fade`/`Wipe` : le type fixe le contrat, seul
-//!   `Cut` est appliqué (§3bis.2).
 //! - L'effet de `PlayMode` : rien ne le lit encore (§3bis.3).
 
 pub mod analysis;
@@ -51,12 +49,14 @@ pub mod wiring;
 pub use analysis::AudioAnalysis;
 pub use clip::{
     sanitize_speed, Clip, ClipParam, ClipSource, ClipTransition, ParamGroup, ParamSlot,
-    WipeDirection, MAX_CLIP_SPEED,
+    TransitionKind, WipeDirection, DEFAULT_TRANSITION_BEATS, MAX_CLIP_SPEED,
 };
 pub use command::Command;
 pub use continuity::IdMap;
 pub use crossfader::{CrossFader, FadeCurve};
-pub use hierarchy::{Column, Composition, Deck, Layer, LayerGroup, MIN_TEMPO_CONFIDENCE};
+pub use hierarchy::{
+    Column, Composition, Deck, Layer, LayerGroup, TransitionView, MIN_TEMPO_CONFIDENCE,
+};
 pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 pub use position::{BeatRate, PositionSignal};
 pub use signals::signal_from_spec;

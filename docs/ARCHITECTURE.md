@@ -302,10 +302,27 @@ en dessine deux. `TransitionMix` les mélange en une seule texture, qui rejoint 
 mode et l'opacité de la piste. Deux couches d'opacités croisées laisseraient voir un creux à
 mi-fondu : à 50 %, deux images opaques ne couvrent que 75 %. Un `Fade` mélange linéairement, en
 prémultiplié (§21). Un `Wipe` découvre l'image selon sa direction, avec un bord adouci de 2 % pour
-ne pas crénelier. `WipeDirection::Left` signifie que le clip entrant avance vers la gauche.
+ne pas créneler. `WipeDirection::Left` signifie que le clip entrant avance vers la gauche.
 
 **Le coût.** Deux renderers de plus sur une piste au premier fondu, gardés ensuite : environ 80 Mo en
 1080p pour une forme (§13), rien sur une piste qui n'en fait jamais.
+
+**Le geste.** Le panneau du clip porte une ligne `Transition` : `Coupure`, `Fondu` ou un volet par
+direction, et la durée en temps. La courbe est toujours `SmoothStep` : `Linear` reste dans le
+fichier, sans réglage à l'écran.
+
+**Ce qui est vérifié, et comment.** La logique se teste sans GPU : progression en battements, suite
+du tempo, redéclenchement, déclenchement en pleine transition, clip retiré, durée absurde. La
+couverture d'un volet a sa référence Rust, copiée du shader. Sur le GPU : à mi-fondu, les deux clips
+pèsent chacun la moitié en linéaire et l'alpha reste plein, un volet découvre le bon côté, la fin
+d'une transition rend les mêmes pixels qu'une coupure, un rejeu est identique, le clip sortant
+continue de jouer, et un écho peut entrer en fondu. Annuler termine une transition net. Le fondu et
+un volet ont été rendus et regardés. **Pas encore essayés :** le réglage à la vraie souris, et la
+cadence en 1080p avec plusieurs transitions à la fois.
+
+**Non couvert.** Une transition déclenchée sur plusieurs pistes par une colonne suit celle de
+chaque clip entrant : rien ne les règle d'un seul geste. Sa durée ne se module pas depuis
+l'interface.
 
 ### 3bis.3 Transport et tempo
 
@@ -1577,6 +1594,7 @@ qui les livre (skill `doc-sync`).
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
+| Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
 | Annuler et rétablir | 100 pas, un par geste, sans faire sauter l'image, Ctrl+Z et menu `Édition` (§23.11) |
 | Rendus sans fenêtre | séquence PNG déterministe, planche du catalogue |
 
@@ -1584,20 +1602,19 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Transitions `Fade` et `Wipe` | seule la coupure franche s'applique (§3bis.2) | moyenne |
-| 2 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
-| 3 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
-| 4 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 5 | Recalage de la phase du tempo |
-| 6 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 7 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
-| 8 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
-| 9 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 10 | Scène 3D, étape 13 | | très grande |
-| 11 | Art-Net / DMX, étape 14 | | moyenne |
-| 12 | Scripting Lua, étape 15 | | moyenne |
-| 13 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 14 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | `PlayMode` | `Loop`, `Once`, `PingPong` n'ont pas d'effet avant la vidéo (§3bis.3) | petite |
+| 2 | Choix de la résolution de sortie | fixe en 1080p (§8.4) | moyenne |
+| 3 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 4 | Recalage de la phase du tempo |
+| 5 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 6 | Enregistrement, étape 10 | un fichier vidéo ; lève le refus des sorties CPU en direct | grande |
+| 7 | NDI, puis Spout et Syphon, étape 11 | l'image vers d'autres logiciels | grande |
+| 8 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 9 | Scène 3D, étape 13 | | très grande |
+| 10 | Art-Net / DMX, étape 14 | | moyenne |
+| 11 | Scripting Lua, étape 15 | | moyenne |
+| 12 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 13 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 

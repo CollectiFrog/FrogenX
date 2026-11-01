@@ -152,6 +152,19 @@ impl Default for BlendParams {
     }
 }
 
+/// Comment deux clips d'une piste se mélangent (§3bis.2). Les indices sont ceux
+/// du shader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MixKind {
+    Fade = 0,
+    /// Le clip entrant avance vers la gauche.
+    WipeLeft = 1,
+    WipeRight = 2,
+    WipeUp = 3,
+    WipeDown = 4,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

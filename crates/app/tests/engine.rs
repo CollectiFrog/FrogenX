@@ -6,7 +6,7 @@
 use frogenx_app::Engine;
 use frogenx_composition::{
     Clip, ClipId, Command, Composition, GraphScope, LayerId, NodeKind, ParamSlot, ParamTarget,
-    PlayMode, Transport, TrigSlot, TrigTarget,
+    PlayMode, TransitionKind, Transport, TrigSlot, TrigTarget, WipeDirection,
 };
 use frogenx_core::{
     AnalysisMethod, AnalysisSettings, AudioFeatures, Clock, Constant, Ctx, FeatureKind, FreqScale,
@@ -1085,6 +1085,179 @@ fn frames(moteur: &mut Engine, n: usize) {
     for _ in 0..n {
         moteur.frame(0.0);
     }
+}
+
+/// Un clip rouge joue, un bleu lui succède par `kind`, en 2 temps à 120 BPM : une
+/// seconde, soit 60 frames. Rend chaque frame.
+fn transition(gpu: Gpu, kind: TransitionKind, apres: usize) -> Vec<CpuFrame> {
+    let (composition, piste, rouge, bleu) = une_piste();
+    let (mut m, recu) = moteur(gpu, composition);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    m.push(Command::SetClipTransition {
+        clip: bleu,
+        kind,
+        beats: 2.0,
+    });
+    m.frame(0.0);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: bleu,
+    });
+    frames(&mut m, apres);
+    m.finish();
+    let frames = recu.0.lock().unwrap();
+    frames.clone()
+}
+
+/// Les deux canaux au centre, en linéaire : l'octet est encodé en sRGB.
+fn lineaire(px: [u8; 4]) -> (f32, f32) {
+    let l = |o: u8| ((o as f32 / 255.0 + 0.055) / 1.055).powf(2.4);
+    (l(px[0]), l(px[2]))
+}
+
+#[test]
+fn un_fondu_passe_d_un_clip_a_l_autre_sans_creux() {
+    let Some(gpu) = gpu() else { return };
+    let f = transition(gpu, TransitionKind::Fade, 70);
+    let centre = |i: usize| pixel(&f[i], SIZE.x / 2, SIZE.y / 2);
+    assert_eq!(centre(0)[0], 255, "rouge avant");
+    assert_eq!(centre(0)[3], 255);
+
+    let (rouge, bleu) = lineaire(centre(30));
+    assert!(
+        (rouge - 0.5).abs() < 0.08 && (bleu - 0.5).abs() < 0.08,
+        "{rouge} {bleu}"
+    );
+    assert_eq!(centre(30)[3], 255, "aucun creux à mi-fondu");
+
+    assert_eq!(centre(65)[2], 255, "bleu après");
+    assert_eq!(centre(65)[0], 0);
+}
+
+#[test]
+fn un_volet_decouvre_le_clip_du_cote_voulu() {
+    let Some(gpu) = gpu() else { return };
+    let dir = TransitionKind::Wipe(WipeDirection::Right);
+    let f = transition(gpu, dir, 35);
+    // Vers la droite : le bleu entre par la gauche du carré.
+    let (gauche, droite) = (
+        pixel(&f[30], SIZE.x * 3 / 8, SIZE.y / 2),
+        pixel(&f[30], SIZE.x * 5 / 8, SIZE.y / 2),
+    );
+    assert_eq!((gauche[2], gauche[0]), (255, 0), "{gauche:?}");
+    assert_eq!((droite[0], droite[2]), (255, 0), "{droite:?}");
+}
+
+#[test]
+fn la_fin_d_une_transition_vaut_une_coupure() {
+    let Some(gpu) = gpu() else { return };
+    let Some(gpu2) = self::gpu() else { return };
+    let (a, b) = (
+        transition(gpu, TransitionKind::Fade, 70),
+        transition(gpu2, TransitionKind::Cut, 70),
+    );
+    assert_eq!(a.last().unwrap().pixels, b.last().unwrap().pixels);
+}
+
+#[test]
+fn une_transition_rejoue_a_l_identique() {
+    let Some(gpu) = gpu() else { return };
+    let Some(gpu2) = self::gpu() else { return };
+    let dir = TransitionKind::Wipe(WipeDirection::Up);
+    let (a, b) = (transition(gpu, dir, 25), transition(gpu2, dir, 25));
+    assert_eq!(a.last().unwrap().pixels, b.last().unwrap().pixels);
+}
+
+#[test]
+fn le_clip_sortant_continue_de_jouer_pendant_la_transition() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, bleu) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    m.push(Command::SetClipTransition {
+        clip: bleu,
+        kind: TransitionKind::Fade,
+        beats: 2.0,
+    });
+    m.frame(0.0);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: bleu,
+    });
+    m.frame(0.0);
+    let position = |m: &Engine| {
+        let g = m.composition().clip(rouge).unwrap().graph();
+        g.nodes()
+            .iter()
+            .map(|n| g.node_state(n.id).to_vec())
+            .collect::<Vec<_>>()
+    };
+    let avant = position(&m);
+    frames(&mut m, 5);
+    assert_ne!(position(&m), avant, "il avance encore");
+    assert!(m.diagnostics().iter().all(|d| d.is_clean()));
+}
+
+#[test]
+fn un_echo_peut_entrer_en_fondu() {
+    let Some(gpu) = gpu() else { return };
+    let (mut c, piste, rouge, _) = une_piste();
+    let mut g = Graph::new();
+    let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+    let echo = c
+        .add_clip(piste, Clip::feedback(g, Default::default(), transport))
+        .unwrap();
+    let (mut m, recu) = moteur(gpu, c);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    m.push(Command::SetClipTransition {
+        clip: echo,
+        kind: TransitionKind::Fade,
+        beats: 2.0,
+    });
+    m.frame(0.0);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: echo,
+    });
+    frames(&mut m, 30);
+    m.finish();
+    assert_eq!(recu.dernier_pixel(SIZE.x / 2, SIZE.y / 2)[0], 255);
+}
+
+#[test]
+fn annuler_pendant_une_transition_la_termine_net() {
+    let Some(gpu) = gpu() else { return };
+    let (composition, piste, rouge, bleu) = une_piste();
+    let (mut m, _) = moteur(gpu, composition);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    m.push(Command::SetClipTransition {
+        clip: bleu,
+        kind: TransitionKind::Fade,
+        beats: 8.0,
+    });
+    frames(&mut m, 20);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: bleu,
+    });
+    frames(&mut m, 2);
+    assert!(m.composition().outgoing_clip(piste).is_some());
+    assert_eq!(m.undo().unwrap().label, "Transition");
+    let piste = m.composition().all_layers()[0];
+    assert_eq!(m.composition().outgoing_clip(piste), None);
+    frames(&mut m, 2);
 }
 
 #[test]

@@ -12,7 +12,9 @@
 use crate::widgets::{floating_panel, knob, knob_with_menu, Knob, Modulation, KNOB_STEP};
 use crate::{theme, FrameView, UiState};
 use egui::{Rect, RichText, Ui};
-use frogenx_composition::{Clip, ClipId, ClipParam, Command, Layer, LayerId, MAX_CLIP_SPEED};
+use frogenx_composition::{
+    Clip, ClipId, ClipParam, Command, Layer, LayerId, TransitionKind, MAX_CLIP_SPEED,
+};
 use frogenx_core::FeatureKind;
 use std::ops::Range;
 
@@ -138,6 +140,51 @@ fn param_knob(ui: &mut Ui, clip: ClipId, graph: &Clip, param: &ClipParam, out: &
     }
 }
 
+/// Comment ce clip entre quand un autre jouait : un choix, et sa durée.
+fn transition_row(ui: &mut Ui, id: ClipId, clip: &Clip, commands: &mut Vec<Command>) {
+    let nom = ui.label(
+        RichText::new("Transition")
+            .size(11.0)
+            .color(theme::TEXT_DIM),
+    );
+    let actuelle = clip.transition_kind();
+    let beats = clip.transition_beats();
+    egui::ComboBox::from_id_salt(("transition", id))
+        .selected_text(actuelle.label())
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for kind in TransitionKind::ALL {
+                if ui
+                    .selectable_label(kind == actuelle, kind.label())
+                    .clicked()
+                {
+                    commands.push(Command::SetClipTransition {
+                        clip: id,
+                        kind,
+                        beats,
+                    });
+                }
+            }
+        })
+        .response
+        .labelled_by(nom.id);
+    if actuelle != TransitionKind::Cut {
+        let mut duree = beats;
+        let reglage = egui::DragValue::new(&mut duree)
+            .range(0.25..=64.0)
+            .speed(0.05)
+            .suffix(" temps")
+            .max_decimals(2);
+        if ui.add(reglage).labelled_by(nom.id).changed() {
+            commands.push(Command::SetClipTransition {
+                clip: id,
+                kind: actuelle,
+                beats: duree,
+            });
+        }
+    }
+}
+
 /// Les réglages propres au clip et à sa piste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipKnob {
@@ -205,6 +252,7 @@ pub fn floating(
                     }
                 });
             });
+            ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
             let mut places = vec![CLIP_KNOBS.len()];
             places.extend(groupes.iter().map(|g| g.params.len()));

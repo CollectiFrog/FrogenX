@@ -85,7 +85,7 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   porte, et `composition` ne connaît pas wgpu.
 - `crates/composition` : la grille (§3bis) — `Deck`/`LayerGroup`/`Layer`/`Column`/
   `Clip`, `CrossFader`, `TempoController`, `Trig`, `PositionSignal`, `BeatRate`, `Command`, graphe
-  de composition. Dépend de `core` et `shape`. Seul `Cut` s'applique, et `PlayMode` n'a
+  de composition. Dépend de `core` et `shape`. `PlayMode` n'a
   pas encore d'effet (§3bis.3).
 - `crates/audio` : capture `cpal`, analyse en 128 bandes (crête, énergie, multi-résolution),
   features fixes et BPM (`features.rs`, `tempo.rs`, §7.1). Seul

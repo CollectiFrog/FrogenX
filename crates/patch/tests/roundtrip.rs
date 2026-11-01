@@ -5,8 +5,8 @@
 
 use frogenx_composition::{
     AudioAnalysis, Clip, ClipSource, ClipTransition, Composition, FadeCurve, GraphScope, LayerId,
-    NodeKind, ParamSlot, ParamTarget, PlayMode, PositionSignal, Transport, TrigTarget,
-    WipeDirection,
+    NodeKind, ParamSlot, ParamTarget, PlayMode, PositionSignal, TransitionKind, Transport,
+    TrigTarget, WipeDirection,
 };
 use frogenx_core::{
     AmpScale, AnalysisMethod, AudioFeatures, Constant, Ctx, FeatureKind, FreqScale, Graph, Param,
@@ -336,6 +336,23 @@ fn un_cablage_fait_dans_l_editeur_revient() {
     let opacite = copie.layer(piste).unwrap().blend.opacity;
     let flash = copie.trig(copie.trigs()[0]).unwrap().flash();
     assert_eq!(opacite.source(), Some(flash));
+}
+
+#[test]
+fn une_transition_choisie_revient_avec_sa_duree() {
+    let dir = TransitionKind::Wipe(WipeDirection::Left);
+    let (mut c, piste) = une_case(cercle());
+    let id = c.layer(piste).unwrap().cell(0).unwrap();
+    assert!(c.clip_mut(id).unwrap().set_transition(dir, 8.0));
+    let copie = relu(&c);
+    let id = copie
+        .layer(copie.layers_de_test()[0])
+        .unwrap()
+        .cell(0)
+        .unwrap();
+    let clip = copie.clip(id).unwrap();
+    assert_eq!(clip.transition_kind(), dir);
+    assert_eq!(clip.transition_beats(), 8.0);
 }
 
 #[test]

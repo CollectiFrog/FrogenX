@@ -3,7 +3,7 @@
 //! Tout pilote passe par là : clavier, interface, MIDI, OSC. Elles s'appliquent
 //! entre deux frames, jamais pendant l'évaluation, et se testent sans GPU.
 
-use crate::clip::ParamSlot;
+use crate::clip::{ParamSlot, TransitionKind};
 use crate::hierarchy::Composition;
 use crate::ids::{ClipId, ColumnId, DeckId, LayerId, TrigId};
 use crate::trig::{TrigSlot, TrigTarget};
@@ -93,6 +93,12 @@ pub enum Command {
     SetAnalysisWindow(f32),
     /// Le tempo suit, ou non, le BPM détecté (§7.1).
     SetTempoFollow(bool),
+    /// Choisit la transition d'un clip, en battements (§3bis.2).
+    SetClipTransition {
+        clip: ClipId,
+        kind: TransitionKind,
+        beats: f32,
+    },
     /// L'éditeur de nœuds (§23.10).
     AddNode {
         scope: GraphScope,
@@ -169,6 +175,7 @@ impl Command {
             | Self::SetAmpScale(_)
             | Self::SetAnalysisWindow(_) => "Analyse audio",
             Self::SetAudioModulation { .. } => "Source audio",
+            Self::SetClipTransition { .. } => "Transition",
             Self::AddNode { .. } => "Ajout d'un nœud",
             Self::RemoveNode { .. } => "Retrait d'un nœud",
             Self::Connect { .. } | Self::Disconnect { .. } => "Câblage",
@@ -203,6 +210,7 @@ impl Command {
             | Self::SetTrigParam { .. }
             | Self::SetTrigTarget { .. }
             | Self::SetTempoFollow(_)
+            | Self::SetClipTransition { .. }
             | Self::AddNode { .. }
             | Self::RemoveNode { .. }
             | Self::Connect { .. }
@@ -277,6 +285,9 @@ impl Composition {
                 self.tempo_follow = false;
                 true
             }
+            Command::SetClipTransition { clip, kind, beats } => self
+                .clip_mut(clip)
+                .is_some_and(|c| c.set_transition(kind, beats)),
             Command::AddNode { scope, kind } => self.add_node(scope, kind).is_some(),
             Command::RemoveNode { scope, node } => self.remove_node(scope, node),
             Command::Connect { target, source } => self.connect(target, source),
