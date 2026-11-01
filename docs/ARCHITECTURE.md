@@ -610,6 +610,28 @@ mesures et temps musicaux.
 
 ## 5. Formes
 
+**Un trig se lit aussi depuis un clip.** Ses nœuds vivent dans le graphe de composition, et un fil
+ne quitte pas son graphe : sans pont, un effet ne pouvait pas lire un trig. Le pont est celui de
+l'audio. `Engine` pose les valeurs de chaque trig dans `Ctx::trigs` de chaque graphe de clip, juste
+après l'évaluation de la composition : un clip voit donc le trig de la même frame. `TrigInput` est
+le `Signal` qui les lit, avec trois sorties, `flash` par défaut, `gate` et `pulse`.
+
+```rust
+pub struct TrigValues { pub gate: f32, pub pulse: f32, pub flash: f32 }   // dans core
+
+pub struct TrigInput { pub channel: u32, pub output: TrigOutput }         // dans osc
+```
+
+**Un trig a un canal, stable et jamais réutilisé.** Un `TrigId` ne survit pas à un fichier, et une
+position changerait quand on retire le trig d'avant : un effet se mettrait à lire le mauvais trig,
+en silence. Le canal est écrit dans le fichier (§19). Un canal sans trig vaut `0` : retirer un trig
+laisse le paramètre à sa base, sans panne (§18).
+
+**Les deux gestes.** Le clic droit d'un potentiomètre liste les trigs sous les features audio, pour
+tout `Param` du clip, effets compris. L'éditeur de nœuds les propose dans le menu d'un clip : la
+boîte porte le nom du trig, on y choisit la sortie et on tire son fil. `TrigTarget` ne change pas :
+il déclenche un clip ou une colonne, ce n'est pas une modulation.
+
 ### 5.1 Le trait
 
 ```rust
@@ -1792,6 +1814,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Le pliage des réglages est calculé** (§23.9) | egui ne replie que ce dont il connaît la taille d'avance : les derniers réglages sortaient du panneau sans le dire |
 | **Un en-tête unique** au lieu d'un menu et d'une barre (§23.9) | une ligne gagnée pour l'image, et le tempo au plus près des menus |
 | **Apparence de Pro-Q, disposition de Resolume** (§23.1) | la disposition répond à la conduite d'un set, l'apparence à la lecture d'un son ; le spectre est devenu le cœur de l'audio-réactivité |
+| **Un trig se lit dans un clip par `Ctx`, et par un canal stable** (§3bis.6) | un fil ne quitte pas son graphe ; c'est le chemin de l'audio, et un identifiant ou une position ne survivraient pas à un fichier ou à un retrait |
 | **Une couleur par trig, enfermée dans le spectre** (§23.1) | des zones qui se superposent se distinguent par leur couleur ; hors du panneau, l'or reste le seul ton saturé, et rien ne concurrence le monitor |
 | **Les gestes sur le spectre se calculent en coordonnées du tracé** (§23.7) | ni Hz ni pixels : un même geste vaut sur toutes les échelles, et se teste sans egui |
 | **Un `Signal` lit l'audio dans `Ctx`, pas dans le triple buffer** (§7, §20.1) | le buffer se lit une fois par frame, à l'étape 2 : deux lectures pendant l'évaluation verraient deux spectres, et le rendu ne serait plus déterministe |
