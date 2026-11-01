@@ -9,6 +9,7 @@
 //! en pixels : une zone se déplace ainsi de la même façon sur toutes les échelles,
 //! et ce calcul se teste sans egui.
 
+use crate::spectrogram::{duration_label, strip_height, DURATIONS};
 use crate::widgets::{floating_panel, floating_rect, gradient, knob, Knob};
 use crate::{remove_menu, theme, FrameView, UiState};
 use egui::epaint::{Mesh, PathShape, PathStroke};
@@ -543,7 +544,20 @@ fn plot(
     commands: &mut Vec<Command>,
     choisi: Option<TrigId>,
 ) {
-    let taille = egui::vec2(ui.available_width(), ui.available_height().max(120.0));
+    let largeur = ui.available_width();
+    let hauteur = ui.available_height();
+    let ecart = ui.spacing().item_spacing.y;
+    let bande = if state.spectrogram.open {
+        strip_height(hauteur - ecart)
+    } else {
+        0.0
+    };
+    let reste = if bande > 0.0 {
+        hauteur - bande - ecart
+    } else {
+        hauteur
+    };
+    let taille = egui::vec2(largeur, reste.max(120.0));
     let (cadre, reponse) = ui.allocate_exact_size(taille, Sense::click_and_drag());
     reponse.widget_info(|| WidgetInfo::labeled(Role::Image, true, LABEL));
     let c = view.composition;
@@ -591,8 +605,14 @@ fn plot(
     paint_meter(&painter, trace, view);
 
     gestures(ui, &reponse, trace, state, view, commands, choisi);
+    // Sur la bande plutôt que sur le tracé : une zone se voit pendant qu'on la règle.
+    let mut aire = trace;
+    if bande > 0.0 {
+        let taille = egui::vec2(largeur, bande);
+        aire = aire.union(state.spectrogram.strip(ui, taille, view.spectrum));
+    }
     if let Some(id) = choisi {
-        floating(ui, trace, view, commands, id);
+        floating(ui, aire, view, commands, id);
     }
 }
 
@@ -818,6 +838,15 @@ fn analysis_bar(
             if let Some(v) = choice(ui, "Analyse", reglage.method, &AnalysisMethod::ALL, AnalysisMethod::label) {
                 commands.push(Command::SetAnalysisMethod(v));
             }
+            let historique = &mut state.spectrogram;
+            if historique.open {
+                if let Some(v) = choice(ui, "Durée", historique.seconds(), &DURATIONS, duration_label) {
+                    historique.set_seconds(v);
+                }
+            }
+            if ui.selectable_label(historique.open, "Spectrogramme").clicked() {
+                historique.toggle();
+            }
             ui.add(
                 Label::new(RichText::new(view.audio_status).color(theme::TEXT_DIM).size(11.0))
                     .truncate(),
@@ -837,6 +866,9 @@ pub fn panel(ui: &mut Ui, state: &mut UiState, view: &FrameView<'_>, commands: &
 
     let dt = ui.input(|i| i.stable_dt);
     hold_peaks(&mut state.peak_hold, &view.spectrum.levels, dt);
+    if state.spectrogram.open {
+        state.spectrogram.update(ui.ctx(), view.spectrum, dt);
+    }
 
     let choisi = selected(state, c);
     egui::Panel::bottom("barre_analyse")

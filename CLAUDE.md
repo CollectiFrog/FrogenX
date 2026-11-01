@@ -69,7 +69,8 @@ sans adaptateur, et tournent un par un (`.cargo/config.toml`, §24.3).
 
 Le panneau audio montre le spectre de l'entrée par défaut, dans l'analyse choisie : trois
 méthodes, quatre échelles de fréquence dont la linéaire, deux d'amplitude, et une durée
-d'analyse de 5 ms à 1 s (§7). On y trace à la souris la zone d'un **trig**, qui déclenche
+d'analyse de 5 ms à 1 s (§7). Le bouton `Spectrogramme` en ouvre l'historique dans une bande
+dessous, sur 2 à 30 s (§23.7). On y trace à la souris la zone d'un **trig**, qui déclenche
 une colonne ou un clip une fois sur 1, 2, 4, 8, 16 ou 32, et que tout paramètre de clip peut
 lire, effets compris (§3bis.6). Le design suit §23.1 :
 disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle du spectre
@@ -109,7 +110,8 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   `PngSequenceSink`, relecture en direct (`live.rs`), et `SpoutSink` sous Windows, seul `unsafe`
   du projet. `fanout` (files bornées, politique de perte) et `stream` (format, cadence) ne
   connaissent pas wgpu. `output` ne connaît pas `winit`.
-- `crates/ui` : l'interface, fonction de l'état, et l'éditeur de nœuds (`nodes.rs`). Lit la grille, rend des `Command` et des
+- `crates/ui` : l'interface, fonction de l'état, l'éditeur de nœuds (`nodes.rs`) et le
+  spectrogramme (`spectrogram.rs`), une vue qui n'écrit nulle part ailleurs. Lit la grille, rend des `Command` et des
   `Placement` pour les clips glissés depuis la bibliothèque. Ne
   connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans

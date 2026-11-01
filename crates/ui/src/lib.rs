@@ -14,6 +14,7 @@
 pub mod clip_panel;
 pub mod color_panel;
 pub mod nodes;
+pub mod spectrogram;
 pub mod spectrum;
 pub mod theme;
 pub mod widgets;
@@ -28,6 +29,7 @@ use frogenx_composition::{
 };
 use frogenx_core::{Spectrum, SPECTRUM_BANDS};
 use frogenx_library::{presets, Family, PresetId};
+use spectrogram::Spectrogram;
 use spectrum::ZoneGesture;
 
 /// Ce qu'affiche une case vide, pour la retrouver et la viser.
@@ -197,7 +199,7 @@ const SAVE_SHORTCUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
 
 /// Ce que l'interface se rappelle d'une frame à l'autre.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UiState {
     /// Le clip affiché dans les réglages, et sa piste.
     pub selected: Option<(LayerId, ClipId)>,
@@ -222,6 +224,8 @@ pub struct UiState {
     pub known_trigs: Option<usize>,
     /// La courbe de crêtes du spectre.
     pub peak_hold: [f32; SPECTRUM_BANDS],
+    /// L'historique du spectre, en bande sous le tracé.
+    pub spectrogram: Spectrogram,
 }
 
 impl UiState {
@@ -264,6 +268,7 @@ impl Default for UiState {
             zone_gesture: None,
             known_trigs: None,
             peak_hold: [0.0; SPECTRUM_BANDS],
+            spectrogram: Spectrogram::default(),
         }
     }
 }
@@ -333,6 +338,9 @@ pub fn draw(
             .resizable(true)
             .default_size(300.0)
             .show(ui, |ui| spectrum::panel(ui, state, view, commands));
+    } else {
+        // Rouverte, la bande ne recollerait pas deux moments éloignés.
+        state.spectrogram.forget();
     }
     if state.show_library {
         egui::Panel::right("bibliotheque")
@@ -2493,6 +2501,92 @@ mod tests {
         h.state_mut().ui.show_audio = false;
         h.run();
         assert!(h.query_by_label("Spectre").is_none());
+    }
+
+    #[test]
+    fn le_spectrogramme_s_ouvre_sous_le_spectre_sans_commande() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        assert!(h.query_by_label("Historique du spectre").is_none());
+        let avant = h.get_by_label("Spectre").rect();
+
+        h.get_by_label("Spectrogramme").click();
+        h.run();
+        let spectre = h.get_by_label("Spectre").rect();
+        let bande = h.get_by_label("Historique du spectre").rect();
+        assert!(bande.top() >= spectre.bottom());
+        assert_eq!(
+            (bande.left(), bande.right()),
+            (spectre.left(), spectre.right())
+        );
+        assert!(spectre.height() >= 120.0 && spectre.height() < avant.height());
+        assert!(
+            h.state().commands.is_empty(),
+            "une vue ne touche pas la grille"
+        );
+
+        h.get_by_label("Spectrogramme").click();
+        h.run();
+        assert!(h.query_by_label("Historique du spectre").is_none());
+        assert_eq!(h.get_by_label("Spectre").rect(), avant);
+    }
+
+    #[test]
+    fn la_duree_du_spectrogramme_n_apparait_qu_ouvert() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        let liste = egui::accesskit::Role::ComboBox;
+        assert!(h.query_by_role_and_label(liste, "Durée").is_none());
+        h.get_by_label("Spectrogramme").click();
+        h.run();
+        h.get_by_role_and_label(liste, "Durée").click();
+        h.run();
+        h.get_by_label("30 s").click();
+        h.run();
+        assert_eq!(h.state().ui.spectrogram.seconds(), 30);
+        assert!(h.state().commands.is_empty());
+    }
+
+    #[test]
+    fn un_geste_sur_le_spectrogramme_ne_touche_a_rien() {
+        let (g, _) = grille_avec_zone();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Spectrogramme").click();
+        h.run();
+        let centre = h.get_by_label("Historique du spectre").rect().center();
+        geste(&mut h, centre, centre + egui::vec2(80.0, 20.0));
+        assert!(h.state().commands.is_empty(), "aucune zone tracée");
+    }
+
+    #[test]
+    fn le_panneau_d_un_trig_se_pose_sur_le_spectrogramme() {
+        let (g, _) = grille_avec_zone();
+        let mut h = harness(&g.composition);
+        h.get_by_label("Spectrogramme").click();
+        h.run();
+        let (x, y) = centre_de_zone();
+        let zone = point(zone_de_trace(&h), x, y);
+        clique(&mut h, zone);
+        let panneau = h.get_by_label("Recaler").rect();
+        let bande = h.get_by_label("Historique du spectre").rect();
+        assert!(
+            panneau.intersects(bande),
+            "le tracé reste libre pour la zone"
+        );
+    }
+
+    #[test]
+    fn masquer_le_panneau_oublie_le_spectrogramme() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        let ctx = egui::Context::default();
+        let mut etat = Spectrogram::default();
+        etat.update(&ctx, &Spectrum::default(), 1.0);
+        assert_ne!(etat, Spectrogram::default());
+        h.state_mut().ui.spectrogram = etat;
+        h.state_mut().ui.show_audio = false;
+        h.run();
+        assert_eq!(h.state().ui.spectrogram, Spectrogram::default());
     }
 
     #[test]

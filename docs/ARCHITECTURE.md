@@ -1762,6 +1762,7 @@ qui les livre (skill `doc-sync`).
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
 | Sélecteur de couleur | pastille de la couleur qui joue, champ et barre de teinte dans le panneau (§23.5) |
+| Spectrogramme | l'historique du spectre sur 2 à 30 s, en bande sous le tracé (§23.7) |
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
@@ -3370,6 +3371,12 @@ fichier se marque comme modifié à chaque frame (§23.8).
 spectre simulé. Mesuré en release, avec le panneau ouvert et deux zones : 0,83 ms
 d'interface par frame, 16,2 à 17,1 ms entre deux frames. Sur le thread d'analyse, à 48 kHz :
 1 % d'un cœur au plus en FFT, 10,6 % au pire en `ConstantQ` (fenêtre de 250 ms).
+
+Le spectrogramme se teste sans egui pour le temps, l'anneau, la teinte et les repères, par
+`egui_kittest` pour l'ouverture et les gestes. Ces tests n'exécutent pas l'envoi partiel de
+texture : une capture de la vraie fenêtre l'a montré sur wgpu, en release, avec un spectre
+simulé. Coups, charleys et balayage y défilent à leur date, le balayage à l'aplomb du pic de la
+courbe, à 60 fps. Le panneau flottant sur la bande n'est vérifié que par sa géométrie.
 
 L'entrée réelle s'ouvre et transmet du signal (M-Audio ProFire 610, 6 canaux, 44,1 kHz,
 Windows), mais elle était silencieuse pendant l'essai. **Pas encore essayés :** un trig sur
