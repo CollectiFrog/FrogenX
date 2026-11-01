@@ -51,6 +51,8 @@ egui-winit = "0.37"
 egui_kittest = "0.37"
 # Boîtes de fichiers du système (§23.8), dans `app` seulement.
 rfd = "0.17"
+# Seulement pour Spout, confine a `output/src/spout.rs` (docs/ARCHITECTURE.md 8.5).
+windows = "0.62"
 # Audio (§7) : capture, FFT, et le passage lock-free entre les trois threads.
 cpal = "0.18"
 rustfft = "6"

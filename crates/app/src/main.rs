@@ -21,13 +21,16 @@ mod node_window;
 mod stage;
 
 use files::{Files, Reaction};
+use frogenx_app::last_patch::config_dir;
+use frogenx_app::settings::{MachineSettings, DEFAULT_RENDER};
+use frogenx_app::streams::{open_spout, Streams, STREAMS_AVAILABLE};
 use frogenx_app::{next_deadline, Engine, FrameRate};
 use frogenx_audio::AudioInput;
 use frogenx_composition::Command;
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
-use frogenx_output::{MonitorSink, OutputSink};
-use frogenx_ui::{HistoryRequest, OutputRequest};
+use frogenx_output::{MonitorSink, OutputSink, StreamFormat};
+use frogenx_ui::{HistoryRequest, OutputRequest, OutputView};
 use glam::UVec2;
 use gui::Gui;
 use node_window::NodeWindow;
@@ -43,14 +46,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-/// La résolution de sortie, indépendante de la fenêtre (§8).
-const OUTPUT_SIZE: UVec2 = UVec2::new(1920, 1080);
 /// La taille du monitor dans l'interface : un quart de la sortie suffit.
 const MONITOR_SIZE: UVec2 = UVec2::new(960, 540);
-/// 60 fps cible.
-const FRAME_PERIOD: Duration = Duration::from_nanos(16_666_667);
+const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN] [--patch FICHIER] [--nodes] \
+                     [--stream NOM] [--render LxH] [--rate N]";
 
-const USAGE: &str = "usage : frogenx [--frames N] [--output ECRAN] [--patch FICHIER] [--nodes]";
+/// La période d'une cadence. Le moteur a sa propre échéance (§8.3).
+fn period_of(rate: u32) -> Duration {
+    Duration::from_secs_f64(1.0 / rate.max(1) as f64)
+}
+
+/// `1920x1080` en deux nombres.
+fn parse_size(texte: &str) -> Option<UVec2> {
+    let (w, h) = texte.split_once('x')?;
+    Some(UVec2::new(w.parse().ok()?, h.parse().ok()?))
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Options {
@@ -63,6 +73,12 @@ struct Options {
     patch: Option<PathBuf>,
     /// Ouvre l'éditeur de nœuds dès le lancement : le vérifie sans souris (§23.10).
     nodes: bool,
+    /// Ouvre un flux de ce nom : le vérifie sans souris (§8.5).
+    stream: Option<String>,
+    /// La résolution de rendu, pour ce lancement seulement.
+    render: Option<UVec2>,
+    /// La cadence du moteur, pour ce lancement seulement.
+    rate: Option<u32>,
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -81,6 +97,15 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--patch" => options.patch = Some(args.next().ok_or(USAGE)?.into()),
             "--nodes" => options.nodes = true,
+            "--stream" => options.stream = Some(args.next().ok_or(USAGE)?),
+            "--render" => {
+                let taille = args.next().and_then(|t| parse_size(&t));
+                options.render = Some(taille.ok_or(USAGE)?);
+            }
+            "--rate" => {
+                let rate = args.next().and_then(|n| n.parse().ok());
+                options.rate = Some(rate.filter(|r| *r > 0).ok_or(USAGE)?);
+            }
             _ => return Err(format!("argument inconnu : {arg}\n{USAGE}")),
         }
     }
@@ -118,6 +143,12 @@ fn pressed_key(event: &KeyEvent) -> Option<KeyCode> {
     }
 }
 
+/// Ouvre ou ferme un flux, sur l'adaptateur du moteur.
+fn toggle_stream(flux: &mut Streams, i: usize, moteur: &mut Engine) {
+    let info = moteur.gpu().adapter.get_info();
+    flux.toggle(i, moteur, &mut |nom, taille| open_spout(&info, nom, taille));
+}
+
 /// Ce qui n'existe qu'une fois la fenêtre ouverte.
 struct Running {
     window: Arc<Window>,
@@ -131,6 +162,12 @@ struct Running {
     /// Fermé tant qu'on ne l'a pas demandé : il ne coûte rien (§23.10).
     nodes: Option<NodeWindow>,
     files: Files,
+    streams: Streams,
+    /// Le rendu, la cadence et les flux tels qu'ils seront retenus (§8.5).
+    settings: MachineSettings,
+    /// Où les retenir. `None` sans dossier de configuration.
+    settings_dir: Option<PathBuf>,
+    period: Duration,
     rate: FrameRate,
     started: Instant,
     last: Instant,
@@ -165,7 +202,18 @@ impl Running {
         let gui = Gui::new(&window, &gpu, surface, &monitor.view(), aspect)?;
         let (files, grille, usine) = Files::start(options.patch.clone());
         let premiere = grille.columns().first().copied().filter(|_| usine);
-        let mut engine = Engine::new(gpu, Clock::realtime(), OUTPUT_SIZE, grille);
+        let settings_dir = config_dir(|nom| std::env::var(nom).ok());
+        let settings = settings_dir
+            .as_deref()
+            .map(MachineSettings::load)
+            .unwrap_or_default();
+        let rendu = options.render.unwrap_or(settings.render);
+        let period = period_of(options.rate.unwrap_or(settings.rate));
+        let mut engine = Engine::new(gpu, Clock::realtime(), DEFAULT_RENDER, grille);
+        if let Err(e) = engine.set_render_size(rendu) {
+            println!("{e}");
+        }
+        let mut streams = Streams::new(settings.streams.clone());
         engine
             .add_output(OutputSink::Gpu(Box::new(monitor)))
             .map_err(|e| e.to_string())?;
@@ -198,6 +246,19 @@ impl Running {
             stage.open(event_loop, ecran, &mut engine);
             println!("{}", stage.status());
         }
+        if let Some(nom) = &options.stream {
+            let rendu = engine.render_size();
+            let i = streams.add_named(
+                nom.clone(),
+                StreamFormat {
+                    width: rendu.x,
+                    height: rendu.y,
+                    fps: options.rate.unwrap_or(settings.rate),
+                },
+            );
+            toggle_stream(&mut streams, i, &mut engine);
+            println!("Flux : {}", streams.views(&engine)[i].status);
+        }
 
         Ok(Self {
             window,
@@ -208,7 +269,11 @@ impl Running {
             stage,
             nodes,
             files,
-            rate: FrameRate::new(FRAME_PERIOD),
+            streams,
+            settings,
+            settings_dir,
+            period,
+            rate: FrameRate::new(period),
             started: maintenant,
             last: maintenant,
             deadline: maintenant,
@@ -226,12 +291,21 @@ impl Running {
         }
         self.engine.frame(dt);
         let titre = self.files.title(self.engine.is_dirty());
+        let flux = self.streams.views(&self.engine);
+        let rendu = self.engine.render_size();
+        let sortie = OutputView {
+            streams: &flux,
+            streams_available: STREAMS_AVAILABLE,
+            render: (rendu.x, rendu.y),
+            rate: (1.0 / self.period.as_secs_f64()).round() as u32,
+            ..self.stage.view()
+        };
         let demandes = self.gui.draw(
             &self.window,
             &mut self.engine,
             self.rate.fps(),
             &self.audio_status,
-            self.stage.view(),
+            sortie,
             self.files.view(&titre),
         );
         self.gui.recover(&self.window, self.engine.gpu());
@@ -250,6 +324,7 @@ impl Running {
                 self.stage.open(event_loop, ecran, &mut self.engine);
             }
             Some(OutputRequest::Close) => self.stage.close(&mut self.engine),
+            Some(demande) => self.apply_output(demande),
             None => {}
         }
         self.stage
@@ -265,7 +340,53 @@ impl Running {
         self.apply_history();
         self.last = now;
         self.frames += 1;
-        self.deadline = next_deadline(self.deadline, now, FRAME_PERIOD);
+        self.deadline = next_deadline(self.deadline, now, self.period);
+    }
+
+    /// Le rendu et les flux : ce que l'interface demande, puis ce qu'on retient.
+    fn apply_output(&mut self, demande: OutputRequest) {
+        let flux = &mut self.streams;
+        let moteur = &mut self.engine;
+        match demande {
+            OutputRequest::SetRender((w, h)) => {
+                let taille = UVec2::new(w, h);
+                match moteur.set_render_size(taille) {
+                    Ok(()) => self.settings.render = taille,
+                    Err(e) => println!("{e}"),
+                }
+            }
+            OutputRequest::SetRate(rate) => {
+                self.settings.rate = rate;
+                self.period = period_of(rate);
+                self.rate = FrameRate::new(self.period);
+            }
+            OutputRequest::AddStream => {
+                let rendu = moteur.render_size();
+                flux.add(StreamFormat {
+                    width: rendu.x,
+                    height: rendu.y,
+                    fps: self.settings.rate,
+                });
+            }
+            OutputRequest::ToggleStream(i) => toggle_stream(flux, i, moteur),
+            OutputRequest::SetStreamSize(i, (width, height)) => {
+                if let Some(f) = flux.format(i) {
+                    let suite = StreamFormat { width, height, ..f };
+                    flux.set_format(i, suite, moteur);
+                }
+            }
+            OutputRequest::SetStreamFps(i, fps) => {
+                if let Some(f) = flux.format(i) {
+                    flux.set_format(i, StreamFormat { fps, ..f }, moteur);
+                }
+            }
+            OutputRequest::RemoveStream(i) => flux.remove(i, moteur),
+            OutputRequest::Open(_) | OutputRequest::Close => return,
+        }
+        self.settings.streams = self.streams.configs();
+        if let Some(dir) = &self.settings_dir {
+            self.settings.save(dir);
+        }
     }
 
     fn on_key(&mut self, key: KeyCode) {
@@ -482,6 +603,28 @@ mod tests {
     #[test]
     fn sans_argument_la_fenetre_reste_ouverte() {
         assert_eq!(parse(&[]), Ok(Options::default()));
+    }
+
+    #[test]
+    fn un_flux_le_rendu_et_la_cadence_se_choisissent_au_lancement() {
+        let lu = parse(&["--stream", "Scène", "--render", "1280x720", "--rate", "50"]).unwrap();
+        assert_eq!(lu.stream.as_deref(), Some("Scène"));
+        assert_eq!(lu.render, Some(UVec2::new(1280, 720)));
+        assert_eq!(lu.rate, Some(50));
+    }
+
+    #[test]
+    fn un_rendu_ou_une_cadence_illisibles_sont_refuses() {
+        assert!(parse(&["--render", "1280"]).is_err());
+        assert!(parse(&["--render", "ax720"]).is_err());
+        assert!(parse(&["--rate", "0"]).is_err());
+        assert!(parse(&["--stream"]).is_err());
+    }
+
+    #[test]
+    fn la_periode_suit_la_cadence() {
+        assert_eq!(period_of(50), Duration::from_millis(20));
+        assert_eq!(period_of(0), Duration::from_secs(1));
     }
 
     #[test]

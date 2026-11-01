@@ -72,6 +72,7 @@ mod tests {
     fn frame(index: u64, pixels: Vec<u8>, width: u32, height: u32) -> CpuFrame {
         CpuFrame {
             pixels: Arc::from(pixels),
+            layout: crate::sink::PixelLayout::RgbaStraight,
             width,
             height,
             index,

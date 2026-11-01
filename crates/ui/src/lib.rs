@@ -60,7 +60,35 @@ pub struct Screen {
     pub interface: bool,
 }
 
-/// L'état de la sortie plein écran.
+/// Un flux réseau, déjà mis en mots (§8.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamView {
+    /// Le nom du sender Spout, celui que KyberFrog suit.
+    pub name: String,
+    pub size: (u32, u32),
+    pub fps: u32,
+    pub open: bool,
+    /// Ce qui s'affiche après son nom : `fermé`, `actif`, une panne.
+    pub status: String,
+}
+
+/// Les résolutions de rendu proposées.
+pub const RENDER_SIZES: [(u32, u32); 4] = [(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)];
+/// Les cadences du moteur proposées.
+pub const ENGINE_RATES: [u32; 5] = [25, 30, 50, 60, 120];
+/// Les résolutions proposées pour un flux.
+pub const STREAM_SIZES: [(u32, u32); 6] = [
+    (640, 360),
+    (960, 540),
+    (1280, 720),
+    (1920, 1080),
+    (2560, 1440),
+    (3840, 2160),
+];
+/// Les cadences proposées pour un flux.
+pub const STREAM_RATES: [u32; 7] = [15, 20, 24, 25, 30, 50, 60];
+
+/// L'état des sorties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputView<'a> {
     pub screens: &'a [Screen],
@@ -68,6 +96,13 @@ pub struct OutputView<'a> {
     pub open: Option<usize>,
     /// Déjà mis en mots : ce qui s'affiche dans la barre.
     pub status: &'a str,
+    pub streams: &'a [StreamView],
+    /// Faux hors de Windows : Spout n'y existe pas, le menu n'en parle pas.
+    pub streams_available: bool,
+    /// La résolution de rendu.
+    pub render: (u32, u32),
+    /// La cadence du moteur, en images par seconde.
+    pub rate: u32,
 }
 
 /// Ce que l'interface demande à la fenêtre de sortie. Ce n'est pas une
@@ -78,6 +113,16 @@ pub enum OutputRequest {
     /// Ouvre la sortie sur cet écran, en la déplaçant si elle est déjà ouverte.
     Open(usize),
     Close,
+    /// Change la résolution de rendu (§8.5).
+    SetRender((u32, u32)),
+    /// Change la cadence du moteur.
+    SetRate(u32),
+    AddStream,
+    /// Ouvre un flux fermé, ferme un flux ouvert.
+    ToggleStream(usize),
+    SetStreamSize(usize, (u32, u32)),
+    SetStreamFps(usize, u32),
+    RemoveStream(usize),
 }
 
 /// Annuler ou rétablir : `app` tient l'historique (§23.11).
@@ -500,6 +545,94 @@ fn output_menu(ui: &mut Ui, view: &OutputView<'_>, output: &mut Option<OutputReq
         *output = Some(OutputRequest::Close);
         ui.close();
     }
+    ui.separator();
+    let (w, h) = view.render;
+    ui.menu_button(format!("Rendu : {w}×{h}"), |ui| {
+        for taille in RENDER_SIZES {
+            if ui
+                .selectable_label(taille == view.render, size_label(taille))
+                .clicked()
+            {
+                *output = Some(OutputRequest::SetRender(taille));
+                ui.close();
+            }
+        }
+    });
+    ui.menu_button(format!("Cadence : {} i/s", view.rate), |ui| {
+        for rate in ENGINE_RATES {
+            if ui
+                .selectable_label(rate == view.rate, format!("{rate} i/s"))
+                .clicked()
+            {
+                *output = Some(OutputRequest::SetRate(rate));
+                ui.close();
+            }
+        }
+    });
+    if view.streams_available {
+        ui.separator();
+        for (i, flux) in view.streams.iter().enumerate() {
+            ui.menu_button(stream_label(flux), |ui| {
+                stream_menu(ui, i, flux, view, output)
+            });
+        }
+        if ui.button("Ajouter un flux").clicked() {
+            *output = Some(OutputRequest::AddStream);
+            ui.close();
+        }
+    }
+}
+
+fn size_label((w, h): (u32, u32)) -> String {
+    format!("{w}×{h}")
+}
+
+/// Une ligne de flux : ce que le menu dit de lui sans l'ouvrir.
+fn stream_label(flux: &StreamView) -> String {
+    let (w, h) = flux.size;
+    format!("{} : {w}×{h}, {} i/s, {}", flux.name, flux.fps, flux.status)
+}
+
+/// Une taille plus grande que le rendu reste visible et grisée : un flux n'est
+/// jamais agrandi (§8.5).
+fn stream_menu(
+    ui: &mut Ui,
+    i: usize,
+    flux: &StreamView,
+    view: &OutputView<'_>,
+    output: &mut Option<OutputRequest>,
+) {
+    let geste = if flux.open {
+        "Fermer le flux"
+    } else {
+        "Ouvrir le flux"
+    };
+    if ui.button(geste).clicked() {
+        *output = Some(OutputRequest::ToggleStream(i));
+        ui.close();
+    }
+    ui.separator();
+    for taille in STREAM_SIZES {
+        let possible = taille.0 <= view.render.0 && taille.1 <= view.render.1;
+        let ligne = Button::selectable(taille == flux.size, size_label(taille));
+        if ui.add_enabled(possible, ligne).clicked() {
+            *output = Some(OutputRequest::SetStreamSize(i, taille));
+            ui.close();
+        }
+    }
+    ui.separator();
+    for fps in STREAM_RATES {
+        let ligne = Button::selectable(fps == flux.fps, format!("{fps} i/s"));
+        if ui.add_enabled(fps <= view.rate, ligne).clicked() {
+            *output = Some(OutputRequest::SetStreamFps(i, fps));
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button("Retirer le flux").clicked() {
+        *output = Some(OutputRequest::RemoveStream(i));
+        ui.close();
+    }
 }
 
 /// L'avancement de la boucle d'un clip, dans `[0, 1)`. Un clip en temps absolu
@@ -857,7 +990,14 @@ mod tests {
 
     /// Le même, la question des modifications posée ou non.
     fn harness_fichier(composition: &Composition, confirming: bool) -> Harness<'_, Etat> {
-        harness_complet(composition, Vec::new(), None, "Sortie fermée", confirming)
+        harness_complet(
+            composition,
+            Vec::new(),
+            None,
+            "Sortie fermée",
+            confirming,
+            Vec::new(),
+        )
     }
 
     /// Le même, avec un état de la sortie.
@@ -867,7 +1007,12 @@ mod tests {
         ouverte: Option<usize>,
         statut: &'a str,
     ) -> Harness<'a, Etat> {
-        harness_complet(composition, ecrans, ouverte, statut, false)
+        harness_complet(composition, ecrans, ouverte, statut, false, Vec::new())
+    }
+
+    /// Le même, avec des flux.
+    fn harness_flux(composition: &Composition, flux: Vec<StreamView>) -> Harness<'_, Etat> {
+        harness_complet(composition, Vec::new(), None, "Sortie fermée", false, flux)
     }
 
     fn harness_complet<'a>(
@@ -876,6 +1021,7 @@ mod tests {
         ouverte: Option<usize>,
         statut: &'a str,
         confirming: bool,
+        flux: Vec<StreamView>,
     ) -> Harness<'a, Etat> {
         let etat = Etat {
             ui: UiState::default(),
@@ -902,6 +1048,10 @@ mod tests {
                             screens: &ecrans,
                             open: ouverte,
                             status: statut,
+                            streams: &flux,
+                            streams_available: true,
+                            render: (1920, 1080),
+                            rate: 60,
                         },
                         file: FileView {
                             title: "concert.frogenx *",
@@ -1019,6 +1169,118 @@ mod tests {
     }
 
     /// L'interface sur son écran, et un projecteur.
+    fn un_flux(open: bool) -> Vec<StreamView> {
+        vec![StreamView {
+            name: "FrogenX 1".into(),
+            size: (1280, 720),
+            fps: 60,
+            open,
+            status: if open { "actif" } else { "fermé" }.into(),
+        }]
+    }
+
+    /// Ouvre le menu `Sortie`, puis le sous-menu de ce nom.
+    fn ouvrir_sous_menu(h: &mut Harness<'_, Etat>, debut: &str) {
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label_contains(debut).click();
+        h.run();
+    }
+
+    #[test]
+    fn le_menu_dit_le_format_et_l_etat_de_chaque_flux() {
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, un_flux(true));
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("FrogenX 1 : 1280×720, 60 i/s, actif");
+    }
+
+    #[test]
+    fn ajouter_un_flux_passe_par_le_menu() {
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, Vec::new());
+        h.get_by_label("Sortie").click();
+        h.run();
+        h.get_by_label("Ajouter un flux").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::AddStream));
+    }
+
+    #[test]
+    fn ouvrir_et_fermer_un_flux_suit_son_etat() {
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, un_flux(false));
+        ouvrir_sous_menu(&mut h, "FrogenX 1");
+        h.get_by_label("Ouvrir le flux").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::ToggleStream(0)));
+
+        let mut h = harness_flux(&composition, un_flux(true));
+        ouvrir_sous_menu(&mut h, "FrogenX 1");
+        h.get_by_label("Fermer le flux").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::ToggleStream(0)));
+    }
+
+    #[test]
+    fn la_taille_et_la_cadence_d_un_flux_se_choisissent_dans_son_menu() {
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, un_flux(false));
+        ouvrir_sous_menu(&mut h, "FrogenX 1");
+        h.get_by_label("640×360").click();
+        h.run();
+        assert_eq!(
+            h.state().output,
+            Some(OutputRequest::SetStreamSize(0, (640, 360)))
+        );
+
+        let mut h = harness_flux(&composition, un_flux(false));
+        ouvrir_sous_menu(&mut h, "FrogenX 1");
+        h.get_by_label("30 i/s").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::SetStreamFps(0, 30)));
+    }
+
+    #[test]
+    fn une_taille_plus_grande_que_le_rendu_reste_grisee() {
+        use egui_kittest::kittest::NodeT;
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, un_flux(false));
+        ouvrir_sous_menu(&mut h, "FrogenX 1");
+        assert!(h.get_by_label("3840×2160").accesskit_node().is_disabled());
+        assert!(!h.get_by_label("1920×1080").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn retirer_un_flux_passe_par_son_menu() {
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, un_flux(false));
+        ouvrir_sous_menu(&mut h, "FrogenX 1");
+        h.get_by_label("Retirer le flux").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::RemoveStream(0)));
+    }
+
+    #[test]
+    fn la_resolution_et_la_cadence_du_rendu_se_choisissent_au_menu() {
+        let composition = Composition::new();
+        let mut h = harness_flux(&composition, Vec::new());
+        ouvrir_sous_menu(&mut h, "Rendu : 1920×1080");
+        h.get_by_label("3840×2160").click();
+        h.run();
+        assert_eq!(
+            h.state().output,
+            Some(OutputRequest::SetRender((3840, 2160)))
+        );
+
+        let mut h = harness_flux(&composition, Vec::new());
+        ouvrir_sous_menu(&mut h, "Cadence : 60 i/s");
+        h.get_by_label("50 i/s").click();
+        h.run();
+        assert_eq!(h.state().output, Some(OutputRequest::SetRate(50)));
+    }
+
     fn deux_ecrans() -> Vec<Screen> {
         vec![
             Screen {

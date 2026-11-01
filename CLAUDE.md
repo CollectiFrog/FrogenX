@@ -59,7 +59,8 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
 bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
 les colonnes et Espace pour taper. Le menu `Sortie` envoie l'image en plein écran sur un
-autre écran (§8.4), le menu `Fichier` enregistre et rouvre son travail (§23.8), et le
+autre écran (§8.4) et publie des flux Spout que KyberFrog porte sur le réseau, à la résolution et
+à la cadence de chacun (§8.5), le menu `Fichier` enregistre et rouvre son travail (§23.8), et le
 dernier fichier revient au lancement. Rendus sans fenêtre : `cargo run -p frogenx-render
 --example first_image` (une image) ; `cargo run --release -p frogenx-app --example
 sequence` (un clip déterministe, skill `poc-video`) ; `cargo run --release -p frogenx-app
@@ -104,15 +105,17 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   GPU → CPU, PNG. `blend.rs` est la référence CPU du shader de mélange.
 - `crates/output` : `GpuSink` (`encode`/`after_submit`), `CpuSink`, étage `Outputs`,
   passe de conversion 8 bits sRGB, `PresentSurface`, `Preview`, `MonitorSink`,
-  `PngSequenceSink`. `fanout` (files bornées, politique
-  de perte) ne connaît pas wgpu. `output` ne connaît pas `winit`.
+  `PngSequenceSink`, relecture en direct (`live.rs`), et `SpoutSink` sous Windows, seul `unsafe`
+  du projet. `fanout` (files bornées, politique de perte) et `stream` (format, cadence) ne
+  connaissent pas wgpu. `output` ne connaît pas `winit`.
 - `crates/ui` : l'interface, fonction de l'état, et l'éditeur de nœuds (`nodes.rs`). Lit la grille, rend des `Command` et des
   `Placement` pour les clips glissés depuis la bibliothèque. Ne
   connaît ni wgpu ni `winit` : testée par clics simulés (`egui_kittest`).
 - `crates/app` : `Engine`, qui traduit la grille en couches selon le §20.1, sans
   fenêtre, et le binaire `frogenx`, seul à connaître `winit`, `egui-wgpu`, `egui-winit`.
   `stage.rs` y possède la fenêtre de sortie et suit les écrans branchés, `node_window.rs`
-  celle de l'éditeur de nœuds. `file_flow.rs`
+  celle de l'éditeur de nœuds. `streams.rs` tient les flux, `settings.rs` ce qui appartient à la
+  machine (`sorties.txt`). `file_flow.rs`
   décide du parcours du fichier sans fenêtre, `files.rs` produit ses effets.
 
 **Prochaine étape : à choisir au §12.1**, le backlog à tenir à jour. L'éditeur de nœuds est fait
@@ -120,7 +123,7 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
 `Engine::undo` et des images de la grille (§23.11) : une nouvelle commande est couverte d'office,
 mais elle doit recevoir son nom dans `Command::label`.
 Le BPM et les features n'ont pas encore été essayés sur de la vraie musique (§7.1).
-Les sorties CPU restent refusées en `Realtime` jusqu'à l'anneau de l'étape 10.
+Un flux n'a tourné qu'en boucle locale : ni deux machines, ni la latence jusqu'à l'écran (§8.5).
 
 wgpu est épinglé en **30** : lire ses signatures dans les sources de la version
 épinglée, pas de mémoire (skill `rust-workspace`).

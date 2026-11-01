@@ -993,8 +993,11 @@ pub struct GpuFrame<'a> {
     pub t: f64,                       // le t de CETTE frame
 }
 
+pub enum PixelLayout { RgbaStraight, BgraOpaque }   // alpha droit, ou flux opaque (§8.5)
+
 pub struct CpuFrame {
-    pub pixels: Arc<[u8]>,            // RGBA8 encodé sRGB, alpha droit, lignes contiguës ; partagé, jamais copié par sortie
+    pub pixels: Arc<[u8]>,            // 4 octets par pixel, encodés sRGB, lignes contiguës ; partagé, jamais copié par sortie
+    pub layout: PixelLayout,
     pub width: u32,
     pub height: u32,
     pub index: u64,
@@ -1041,9 +1044,9 @@ une fois le rendu terminé, Syphon publie après la soumission. Une seule métho
 obligé chacune à soumettre son propre encodeur. Même forme que le contrat des couches
 en plusieurs appels (§22).
 
-**Une seule relecture, partagée.** L'**étage de sortie** (`Outputs`) relit la frame
-**une fois**, et seulement si au moins une sortie CPU est active ; toutes les sorties
-CPU reçoivent le même `Arc<[u8]>`. Avec NDI et l'enregistrement actifs, on ne paie pas
+**Une relecture par format, partagée.** L'**étage de sortie** (`Outputs`) relit chaque
+image attendue **une fois**, et seulement si une sortie l'attend ; les sorties de même
+format (§8.5) reçoivent le même `Arc<[u8]>`. Deux sorties de même format ne paient pas
 deux relectures. L'anneau du §8.2 n'existe qu'à un endroit.
 
 **Une seule passe de conversion vers 8 bits sRGB**, composant de `output` partagé par
@@ -1088,10 +1091,8 @@ c'est l'ouverture de la sortie qui échoue — en édition, avec un message.
 **Ce que l'étape 6 implémente :** le contrat complet, l'étage `Outputs` et sa
 politique `Realtime`/`Fixed`, la passe de conversion, `Engine` (§8.3), la sortie
 `PngSequenceSink`, `Preview` (`GpuSink`) et des sorties factices pour les tests.
-Jusqu'à l'étape 10, le chemin CPU s'appuie sur la relecture **synchrone** (§8.2) : elle
-n'est permise qu'en `Fixed`, donc **`Outputs` refuse une sortie CPU en `Realtime`** à
-l'ajout — en édition, avec un message. L'anneau asynchrone lèvera ce refus. La
-politique `Realtime` de la file est néanmoins écrite et testée dès maintenant.
+Depuis les flux réseau (§8.5), une sortie CPU est aussi servie en `Realtime`, par l'anneau
+du §8.2 ; en `Fixed`, la relecture reste **synchrone**.
 
 ### 8.1 Partage inter-applications
 
@@ -1158,11 +1159,11 @@ bloque le pipeline et effondre le framerate.
 mappe la frame N-2 pendant que la frame N se dessine. C'est ce détail qui sépare 60 fps
 de 20 fps pendant un enregistrement.
 
-**État actuel :** seule une relecture **synchrone** existe
-(`frogenx_render::read_rgba16f`, `read_rgba8`) — elle attend le GPU, ce qui est correct
-pour le rendu offline et les tests, et **interdit** dans la boucle live. L'anneau
-ci-dessus arrive avec les flux réseau (§8.5), avant l'enregistrement. Il attend le GPU sur un
-thread dédié plutôt qu'à la frame suivante : le retard suit le travail du GPU, pas la cadence.
+**État actuel :** la relecture **synchrone** (`frogenx_render::read_rgba16f`, `read_rgba8`)
+attend le GPU, ce qui est correct pour le rendu offline et les tests, et **interdit** dans la
+boucle live. L'anneau ci-dessus est arrivé avec les flux réseau (§8.5), dans `output/src/live.rs`.
+Il attend le GPU sur un thread dédié plutôt qu'à la frame suivante : le retard suit le travail du
+GPU, pas la cadence.
 
 **L'anneau vit dans l'étage de sortie (`Outputs`, §8.0), une seule fois**, quel que
 soit le nombre de sorties CPU actives. Il relit la texture **déjà convertie en 8 bits
@@ -1446,24 +1447,44 @@ textures de chaque piste, entre deux frames. La mémoire des échos repart de z�
 de préparation, pas de concert. `app` possède la période de sa boucle. Les réglages d'un écho
 s'expriment par seconde (§6.1) et ne changent pas d'image avec la cadence.
 
-**Le geste.** Le menu `Sortie` liste les flux : nom du sender, résolution, cadence, état, frames
-perdues. Un potentiomètre ne convient pas ici : ce sont des listes de valeurs. `Résolution du
-rendu` et `Cadence du rendu` s'y trouvent aussi. Comme pour l'écran, rien ne part au lancement :
-les flux enregistrés reviennent fermés, et l'utilisateur les ouvre.
+**Le geste.** Le menu `Sortie` liste les flux : nom du sender, résolution, cadence, état. Chacun
+ouvre un sous-menu : ouvrir ou fermer, résolution, cadence, retirer. Un potentiomètre ne convient
+pas ici : ce sont des listes de valeurs. Une taille plus grande que le rendu y reste visible et
+grisée. `Rendu` et `Cadence` s'y trouvent aussi. Comme pour l'écran, rien ne part au lancement :
+les flux enregistrés reviennent fermés, et l'utilisateur les ouvre. Pour essayer sans souris :
+`--stream NOM`, `--render LxH`, `--rate N`.
 
-**Hors du patch.** Les flux et les réglages de rendu vivent dans `outputs.json`, à côté du dernier
-fichier ouvert : un réseau change d'une salle à l'autre (§23.8).
+**Hors du patch.** Les flux et les réglages de rendu vivent dans `sorties.txt`, à côté du dernier
+fichier ouvert : un réseau change d'une salle à l'autre (§23.8). Du texte, parce que seule `patch`
+connaît le JSON ; une ligne illisible est ignorée, rien n'y empêche un lancement.
 
-**Ce qui se vérifiera, et comment.** Sans GPU : `Cadence` sur 60 s à chaque ratio, `within`, le tri
-par format, la perte comptée sans ralentir la boucle. Sur le GPU : une image réduite comparée à sa
-référence, un flux qui change de taille sans perdre sa file, la relecture en direct qui ne ralentit
-pas la boucle. Spout se teste en boucle locale, sous Windows : le test ouvre le sender dans un
-second device, relit et compare. Puis à la main avec KyberFrog sur cette machine, car NVENC n'y a
-aucune mesure de latence, et un changement de taille à chaud n'est documenté que sur AMF.
+**Ce qui est vérifié, et comment.** Sans GPU : `Cadence` sur 60 s à chaque ratio, tremblement du
+temps compris, `within`, le tri par format, la perte comptée groupe par groupe. Sur le GPU : l'ordre
+BGRA et l'opacité au pixel près, le letterbox, le rembourrage des lignes, deux flux qui partagent
+leurs octets, un changement de taille sans perte, un flux bloqué qui perd ses frames sans ralentir
+la boucle. Spout se teste en boucle locale : un second device ouvre le sender et relit, et sur 40
+images d'affilée il lit bien celle qui vient d'être annoncée. `Engine` : un moteur redimensionné
+rend au pixel près comme un moteur neuf, un écho et une transition y survivent.
+
+**Mesuré sur une RTX 4070 SUPER, sous Vulkan.** `cargo run --release -p frogenx-app --example flux`
+publie la grille de départ, et mesure du début de la frame à l'annonce Spout :
+
+| Rendu et flux | Médiane | 99 sur 100 sous |
+|---|---:|---:|
+| 1920×1080, 60 i/s | 3,0 ms | 10 ms |
+| 3840×2160, 60 i/s | 9,1 ms | 13 ms |
+
+**Essayé avec KyberFrog, sur cette même machine.** `kycontroller` et `kyclient` dans une boucle
+locale, en NVENC, sortie du récepteur en Spout : 60 i/s reçues, et le passage à chaud de 1920×1080
+à 960×540 puis retour suit sans intervention, l'encodeur se recréant à chaque fois. La fenêtre
+`frogenx --stream` garde ses 60 fps, intervalles de 16,2 à 17,1 ms. **Pas encore essayés :** le
+menu à la vraie souris, deux machines sur un vrai réseau, et la latence totale jusqu'à l'écran du
+récepteur, que le banc de KyberFrog mesurerait.
 
 **Non couvert.** L'alpha sur le réseau. L'émission depuis Linux et macOS, faute de Spout. Les
-récepteurs NDI : NDI reste au backlog. La copie directe entre GPU et Spout : à reconsidérer si la
-mesure l'exige (`S2`).
+récepteurs NDI : NDI reste au backlog. Le nom d'un flux ne se change pas dans le menu, seulement
+dans `sorties.txt`. Une forte réduction reste bilinéaire et crénelle un peu (§8.3). La copie
+directe entre GPU et Spout : à reconsidérer si la mesure l'exige (`S2`).
 
 ## 9. Portabilité
 
@@ -1505,7 +1526,7 @@ frogenx/
 ├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre ✅ (core, osc, shape, composition, serde_json)
 ├── layer/     # Gpu, trait RenderLayer, ShapeRenderer, ShapeLayer, FeedbackRenderer, tessellation ✅ (core, shape, wgpu, lyon)
 ├── render/    # compositeur, readback GPU → CPU, PNG              ✅ (core, layer, wgpu, png)
-├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu) ; à venir : NDI / Spout / Syphon / Art-Net / recorder
+├── output/    # GpuSink / CpuSink, étage Outputs, passe 8 bits sRGB, relecture en direct, flux, SpoutSink, PresentSurface, Preview, MonitorSink, PngSequenceSink ✅ (layer, render, wgpu, windows) ; à venir : NDI / Syphon / Art-Net / recorder
 ├── ui/        # egui : grille, bibliothèque, tempo, monitor, réglages, éditeur de nœuds ; rend des Command ✅ (library, composition, shape, osc, core, egui)
 └── app/       # Engine (la boucle du §20.1, sans fenêtre) + binaire `frogenx`, seul à connaître winit, egui-wgpu, egui-winit ✅
 ```
@@ -1653,7 +1674,7 @@ couches complètes empilées.
 | 8 | ✅ Audio → features → `Signal`, BPM calculé, déclenchements (§7, §7.1) | **visuel audio-réactif** — *fait* : `cargo run`, clic droit sur un potentiomètre, `Suivre` |
 | 9 | ✅ Feedback : un clip qui relit l'image finale (§6.1) | **traînées, échos, complexité organique** — *fait* : `cargo run`, famille `Échos` de la bibliothèque |
 | 10 | Enregistrement (readback + ffmpeg) | fichier vidéo |
-| 11 | Flux réseau par Spout et KyberFrog (§8.5), puis NDI, Syphon | intégration VJ |
+| 11 | ✅ Flux réseau par Spout et KyberFrog (§8.5) ; NDI et Syphon restent à faire | intégration VJ |
 | 12 | `VideoLayer` | clips vidéo comme couches |
 | 13 | `scene3d` : maillages, caméra, lumières, culling | scène 3D comme source de clip |
 | 14 | Art-Net / DMX en sortie | pilotage d'éclairage physique |
@@ -1707,6 +1728,7 @@ qui les livre (skill `doc-sync`).
 | BPM | détection et suivi du tempo (§7.1) |
 | Feedback | clips d'écho : traînée, tunnel, tourbillon, réglés par seconde (§6.1) |
 | Éditeur de nœuds | fenêtre à part, graphes de clip et de régie, effets, sources sur l'opacité et la vitesse (§23.10) |
+| Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
 | Annuler et rétablir | 100 pas, un par geste, sans faire sauter l'image, Ctrl+Z et menu `Édition` (§23.11) |
@@ -1716,18 +1738,17 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Flux réseau : Spout, KyberFrog, résolution et cadence (§8.5) | l'image vers d'autres machines ; lève le refus des sorties CPU en direct | grande |
-| 2 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
-| 3 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 4 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
-| 5 | Enregistrement, étape 10 | un fichier vidéo | grande |
-| 6 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
-| 7 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 8 | Scène 3D, étape 13 | | très grande |
-| 9 | Art-Net / DMX, étape 14 | | moyenne |
-| 10 | Scripting Lua, étape 15 | | moyenne |
-| 11 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 12 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Sélecteur de couleur | les couleurs se règlent canal par canal (§23.5) | petite |
+| 2 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
+| 3 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
+| 4 | Enregistrement, étape 10 | un fichier vidéo | grande |
+| 5 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
+| 6 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 7 | Scène 3D, étape 13 | | très grande |
+| 8 | Art-Net / DMX, étape 14 | | moyenne |
+| 9 | Scripting Lua, étape 15 | | moyenne |
+| 10 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 11 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -1735,6 +1756,7 @@ qui les livre (skill `doc-sync`).
 |---|---|
 | BPM, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
 | Menus `Sortie`, `Fichier` et `Édition`, clic droit des potentiomètres, fils de l'éditeur, Ctrl+Z, à la vraie souris et au vrai clavier | validés par clics simulés seulement |
+| Un flux entre deux machines, sur un vrai réseau, et sa latence jusqu'à l'écran | essayé en boucle locale seulement (§8.5) |
 | Projecteur, câble débranché, écran à une autre fréquence | jamais essayés (§8.4) |
 | Linux et macOS | jamais essayés |
 
@@ -1806,7 +1828,6 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Écran perdu : la sortie se ferme, le moteur continue** (§8.4) | un câble débranché ne doit couper ni l'interface ni le monitor ; laisser la fenêtre glisser sur l'écran restant pourrait recouvrir l'interface |
 | **`OutputRequest` distinct de `Command`** (§8.4) | une fenêtre n'est pas la grille : `Composition` n'a rien à en savoir, et `Command` ne concerne que ce qui s'applique entre deux frames du moteur |
 | **Seules les sorties GPU se retirent** (§8.4) | retirer une sortie CPU suppose d'arrêter son thread : l'enregistreur de l'étape 10 dira comment terminer un fichier proprement |
-| **Sorties CPU refusées en `Realtime` jusqu'aux flux réseau** (§8.0, §8.5) | sans l'anneau, seule la relecture synchrone existe : l'accepter en live effondrerait le framerate en silence ; un refus à l'ajout est clair |
 | ffmpeg en pipe, pas en bindings | l'encodeur matériel par plateforme n'est plus notre problème |
 | Vidéo en dernier | plusieurs jours de travail, indépendants du reste |
 | **Grille de clips (Deck/LayerGroup/Layer/Column) comme structure d'organisation** (§3bis) | répond à « quoi joue, quand » ; un patch modulaire unique ne permet pas de changer de répertoire de visuels à chaud en live |

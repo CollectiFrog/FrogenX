@@ -17,6 +17,8 @@
 pub mod file_flow;
 pub mod history;
 pub mod last_patch;
+pub mod settings;
+pub mod streams;
 
 use frogenx_composition::{
     sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, IdMap, LayerId,
@@ -27,7 +29,8 @@ use frogenx_layer::{
     RenderLayer, ShapeContent, ShapeRenderer,
 };
 use frogenx_output::{
-    DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs, SinkStatus,
+    CpuSink, CpuSinkId, DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs,
+    SinkStatus, StreamFormat,
 };
 use frogenx_render::{Compositor, LayerInput};
 use glam::UVec2;
@@ -283,6 +286,29 @@ impl<'a> Drawing<'a> {
     }
 }
 
+/// Le plus petit côté d'un rendu : en dessous, il n'y a plus d'image à regarder.
+const MIN_RENDER_SIDE: u32 = 16;
+
+/// Une résolution de rendu refusée — régime d'édition (§18.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderSizeError {
+    pub size: UVec2,
+    /// Le plus grand côté que cette carte accepte.
+    pub max: u32,
+}
+
+impl std::fmt::Display for RenderSizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "résolution refusée : {}×{}, {} pixels au plus par côté",
+            self.size.x, self.size.y, self.max
+        )
+    }
+}
+
+impl std::error::Error for RenderSizeError {}
+
 /// Une frame complète, de la grille aux sorties.
 pub struct Engine {
     gpu: Gpu,
@@ -355,6 +381,53 @@ impl Engine {
     /// retirée.
     pub fn remove_gpu_output(&mut self, id: GpuSinkId) -> bool {
         self.outputs.remove_gpu(id)
+    }
+
+    /// Ajoute un flux : une sortie CPU à son format et sa cadence (§8.5).
+    pub fn add_stream(&mut self, sink: Box<dyn CpuSink>, format: StreamFormat) -> CpuSinkId {
+        self.outputs.add_stream(sink, format)
+    }
+
+    /// Change le format d'un flux, entre deux frames.
+    pub fn set_stream_format(&mut self, id: CpuSinkId, format: StreamFormat) -> bool {
+        self.outputs.set_stream_format(id, format)
+    }
+
+    /// Retire un flux et attend sa dernière frame.
+    pub fn remove_stream(&mut self, id: CpuSinkId) -> bool {
+        self.outputs.remove_stream(id)
+    }
+
+    pub fn stream_status(&self, id: CpuSinkId) -> Option<SinkStatus> {
+        self.outputs.stream_status(id)
+    }
+
+    /// La résolution de rendu.
+    pub fn render_size(&self) -> UVec2 {
+        self.size
+    }
+
+    /// Change la résolution de rendu, entre deux frames (§8.5). La mémoire des
+    /// échos repart de zéro : c'est un geste de préparation.
+    pub fn set_render_size(&mut self, size: UVec2) -> Result<(), RenderSizeError> {
+        let max = self.gpu.device.limits().max_texture_dimension_2d;
+        if size.min_element() < MIN_RENDER_SIDE || size.max_element() > max {
+            return Err(RenderSizeError { size, max });
+        }
+        if size == self.size {
+            return Ok(());
+        }
+        self.size = size;
+        self.compositor.resize(&self.gpu, size);
+        self.history = FrameHistory::new(&self.gpu, size);
+        for track in &mut self.tracks {
+            track.renderer.resize(size, &self.gpu);
+            track.feedback = None;
+            track.outgoing = None;
+            track.outgoing_feedback = None;
+            track.mix = None;
+        }
+        Ok(())
     }
 
     /// Met une commande en file. Elle s'applique au début de la frame suivante,

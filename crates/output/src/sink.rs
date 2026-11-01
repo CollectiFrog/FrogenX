@@ -27,11 +27,21 @@ pub struct GpuFrame<'a> {
     pub t: f64,
 }
 
+/// Ce que contiennent les octets d'une [`CpuFrame`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelLayout {
+    /// RGBA8 encodé sRGB, alpha droit (§8.0).
+    RgbaStraight,
+    /// BGRA8 encodé sRGB, opaque : un flux lit l'image sur du noir (§8.5).
+    BgraOpaque,
+}
+
 /// Une frame pour les sorties CPU, partagée entre elles sans copie.
 #[derive(Debug, Clone)]
 pub struct CpuFrame {
-    /// RGBA8 encodé sRGB, alpha droit, lignes contiguës (§8.0).
+    /// Quatre octets par pixel, lignes contiguës, rangés selon `layout`.
     pub pixels: Arc<[u8]>,
+    pub layout: PixelLayout,
     pub width: u32,
     pub height: u32,
     pub index: u64,

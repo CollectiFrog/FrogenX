@@ -14,7 +14,8 @@ use frogenx_core::{
 };
 use frogenx_layer::{BlendMode, BlendParams, ColorParam, Gpu, ShapeStyle};
 use frogenx_output::{
-    CpuFrame, CpuSink, GpuFrame, GpuSink, OutputError, OutputSink, PngSequenceSink, SinkStatus,
+    CpuFrame, CpuSink, GpuFrame, GpuSink, OutputSink, PixelLayout, PngSequenceSink, SinkStatus,
+    StreamFormat,
 };
 use frogenx_shape::{EffectKind, FeedbackParams, Rect};
 use glam::UVec2;
@@ -1584,16 +1585,179 @@ fn une_grille_qui_ne_s_enregistre_pas_ne_s_annule_pas_et_ne_panique_pas() {
 }
 
 #[test]
-fn le_temps_reel_refuse_une_sortie_cpu() {
+fn le_temps_reel_sert_une_sortie_cpu_sans_attendre() {
+    let Some(gpu) = gpu() else { return };
+    let (c, piste, rouge, _) = une_piste();
+    let recu = Recu::default();
+    let mut moteur = Engine::new(gpu, Clock::realtime(), SIZE, c);
+    moteur
+        .add_output(OutputSink::Cpu(Box::new(recu.clone())))
+        .unwrap();
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    for _ in 0..4 {
+        moteur.frame(0.016);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    moteur.finish();
+    assert!((moteur.clock().t() - 0.064).abs() < 1e-9);
+    assert_eq!(recu.dernier_pixel(16, 16), [255, 0, 0, 255]);
+}
+
+/// Le moteur rend ce flux, après `frames` frames en temps réel.
+fn flux_rouge(gpu: Gpu, format: StreamFormat, frames: u32) -> Vec<CpuFrame> {
+    let (c, piste, rouge, _) = une_piste();
+    let recu = Recu::default();
+    let mut moteur = Engine::new(gpu, Clock::fixed(60.0), SIZE * 4, c);
+    moteur.add_stream(Box::new(recu.clone()), format);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: rouge,
+    });
+    for _ in 0..frames {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+    let frames = recu.0.lock().unwrap().clone();
+    frames
+}
+
+#[test]
+fn un_flux_recoit_l_image_du_moteur_a_son_format() {
+    let Some(gpu) = gpu() else { return };
+    let frames = flux_rouge(
+        gpu,
+        StreamFormat {
+            width: 64,
+            height: 64,
+            fps: 60,
+        },
+        3,
+    );
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0].layout, PixelLayout::BgraOpaque);
+    assert_eq!((frames[0].width, frames[0].height), (64, 64));
+    assert_eq!(
+        pixel(&frames[2], 32, 32),
+        [0, 0, 255, 255],
+        "rouge, en BGRA"
+    );
+    assert_eq!(
+        pixel(&frames[2], 0, 0),
+        [0, 0, 0, 255],
+        "opaque sur du noir"
+    );
+}
+
+#[test]
+fn un_flux_prend_une_frame_sur_deux_d_un_moteur_a_60() {
+    let Some(gpu) = gpu() else { return };
+    let frames = flux_rouge(
+        gpu,
+        StreamFormat {
+            width: 64,
+            height: 64,
+            fps: 30,
+        },
+        6,
+    );
+    let indices: Vec<u64> = frames.iter().map(|f| f.index).collect();
+    assert_eq!(indices, vec![0, 2, 4]);
+}
+
+#[test]
+fn changer_de_resolution_rend_comme_un_moteur_neuf() {
+    let (Some(premier), Some(second)) = (gpu(), gpu()) else {
+        return;
+    };
+    let rendu = |gpu: Gpu, depart: UVec2, resize: bool| {
+        let (c, piste, rouge, _) = une_piste();
+        let recu = Recu::default();
+        let mut moteur = Engine::new(gpu, Clock::fixed(60.0), depart, c);
+        moteur
+            .add_output(OutputSink::Cpu(Box::new(recu.clone())))
+            .unwrap();
+        moteur.push(Command::TriggerClip {
+            layer: piste,
+            clip: rouge,
+        });
+        moteur.frame(0.0);
+        if resize {
+            moteur.set_render_size(SIZE * 2).unwrap();
+        }
+        moteur.frame(0.0);
+        moteur.finish();
+        let image = recu.0.lock().unwrap().last().unwrap().clone();
+        image
+    };
+    let change = rendu(premier, SIZE, true);
+    let neuf = rendu(second, SIZE * 2, false);
+    assert_eq!((change.width, change.height), (64, 64));
+    assert_eq!(change.pixels, neuf.pixels);
+}
+
+#[test]
+fn une_resolution_impossible_est_refusee_et_ne_change_rien() {
     let Some(gpu) = gpu() else { return };
     let (c, ..) = une_piste();
-    let mut moteur = Engine::new(gpu, Clock::realtime(), SIZE, c);
-    assert_eq!(
-        moteur.add_output(OutputSink::Cpu(Box::new(Recu::default()))),
-        Err(OutputError::CpuSinkRequiresFixedClock)
+    let mut moteur = Engine::new(gpu, Clock::fixed(60.0), SIZE, c);
+    for taille in [UVec2::ZERO, UVec2::new(8, 64), UVec2::new(1 << 20, 64)] {
+        assert!(moteur.set_render_size(taille).is_err(), "{taille}");
+    }
+    assert_eq!(moteur.render_size(), SIZE);
+    moteur.frame(0.0);
+}
+
+#[test]
+fn un_echo_et_une_transition_survivent_a_un_changement_de_resolution() {
+    let Some(gpu) = gpu() else { return };
+    let (mut c, piste, _, echo) = avec_echo(FeedbackParams::default());
+    let bleu = c.add_clip(piste, carre(Graph::new(), 0.0, 1.0)).unwrap();
+    assert!(c
+        .clip_mut(bleu)
+        .unwrap()
+        .set_transition(TransitionKind::Fade, 4.0));
+    let (mut moteur, recu) = moteur(gpu, c);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: echo,
+    });
+    moteur.frame(0.0);
+    moteur.push(Command::TriggerClip {
+        layer: piste,
+        clip: bleu,
+    });
+    moteur.frame(0.0);
+    moteur.set_render_size(SIZE * 2).unwrap();
+    for _ in 0..3 {
+        moteur.frame(0.0);
+    }
+    moteur.finish();
+    assert_eq!(recu.0.lock().unwrap().last().unwrap().width, 64);
+}
+
+#[test]
+fn un_flux_suit_un_rendu_qui_passe_sous_sa_taille() {
+    let Some(gpu) = gpu() else { return };
+    let (c, ..) = une_piste();
+    let recu = Recu::default();
+    let mut moteur = Engine::new(gpu, Clock::fixed(60.0), SIZE * 2, c);
+    moteur.add_stream(
+        Box::new(recu.clone()),
+        StreamFormat {
+            width: 64,
+            height: 64,
+            fps: 60,
+        },
     );
-    moteur.frame(0.016);
-    assert!((moteur.clock().t() - 0.016).abs() < 1e-9);
+    moteur.frame(0.0);
+    moteur.set_render_size(SIZE).unwrap();
+    moteur.frame(0.0);
+    moteur.finish();
+    let tailles: Vec<u32> = recu.0.lock().unwrap().iter().map(|f| f.width).collect();
+    assert_eq!(tailles, vec![64, 32]);
 }
 
 /// Un spectre plat : tout le spectre à ce niveau.

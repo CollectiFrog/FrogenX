@@ -17,7 +17,7 @@
 //! ```text
 //! texture du compositeur ─▶ Outputs::submit
 //!                              ├─ GpuSink::encode
-//!                              ├─ passe 8 bits (si une sortie CPU est active)
+//!                              ├─ passe 8 bits, une par format attendu
 //!                              ├─ queue.submit
 //!                              ├─ GpuSink::after_submit
 //!                              └─ relecture, puis une CpuFrame par file
@@ -25,14 +25,19 @@
 
 pub mod conversion;
 pub mod fanout;
+mod live;
 pub mod monitor;
 pub mod outputs;
 pub mod png_sequence;
 pub mod preview;
 pub mod sink;
+#[cfg(windows)]
+pub mod spout;
+pub mod stream;
 
 pub use conversion::{ConversionMode, ConversionPass, Rect};
-pub use fanout::{CpuFanout, DropPolicy, QUEUE_DEPTH};
+pub use fanout::{CpuFanout, CpuSinkId, DropPolicy, FrameKey, Group, QUEUE_DEPTH};
+pub use live::READBACK_SLOTS;
 pub use monitor::{MonitorSink, MONITOR_FORMAT};
 pub use outputs::{GpuSinkId, OutputError, Outputs};
 pub use png_sequence::PngSequenceSink;
@@ -40,4 +45,5 @@ pub use preview::{
     letterbox, pick_format, pick_present_mode, FormatPreference, PresentSurface, Preview,
     PreviewHandle,
 };
-pub use sink::{CpuFrame, CpuSink, GpuFrame, GpuSink, OutputSink, SinkStatus};
+pub use sink::{CpuFrame, CpuSink, GpuFrame, GpuSink, OutputSink, PixelLayout, SinkStatus};
+pub use stream::{Cadence, StreamFormat};

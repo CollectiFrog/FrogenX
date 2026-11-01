@@ -116,6 +116,10 @@ impl Stage {
             screens: &self.screens,
             open,
             status: &self.status,
+            streams: &[],
+            streams_available: false,
+            render: (0, 0),
+            rate: 0,
         }
     }
 

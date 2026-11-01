@@ -7,7 +7,7 @@
 use frogenx_layer::{Gpu, LAYER_FORMAT};
 use frogenx_output::{
     letterbox, ConversionMode, ConversionPass, CpuFrame, CpuSink, DropPolicy, GpuFrame, GpuSink,
-    MonitorSink, OutputError, OutputSink, Outputs, SinkStatus,
+    MonitorSink, OutputSink, Outputs, PixelLayout, SinkStatus, StreamFormat,
 };
 use frogenx_render::{f16_to_f32, linear_premul_to_srgb8, read_rgba8};
 use std::sync::{Arc, Mutex};
@@ -409,10 +409,229 @@ fn retirer_deux_fois_une_sortie_gpu_ne_retire_rien_d_autre() {
 }
 
 #[test]
-fn une_sortie_cpu_est_refusee_en_temps_reel() {
+fn une_sortie_cpu_est_servie_en_temps_reel() {
     let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 4, 4, [F1, F0, F0, F1]);
+    let recu = Recu::default();
     let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
-    let refus = sorties.add(OutputSink::Cpu(Box::new(Recu::default())));
-    assert_eq!(refus, Err(OutputError::CpuSinkRequiresFixedClock));
-    assert!(sorties.statuses().is_empty());
+    sorties
+        .add(OutputSink::Cpu(Box::new(recu.clone())))
+        .expect("le temps réel accepte les sorties CPU (§8.5)");
+    jouer(&gpu, &mut sorties, &image, 0..6);
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(frames.len(), 6, "rien n'est perdu quand la sortie suit");
+    assert!(frames.windows(2).all(|p| p[0].index < p[1].index));
+    assert_eq!(frames[0].layout, PixelLayout::RgbaStraight);
+    assert_eq!(&frames[0].pixels[..4], &[255, 0, 0, 255]);
+}
+
+/// Une image unie, telle que la rendrait le compositeur.
+fn plein(gpu: &Gpu, width: u32, height: u32, couleur: [u16; 4]) -> wgpu::Texture {
+    source(gpu, width, &vec![couleur; (width * height) as usize])
+}
+
+/// Joue ces frames à 60 fps, et attend que les sorties aient tout reçu.
+fn jouer(gpu: &Gpu, sorties: &mut Outputs, image: &wgpu::Texture, frames: std::ops::Range<u32>) {
+    for i in frames {
+        sorties.submit(gpu, image, i as f64 / 60.0);
+        // Laisse le thread de relecture rendre son buffer : l'anneau n'est pas
+        // le sujet de ces tests.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    sorties.finish();
+}
+
+fn format(width: u32, height: u32, fps: u32) -> StreamFormat {
+    StreamFormat { width, height, fps }
+}
+
+#[test]
+fn un_flux_recoit_une_image_opaque_rangee_en_bgra() {
+    let Some(gpu) = gpu() else { return };
+    // Du rouge à moitié transparent : sur du noir, il reste le RGB prémultiplié.
+    let image = plein(&gpu, 32, 32, [F05, F0, F0, F05]);
+    let recu = Recu::default();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(recu.clone()), format(32, 32, 60));
+    jouer(&gpu, &mut sorties, &image, 0..1);
+
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(frames[0].layout, PixelLayout::BgraOpaque);
+    assert_eq!(&frames[0].pixels[..4], &[0, 0, 188, 255], "0,5 linéaire");
+}
+
+#[test]
+fn un_flux_est_reduit_et_garde_les_proportions_du_rendu() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 64, 64, [F1, F1, F1, F1]);
+    let recu = Recu::default();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(recu.clone()), format(32, 16, 60));
+    jouer(&gpu, &mut sorties, &image, 0..1);
+
+    let frames = recu.0.lock().unwrap();
+    assert_eq!((frames[0].width, frames[0].height), (32, 16));
+    assert_eq!(frames[0].pixels.len(), 32 * 16 * 4);
+    assert_eq!(pixel(&frames[0].pixels, 32, 1, 8), [0, 0, 0, 255], "bande");
+    assert_eq!(pixel(&frames[0].pixels, 32, 16, 8), [255, 255, 255, 255]);
+}
+
+#[test]
+fn un_rembourrage_de_ligne_ne_decale_pas_l_image() {
+    let Some(gpu) = gpu() else { return };
+    // 22 pixels : 88 octets par ligne, loin de l'alignement de 256.
+    let image = plein(&gpu, 22, 22, [F1, F0, F0, F1]);
+    let recu = Recu::default();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(recu.clone()), format(22, 22, 60));
+    jouer(&gpu, &mut sorties, &image, 0..1);
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(frames[0].pixels.len(), 22 * 22 * 4);
+    assert!(frames[0]
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [0, 0, 255, 255]));
+}
+
+#[test]
+fn deux_flux_de_meme_format_partagent_leurs_octets() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 32, 32, [F1, F1, F1, F1]);
+    let (a, b) = (Recu::default(), Recu::default());
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(a.clone()), format(32, 32, 60));
+    sorties.add_stream(Box::new(b.clone()), format(32, 32, 60));
+    jouer(&gpu, &mut sorties, &image, 0..1);
+    let (a, b) = (a.0.lock().unwrap(), b.0.lock().unwrap());
+    assert!(Arc::ptr_eq(&a[0].pixels, &b[0].pixels));
+}
+
+#[test]
+fn deux_formats_recoivent_chacun_leur_image() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 64, 64, [F1, F1, F1, F1]);
+    let (a, b) = (Recu::default(), Recu::default());
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(a.clone()), format(64, 64, 60));
+    sorties.add_stream(Box::new(b.clone()), format(32, 32, 60));
+    jouer(&gpu, &mut sorties, &image, 0..2);
+    assert_eq!(a.0.lock().unwrap()[1].width, 64);
+    assert_eq!(b.0.lock().unwrap()[1].width, 32);
+}
+
+#[test]
+fn un_flux_change_de_taille_sans_s_arreter() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 64, 64, [F1, F1, F1, F1]);
+    let recu = Recu::default();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    let id = sorties.add_stream(Box::new(recu.clone()), format(64, 64, 60));
+    for i in 0..4 {
+        if i == 2 {
+            assert!(sorties.set_stream_format(id, format(32, 32, 60)));
+        }
+        sorties.submit(&gpu, &image, i as f64 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    sorties.finish();
+    let tailles: Vec<u32> = recu.0.lock().unwrap().iter().map(|f| f.width).collect();
+    assert_eq!(tailles, vec![64, 64, 32, 32]);
+}
+
+#[test]
+fn la_cadence_d_un_flux_espace_ses_frames_sans_ralentir_le_reste() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 32, 32, [F1, F1, F1, F1]);
+    let (lent, plein_regime) = (Recu::default(), Recu::default());
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(lent.clone()), format(32, 32, 30));
+    sorties.add_stream(Box::new(plein_regime.clone()), format(16, 16, 60));
+    jouer(&gpu, &mut sorties, &image, 0..8);
+    let indices = |r: &Recu| -> Vec<u64> { r.0.lock().unwrap().iter().map(|f| f.index).collect() };
+    assert_eq!(indices(&lent), vec![0, 2, 4, 6]);
+    assert_eq!(indices(&plein_regime).len(), 8);
+}
+
+#[test]
+fn un_flux_retire_n_est_plus_servi_et_les_autres_continuent() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 32, 32, [F1, F1, F1, F1]);
+    let (parti, reste) = (Recu::default(), Recu::default());
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    let id = sorties.add_stream(Box::new(parti.clone()), format(32, 32, 60));
+    sorties.add_stream(Box::new(reste.clone()), format(32, 32, 60));
+    sorties.submit(&gpu, &image, 0.0);
+    assert!(sorties.remove_stream(id));
+    assert!(!sorties.remove_stream(id));
+    assert_eq!(sorties.stream_status(id), None);
+    assert_eq!(parti.0.lock().unwrap().len(), 1, "sa dernière frame arrive");
+    jouer(&gpu, &mut sorties, &image, 1..3);
+    assert_eq!(parti.0.lock().unwrap().len(), 1);
+    assert_eq!(reste.0.lock().unwrap().len(), 3);
+}
+
+/// Une sortie qui ne rend jamais la main tant qu'on ne la libère pas.
+struct Bloquee(Arc<Mutex<()>>);
+
+impl CpuSink for Bloquee {
+    fn submit(&mut self, _: &CpuFrame) {
+        drop(self.0.lock().unwrap());
+    }
+
+    fn status(&self) -> SinkStatus {
+        SinkStatus::Active
+    }
+}
+
+#[test]
+fn un_flux_qui_decroche_perd_ses_frames_sans_ralentir_la_boucle() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 32, 32, [F1, F1, F1, F1]);
+    let verrou = Arc::new(Mutex::new(()));
+    let tenu = verrou.lock().unwrap();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    let id = sorties.add_stream(Box::new(Bloquee(Arc::clone(&verrou))), format(32, 32, 60));
+    for i in 0..20 {
+        sorties.submit(&gpu, &image, i as f64 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(matches!(
+        sorties.stream_status(id),
+        Some(SinkStatus::Degraded { dropped }) if dropped > 0
+    ));
+    drop(tenu);
+    sorties.finish();
+}
+
+#[test]
+fn un_rendu_d_une_autre_taille_borne_les_flux_suivants() {
+    let Some(gpu) = gpu() else { return };
+    let recu = Recu::default();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossy);
+    sorties.add_stream(Box::new(recu.clone()), format(64, 64, 60));
+    sorties.submit(&gpu, &plein(&gpu, 64, 64, [F1, F1, F1, F1]), 0.0);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    sorties.submit(&gpu, &plein(&gpu, 32, 32, [F1, F1, F1, F1]), 1.0 / 60.0);
+    sorties.finish();
+    let tailles: Vec<u32> = recu.0.lock().unwrap().iter().map(|f| f.width).collect();
+    assert_eq!(tailles, vec![64, 32]);
+}
+
+#[test]
+fn en_rendu_offline_un_flux_ne_perd_aucune_frame() {
+    let Some(gpu) = gpu() else { return };
+    let image = plein(&gpu, 32, 32, [F1, F1, F1, F1]);
+    let recu = Recu::default();
+    let mut sorties = Outputs::new(&gpu, DropPolicy::Lossless);
+    sorties.add_stream(Box::new(recu.clone()), format(16, 16, 60));
+    for i in 0..6 {
+        sorties.submit(&gpu, &image, i as f64 / 60.0);
+    }
+    sorties.finish();
+    let frames = recu.0.lock().unwrap();
+    assert_eq!(frames.len(), 6);
+    assert!(frames.iter().enumerate().all(|(i, f)| f.index == i as u64));
+    assert_eq!(frames[0].width, 16);
 }

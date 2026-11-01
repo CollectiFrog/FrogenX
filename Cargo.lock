@@ -917,6 +917,7 @@ dependencies = [
  "frogenx-render",
  "png",
  "wgpu",
+ "windows",
 ]
 
 [[package]]
