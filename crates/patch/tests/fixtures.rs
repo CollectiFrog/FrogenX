@@ -4,7 +4,7 @@
 //! Si un test échoue ici, le format a changé : il faut une nouvelle version, sa
 //! migration et sa fixture, pas une fixture réécrite.
 
-use frogenx_composition::{ClipSource, Composition, Quantize, TrigTarget};
+use frogenx_composition::{ClipSource, Composition, PlayMode, Quantize, TrigTarget};
 use frogenx_core::FeatureKind;
 use frogenx_patch::{from_json, to_json, CURRENT_VERSION};
 use serde_json::Value;
@@ -15,6 +15,7 @@ const V3: &str = include_str!("fixtures/patch_v3.json");
 const V4: &str = include_str!("fixtures/patch_v4.json");
 const V5: &str = include_str!("fixtures/patch_v5.json");
 const V6: &str = include_str!("fixtures/patch_v6.json");
+const V7: &str = include_str!("fixtures/patch_v7.json");
 
 fn pistes(c: &Composition) -> Vec<String> {
     let mut ids = Vec::new();
@@ -120,11 +121,23 @@ fn la_fixture_v6_garde_la_place_d_un_noeud() {
     assert_eq!(c.graph().nodes()[0].place, Some([320.0, 48.0]));
 }
 
-/// Tant que `CURRENT_VERSION` vaut 6, relire puis réécrire la fixture rend le
+#[test]
+fn la_fixture_v7_garde_sa_video_son_mode_et_son_calage() {
+    let c = from_json(V7).unwrap();
+    let (_, params) = c.video_clips().next().expect("une vidéo");
+    assert_eq!(params.path, "D:/prises/concert.mp4");
+    assert_eq!(params.duration, 12.0);
+    let id = c.video_clips().next().unwrap().0;
+    let (_, mode, beats) = c.clip(id).unwrap().video_playback().unwrap();
+    assert_eq!(mode, PlayMode::PingPong);
+    assert_eq!(beats, 16.0);
+}
+
+/// Tant que `CURRENT_VERSION` vaut 7, relire puis réécrire la fixture rend le
 /// même contenu. Sinon, le format a changé sans changer de version.
 #[test]
 fn le_format_n_a_pas_change_sans_changer_de_version() {
-    if CURRENT_VERSION != 6 {
+    if CURRENT_VERSION != 7 {
         return;
     }
     let sans_meta = |texte: &str| {
@@ -132,6 +145,6 @@ fn le_format_n_a_pas_change_sans_changer_de_version() {
         v.as_object_mut().unwrap().remove("meta");
         v
     };
-    let reecrit = to_json(&from_json(V6).unwrap()).unwrap();
-    assert_eq!(sans_meta(&reecrit), sans_meta(V6));
+    let reecrit = to_json(&from_json(V7).unwrap()).unwrap();
+    assert_eq!(sans_meta(&reecrit), sans_meta(V7));
 }

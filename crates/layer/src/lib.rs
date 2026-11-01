@@ -29,6 +29,7 @@ pub mod shape_layer;
 pub mod space;
 pub mod tessellate;
 pub mod transition;
+pub mod video;
 
 pub use feedback::{FeedbackRenderer, FrameHistory};
 pub use frogenx_shape::{
@@ -41,3 +42,4 @@ pub use shape_layer::{ShapeContent, ShapeLayer, ShapeRenderer};
 pub use space::normalized_to_ndc;
 pub use tessellate::{Mesh, Tessellator};
 pub use transition::{mix_coverage, MixRenderer};
+pub use video::{fit_image, yuv_to_linear, VideoImage, VideoRenderer};

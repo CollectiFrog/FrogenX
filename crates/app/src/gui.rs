@@ -9,7 +9,7 @@ use frogenx_layer::Gpu;
 use frogenx_output::{FormatPreference, PresentSurface};
 use frogenx_ui::{
     theme, FileRequest, FileView, FrameView, HistoryRequest, HistoryView, Monitor, OutputRequest,
-    OutputView, UiState,
+    OutputView, UiState, VideoImport,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -179,6 +179,10 @@ impl Gui {
             output: sortie,
             file: fichier,
             detected_bpm: engine.audio().bpm,
+            video_error: self
+                .state
+                .selected
+                .and_then(|(_, clip)| engine.video_error(clip)),
             history: HistoryView {
                 undo: engine.undo_label(),
                 redo: engine.redo_label(),
@@ -226,6 +230,11 @@ impl Gui {
         self.presented += u64::from(presente);
         self.spent += debut.elapsed();
         demandes
+    }
+
+    /// Les vidéos demandées depuis la dernière lecture.
+    pub fn take_video_imports(&mut self) -> Vec<VideoImport> {
+        std::mem::take(&mut self.state.video_imports)
     }
 
     /// Annuler ou rétablir, demandé depuis la dernière lecture.

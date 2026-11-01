@@ -212,7 +212,7 @@ engageait un vrai contrat.
 ```rust
 pub struct Clip {
     pub name: String,             // ce qu'affiche sa cellule dans la grille (§23.5)
-    pub source: ClipSource,       // Shape { graph, generator, style } | Scene3d(Graph) | Video(VideoTrack)
+    pub source: ClipSource,       // Shape { graph, generator, style } | Feedback { .. } | Video { graph, params, mode } | Scene3d(Graph)
     pub effects: Vec<ShapeOp>,    // ou son équivalent vidéo/3D — chaîne en place (§16.3 bis)
     pub transport: Transport,     // Timeline ou BpmSync (§3bis.3)
     pub transition: ClipTransition,
@@ -1715,7 +1715,7 @@ retour fonctionnent, mais par à-coups. Cette limite a été choisie : tout gard
 `PositionSignal` (§3bis.3), et un seul `Signal` de plus règle sa vitesse :
 
 ```rust
-pub struct VideoRate { pub duration: f32, pub beats: Param }
+pub struct VideoRate { pub duration: Param, pub beats: Param }
 // beats <= 0 : 1, sa vitesse réelle. Sinon : duration * bpm / 60 / beats.
 ```
 
@@ -1739,6 +1739,28 @@ sauter : le chemin reste dans le fichier, et le clip revient quand le fichier re
 **Le fichier.** Version 7 : un clip porte `generator` et `style`, ou `feedback`, ou `video`, avec son
 chemin absolu, sa durée, son mode et ses `Param`.
 
+**Pièges.** `7 / 30` divisé par `1 / 30` vaut `6,9999…` : sans marge, chaque instant exact lisait
+l'image d'avant. Un saut au milieu de la dernière image ne rend rien : `Plan::Seek` vise le début de
+l'image, et un temps au-delà de la fin vaut la dernière. Le décodage matériel bouge la luminosité
+de ±1, et un test qui lit le numéro d'une image dans sa luminosité doit en tenir compte : c'est lui
+qui avait fait croire à un `-ss` décalé d'une image. Le lancement de ffmpeg se fait sur le thread du
+flux : même `spawn` retient le moteur plusieurs millisecondes. NVENC refuse moins de 145 pixels de
+large, mais pas le décodage.
+
+**Ce qui est vérifié, et comment.** Le choix entre tampon et flux se teste sur des nombres. De
+vraies vidéos, dont chaque image porte son numéro dans sa luminosité, vérifient la bonne image au
+départ, après un saut, en arrière et à la fin, le relais du tampon en temps réel, le retour au début
+sans attente, et aucun appel à plus de 30 ms. Dans le moteur : une vidéo rouge sort rouge, un fichier
+absent laisse la couche vide et dit pourquoi, une annulation garde le lecteur. Sur la vraie fenêtre,
+une vidéo 1080p60 H.264 à GOP long, sous deux pistes de formes : couleurs justes sur une capture,
+60,1 fps et 16,2 à 17,2 ms entre deux frames, et encore 15,9 à 17,4 ms calée à 2,5 fois sa vitesse,
+aucun ffmpeg restant à la fermeture.
+
+**Pas encore essayés :** l'aller-retour et la marche arrière regardés à l'écran, HAP et DXV, une
+vidéo 4K, plusieurs vidéos à la fois, le raccord de boucle sur un vrai fichier, l'import et le dépôt
+à la vraie souris. Le moteur tient 60 fps à 2,5 fois la vitesse, mais rien ne mesure encore si le
+décodeur suit lui aussi : `frame_at` ne bloque pas, il sert alors une image en retard.
+
 **Non couvert.** Un chemin relatif au patch : déplacer un dossier demande de réimporter. Les effets
 de forme sur une vidéo. Les points d'entrée et de sortie dans le fichier. Le canal alpha.
 
@@ -1757,6 +1779,7 @@ frogenx/
 ├── shape/     # primitives, opérateurs, style (ColorParam, BlendParams) ✅ (core, osc, glam)
 ├── scene3d/   # maillages, caméra, lumières, culling (core, osc, glam)
 ├── audio/     # cpal, FFT, spectre, features, tempo → AudioFeatures ✅ (core, cpal, rustfft, rtrb, triple_buffer)
+├── video/     # décodage des clips : ffmpeg en pipe, tampon de tête ✅ (aucune)
 ├── composition/ # Deck, LayerGroup, Layer, Column, Clip, CrossFader, TempoController, Trig, Command ✅ (core, osc, shape)
 ├── library/   # catalogue de clips prédéfinis, grille de départ ✅ (core, osc, shape, composition)
 ├── patch/     # format de fichier : Composition ↔ JSON, version, écriture sûre ✅ (core, osc, shape, composition, serde_json)
@@ -1967,6 +1990,7 @@ qui les livre (skill `doc-sync`).
 | Sélecteur de couleur | pastille de la couleur qui joue, champ et barre de teinte dans le panneau (§23.5) |
 | Spectrogramme | l'historique du spectre sur 2 à 30 s, en bande sous le tracé (§23.7) |
 | Enregistrement | H.264 ou ProRes par ffmpeg, avec le son, temps réel ou offline (§8.2) |
+| Clips vidéo | tout ce que lit ffmpeg, départ instantané, calage sur le tempo, muets (§9.3) |
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |

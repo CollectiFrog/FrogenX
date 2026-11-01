@@ -22,22 +22,27 @@ pub mod settings;
 pub mod streams;
 
 use frogenx_composition::{
-    sanitize_speed, Clip, ClipSource, ColumnId, Command, Composition, IdMap, LayerId,
+    sanitize_speed, Clip, ClipId, ClipSource, ColumnId, Command, Composition, IdMap, LayerId,
 };
 use frogenx_core::{
     AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph, TrigValues,
 };
 use frogenx_layer::{
     BlendParams, FeedbackRenderer, FeedbackStep, FrameHistory, Gpu, MixKind, MixRenderer,
-    RenderLayer, ShapeContent, ShapeRenderer,
+    RenderLayer, ShapeContent, ShapeRenderer, VideoImage, VideoRenderer,
 };
 use frogenx_output::{
     CpuSink, CpuSinkId, DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs,
     SinkStatus, StreamFormat,
 };
 use frogenx_render::{Compositor, LayerInput};
+use frogenx_shape::VideoStep;
+use frogenx_video::{Frame, Loader, VideoPlayer};
 use glam::UVec2;
 use history::{History, Restore};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Ce qu'on vient d'annuler ou de rétablir.
@@ -146,6 +151,9 @@ struct Track {
     renderer: ShapeRenderer,
     /// Créé au premier feedback de la piste : la plupart n'en auront jamais.
     feedback: Option<FeedbackRenderer>,
+    /// Créé à sa première vidéo.
+    video: Option<VideoRenderer>,
+    outgoing_video: Option<VideoRenderer>,
     /// Le clip qui sort d'une transition, et leur mélange : créés à la première
     /// de la piste (§3bis.2).
     outgoing: Option<ShapeRenderer>,
@@ -163,6 +171,13 @@ enum ClipLayer<'a> {
     Feedback {
         renderer: &'a mut FeedbackRenderer,
         step: FeedbackStep,
+        blend: BlendParams,
+    },
+    Video {
+        renderer: &'a mut VideoRenderer,
+        /// L'image de cet instant, tant que rien n'a pu être décodé : aucune.
+        frame: Option<Arc<Frame>>,
+        step: VideoStep,
         blend: BlendParams,
     },
     /// Deux clips mélangés : chacun garde son graphe, l'appel n'en porte qu'un.
@@ -183,6 +198,20 @@ impl RenderLayer for ClipLayer<'_> {
                 renderer, content, ..
             } => renderer.prepare(content, t, ctx, g, gpu),
             Self::Feedback { renderer, step, .. } => renderer.prepare(step, gpu),
+            Self::Video {
+                renderer,
+                frame,
+                step,
+                ..
+            } => {
+                let image = frame.as_ref().map(|f| VideoImage {
+                    width: f.width,
+                    height: f.height,
+                    data: &f.data,
+                    time: f.time,
+                });
+                renderer.prepare(image, step, gpu);
+            }
             Self::Mix {
                 incoming,
                 outgoing,
@@ -208,6 +237,7 @@ impl RenderLayer for ClipLayer<'_> {
         match self {
             Self::Shape { renderer, .. } => renderer.encode(encoder),
             Self::Feedback { renderer, .. } => renderer.encode(encoder),
+            Self::Video { renderer, .. } => renderer.encode(encoder),
             Self::Mix {
                 incoming,
                 outgoing,
@@ -225,15 +255,17 @@ impl RenderLayer for ClipLayer<'_> {
         match self {
             Self::Shape { renderer, .. } => renderer.output(),
             Self::Feedback { renderer, .. } => renderer.output(),
+            Self::Video { renderer, .. } => renderer.output(),
             Self::Mix { renderer, .. } => renderer.output(),
         }
     }
 
     fn blend(&self) -> BlendParams {
         match self {
-            Self::Shape { blend, .. } | Self::Feedback { blend, .. } | Self::Mix { blend, .. } => {
-                *blend
-            }
+            Self::Shape { blend, .. }
+            | Self::Feedback { blend, .. }
+            | Self::Video { blend, .. }
+            | Self::Mix { blend, .. } => *blend,
         }
     }
 
@@ -255,12 +287,72 @@ struct Drawing<'a> {
     blend: BlendParams,
 }
 
+/// Les lecteurs de la grille (§9.3). Un clip qui ne joue pas garde sa tête en
+/// mémoire, sans processus.
+#[derive(Default)]
+struct Players {
+    map: HashMap<ClipId, VideoPlayer>,
+    loader: Loader,
+    /// Rendu offline : attendre chaque image plutôt que d'en sauter (§4).
+    exact: bool,
+    /// Les clips lus cette frame.
+    used: Vec<ClipId>,
+}
+
+impl Players {
+    /// Un lecteur par vidéo de la grille, aucun de plus.
+    fn sync(&mut self, composition: &Composition, render: (u32, u32)) {
+        self.map.retain(|id, _| composition.clip(*id).is_some());
+        for (id, params) in composition.video_clips() {
+            if !self.map.contains_key(&id) {
+                let lecteur = VideoPlayer::open(Path::new(&params.path), render, &self.loader);
+                self.map.insert(id, lecteur);
+            }
+        }
+    }
+
+    fn frame(&mut self, id: ClipId, t: f64) -> Option<Arc<Frame>> {
+        self.used.push(id);
+        let lecteur = self.map.get_mut(&id)?;
+        if self.exact {
+            lecteur.frame_at_blocking(t)
+        } else {
+            lecteur.frame_at(t)
+        }
+    }
+
+    /// Ce qui n'a pas joué cette frame arrête son flux.
+    fn pause_unused(&mut self) {
+        for (id, lecteur) in &mut self.map {
+            if !self.used.contains(id) {
+                lecteur.pause();
+            }
+        }
+        self.used.clear();
+    }
+
+    /// Les identifiants ont changé : les lecteurs suivent leur clip, et une
+    /// annulation ne redécode rien.
+    fn remap(&mut self, map: &IdMap) {
+        let lecteurs = std::mem::take(&mut self.map);
+        self.map = lecteurs
+            .into_iter()
+            .filter_map(|(id, lecteur)| Some((map.clip(id)?, lecteur)))
+            .collect();
+    }
+}
+
+/// Les renderers vidéo d'une place de la piste.
+type VideoSlot<'a> = &'a mut Option<VideoRenderer>;
+
 impl<'a> Drawing<'a> {
     fn layer(
         &self,
-        clip: &'a Clip,
+        (id, clip): (ClipId, &'a Clip),
         renderer: &'a mut ShapeRenderer,
         feedback: &'a mut Option<FeedbackRenderer>,
+        video: VideoSlot<'a>,
+        players: &mut Players,
     ) -> ClipLayer<'a> {
         match &clip.source {
             ClipSource::Shape {
@@ -282,6 +374,15 @@ impl<'a> Drawing<'a> {
                     renderer: feedback
                         .get_or_insert_with(|| FeedbackRenderer::new(gpu, taille, history)),
                     step: params.step(graph, self.dt * vitesse as f64),
+                    blend: self.blend,
+                }
+            }
+            ClipSource::Video { graph, params, .. } => {
+                let (gpu, taille) = (self.gpu, self.size);
+                ClipLayer::Video {
+                    renderer: video.get_or_insert_with(|| VideoRenderer::new(gpu, taille)),
+                    frame: clip.video_time().and_then(|t| players.frame(id, t)),
+                    step: params.step(graph),
                     blend: self.blend,
                 }
             }
@@ -323,6 +424,7 @@ pub struct Engine {
     composition: Composition,
     size: UVec2,
     tracks: Vec<Track>,
+    players: Players,
     /// Les pistes du deck actif, réécrites à chaque frame sans allouer.
     order: Vec<LayerId>,
     commands: Vec<Command>,
@@ -350,6 +452,7 @@ impl Engine {
         let bpm = composition.bpm();
         let mut steps = History::default();
         steps.reset(frogenx_patch::to_json(&composition).ok());
+        let exact = matches!(clock.mode(), ClockMode::Fixed { .. });
         Self {
             gpu,
             clock,
@@ -359,6 +462,10 @@ impl Engine {
             composition,
             size,
             tracks: Vec::new(),
+            players: Players {
+                exact,
+                ..Default::default()
+            },
             order: Vec::new(),
             commands: Vec::new(),
             placements: Vec::new(),
@@ -426,6 +533,8 @@ impl Engine {
         self.size = size;
         self.compositor.resize(&self.gpu, size);
         self.history = FrameHistory::new(&self.gpu, size);
+        // Le décodage suit le rendu : les têtes se relisent à la nouvelle taille.
+        self.players.map.clear();
         for track in &mut self.tracks {
             track.renderer.resize(size, &self.gpu);
             track.feedback = None;
@@ -472,6 +581,7 @@ impl Engine {
         self.bpm = composition.bpm();
         self.steps.reset(frogenx_patch::to_json(&composition).ok());
         self.composition = composition;
+        self.players.map.clear();
         self.dirty = false;
     }
 
@@ -517,6 +627,7 @@ impl Engine {
     fn restore(&mut self, restaure: Restore) -> Option<Undone> {
         let mut grille = frogenx_patch::from_json(&restaure.json).ok()?;
         let map = grille.adopt_from(&self.composition);
+        self.players.remap(&map);
         self.commands.clear();
         self.placements.clear();
         self.composition = grille;
@@ -580,6 +691,9 @@ impl Engine {
             self.commit_step();
         }
 
+        self.players
+            .sync(&self.composition, (self.size.x, self.size.y));
+
         // Pas une modification du fichier : le choix de suivre en est une (§7.1).
         self.composition.follow_tempo(&self.audio);
 
@@ -639,7 +753,10 @@ impl Engine {
             let Some(piste) = composition.layer(track.layer) else {
                 continue;
             };
-            let Some(clip) = piste.active_clip().and_then(|id| composition.clip(id)) else {
+            let Some(clip_id) = piste.active_clip() else {
+                continue;
+            };
+            let Some(clip) = composition.clip(clip_id) else {
                 continue;
             };
             let dessin = Drawing {
@@ -652,18 +769,27 @@ impl Engine {
             };
             let transition = composition
                 .transition_view(track.layer)
-                .and_then(|v| Some((v, composition.clip(v.from)?)));
-            let entrant = dessin.layer(clip, &mut track.renderer, &mut track.feedback);
+                .and_then(|v| Some((v, v.from, composition.clip(v.from)?)));
+            let actif = piste.active_clip();
+            let entrant = dessin.layer(
+                (actif.unwrap_or(clip_id), clip),
+                &mut track.renderer,
+                &mut track.feedback,
+                &mut track.video,
+                &mut self.players,
+            );
             let couche = match transition {
                 None => entrant,
-                Some((vue, sortant)) => {
+                Some((vue, sortant_id, sortant)) => {
                     let (gpu, taille) = (&self.gpu, self.size);
                     let sortie = dessin.layer(
-                        sortant,
+                        (sortant_id, sortant),
                         track
                             .outgoing
                             .get_or_insert_with(|| ShapeRenderer::new(gpu, taille)),
                         &mut track.outgoing_feedback,
+                        &mut track.outgoing_video,
+                        &mut self.players,
                     );
                     ClipLayer::Mix {
                         incoming: (Box::new(entrant), clip.graph()),
@@ -679,6 +805,7 @@ impl Engine {
             };
             couches.push((couche, clip.graph()));
         }
+        self.players.pause_unused();
         let mut inputs: Vec<LayerInput> = couches
             .iter_mut()
             .map(|(layer, graph)| LayerInput {
@@ -720,6 +847,8 @@ impl Engine {
                         layer: *layer,
                         renderer: ShapeRenderer::new(&self.gpu, self.size),
                         feedback: None,
+                        video: None,
+                        outgoing_video: None,
                         outgoing: None,
                         outgoing_feedback: None,
                         mix: None,
@@ -746,6 +875,11 @@ impl Engine {
 
     pub fn composition(&self) -> &Composition {
         &self.composition
+    }
+
+    /// Pourquoi une vidéo ne se lit pas, en mots.
+    pub fn video_error(&self, clip: ClipId) -> Option<&str> {
+        self.players.map.get(&clip)?.error()
     }
 
     /// Le tempo de la dernière frame.

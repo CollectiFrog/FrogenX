@@ -1,0 +1,2961 @@
+{
+  "version": 7,
+  "meta": {
+    "app": "0.1.0"
+  },
+  "tempo": {
+    "fixed": 128.0
+  },
+  "tempo_follow": false,
+  "quantize": "bar",
+  "analysis": {
+    "method": "peak",
+    "freq_scale": "log",
+    "amp_scale": "db",
+    "window": {
+      "fixed": 0.042666666
+    }
+  },
+  "columns": 8,
+  "active_deck": 0,
+  "graph": [
+    {
+      "kind": "Lfo",
+      "deps": [],
+      "fields": {
+        "freq": {
+          "fixed": 0.25
+        },
+        "unipolar": true,
+        "waveform": "sine"
+      },
+      "place": [
+        320.0,
+        48.0
+      ]
+    },
+    {
+      "kind": "SpectrumZone",
+      "deps": [],
+      "fields": {
+        "freq_max": {
+          "fixed": 120.0
+        },
+        "freq_min": {
+          "fixed": 30.0
+        },
+        "hysteresis": {
+          "fixed": 0.05
+        },
+        "level_max": {
+          "fixed": 1.0
+        },
+        "level_min": {
+          "fixed": 0.7
+        }
+      }
+    },
+    {
+      "kind": "Divider",
+      "deps": [
+        1
+      ],
+      "fields": {
+        "every": {
+          "fixed": 4.0
+        },
+        "input": {
+          "modulated": {
+            "base": 0.0,
+            "depth": 1.0,
+            "source": 1
+          }
+        }
+      }
+    },
+    {
+      "kind": "Envelope",
+      "deps": [
+        2
+      ],
+      "fields": {
+        "attack": 0.0,
+        "input": {
+          "modulated": {
+            "base": 0.0,
+            "depth": 1.0,
+            "source": 2
+          }
+        },
+        "release": 0.2
+      }
+    }
+  ],
+  "trigs": [
+    {
+      "name": "Grosse caisse",
+      "target": {
+        "column": 2
+      },
+      "channel": 0,
+      "gate": 1,
+      "pulse": 2,
+      "flash": 3
+    }
+  ],
+  "decks": [
+    {
+      "name": "Principal",
+      "groups": [
+        {
+          "layers": [
+            {
+              "name": "Fond",
+              "blend": {
+                "opacity": {
+                  "fixed": 1.0
+                },
+                "mode": "normal"
+              },
+              "active": 0,
+              "cells": [
+                {
+                  "name": "Nuit",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rectangle",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "hauteur": {
+                        "fixed": 4.0
+                      },
+                      "largeur": {
+                        "fixed": 4.0
+                      },
+                      "segments d'arrondi": {
+                        "fixed": 8.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.03
+                      },
+                      "g": {
+                        "fixed": 0.03
+                      },
+                      "b": {
+                        "fixed": 0.06
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 1,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "concert",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "VideoRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        },
+                        "duration": {
+                          "fixed": 12.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": null,
+                  "effects": [],
+                  "style": null,
+                  "feedback": null,
+                  "video": {
+                    "path": "D:/prises/concert.mp4",
+                    "duration": 12.0,
+                    "mode": "ping_pong",
+                    "params": {
+                      "kind": "Vidéo",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "fixed": 0.0
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "transport": {
+                    "timeline": {
+                      "position": 1,
+                      "speed": {
+                        "modulated": {
+                          "base": 0.0,
+                          "depth": 1.0,
+                          "source": 0
+                        }
+                      }
+                    }
+                  },
+                  "transition": "cut"
+                },
+                null,
+                null,
+                {
+                  "name": "Aurore",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        4
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 4
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rectangle",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "hauteur": {
+                        "fixed": 4.0
+                      },
+                      "largeur": {
+                        "fixed": 4.0
+                      },
+                      "segments d'arrondi": {
+                        "fixed": 8.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "modulated": {
+                          "base": 0.08,
+                          "depth": 0.05,
+                          "source": 3
+                        }
+                      },
+                      "g": {
+                        "modulated": {
+                          "base": 0.16,
+                          "depth": 0.08,
+                          "source": 1
+                        }
+                      },
+                      "b": {
+                        "modulated": {
+                          "base": 0.26,
+                          "depth": 0.08,
+                          "source": 3
+                        }
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 5,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Marée",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rectangle",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "hauteur": {
+                        "fixed": 4.0
+                      },
+                      "largeur": {
+                        "fixed": 4.0
+                      },
+                      "segments d'arrondi": {
+                        "fixed": 8.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.02
+                      },
+                      "g": {
+                        "modulated": {
+                          "base": 0.17,
+                          "depth": 0.07,
+                          "source": 1
+                        }
+                      },
+                      "b": {
+                        "modulated": {
+                          "base": 0.24,
+                          "depth": 0.08,
+                          "source": 1
+                        }
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Braise",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 2.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Noise",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "amp": {
+                          "fixed": 1.0
+                        },
+                        "octaves": 1,
+                        "persistence": 0.5,
+                        "rate": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "seed": 11
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rectangle",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "hauteur": {
+                        "fixed": 4.0
+                      },
+                      "largeur": {
+                        "fixed": 4.0
+                      },
+                      "segments d'arrondi": {
+                        "fixed": 8.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "modulated": {
+                          "base": 0.26,
+                          "depth": 0.1,
+                          "source": 1
+                        }
+                      },
+                      "g": {
+                        "modulated": {
+                          "base": 0.07,
+                          "depth": 0.03,
+                          "source": 1
+                        }
+                      },
+                      "b": {
+                        "fixed": 0.03
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                null
+              ]
+            },
+            {
+              "name": "Formes",
+              "blend": {
+                "opacity": {
+                  "fixed": 1.0
+                },
+                "mode": "normal"
+              },
+              "active": 0,
+              "cells": [
+                {
+                  "name": "Blob",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "TrigInput",
+                      "deps": [],
+                      "fields": {
+                        "channel": 0,
+                        "output": "flash"
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Ellipse",
+                    "fields": {
+                      "excentricité": {
+                        "fixed": 1.0
+                      },
+                      "rayon": {
+                        "modulated": {
+                          "base": 0.72,
+                          "depth": 1.0,
+                          "source": 4
+                        }
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Déformation",
+                      "fields": {
+                        "force": {
+                          "fixed": 0.08
+                        },
+                        "fréquence": {
+                          "fixed": 5.0
+                        },
+                        "phase": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 1
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Bruit",
+                      "fields": {
+                        "décalage": {
+                          "fixed": 0.0
+                        },
+                        "force": {
+                          "fixed": 0.06
+                        },
+                        "graine": 7,
+                        "échelle": {
+                          "fixed": 6.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lissage",
+                      "fields": {
+                        "force": {
+                          "fixed": 0.5
+                        },
+                        "passes": {
+                          "fixed": 2.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.08
+                      },
+                      "g": {
+                        "fixed": 0.22
+                      },
+                      "b": {
+                        "fixed": 0.55
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Rosace",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Polygone",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "côtés": {
+                        "fixed": 3.0
+                      },
+                      "rayon": {
+                        "fixed": 0.2
+                      },
+                      "rotation": {
+                        "fixed": 0.0
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.46
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "fixed": 0.0
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Répétition radiale",
+                      "fields": {
+                        "copies": {
+                          "fixed": 8.0
+                        },
+                        "décalage": {
+                          "fixed": 0.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 0.6,
+                            "source": 1
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 1.0
+                      },
+                      "g": {
+                        "fixed": 0.55
+                      },
+                      "b": {
+                        "fixed": 0.15
+                      },
+                      "a": {
+                        "fixed": 0.9
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Polygone",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Polygone",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "côtés": {
+                        "modulated": {
+                          "base": 6.0,
+                          "depth": 3.0,
+                          "source": 1
+                        }
+                      },
+                      "rayon": {
+                        "fixed": 0.7
+                      },
+                      "rotation": {
+                        "fixed": 0.0
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.75
+                      },
+                      "g": {
+                        "fixed": 0.12
+                      },
+                      "b": {
+                        "fixed": 0.4
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Fleur",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rose",
+                    "fields": {
+                      "pétales": {
+                        "fixed": 5.0
+                      },
+                      "rayon": {
+                        "fixed": 0.8
+                      },
+                      "segments": {
+                        "fixed": 512.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.2,
+                            "source": 1
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.1
+                      },
+                      "g": {
+                        "fixed": 0.6
+                      },
+                      "b": {
+                        "fixed": 0.45
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Mandala",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 4.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        4
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 4
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Étoile",
+                    "fields": {
+                      "branches": {
+                        "fixed": 5.0
+                      },
+                      "creux": {
+                        "modulated": {
+                          "base": 0.45,
+                          "depth": 0.2,
+                          "source": 1
+                        }
+                      },
+                      "rayon": {
+                        "fixed": 0.2
+                      },
+                      "rotation": {
+                        "fixed": 0.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.6
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "fixed": 0.0
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Répétition radiale",
+                      "fields": {
+                        "copies": {
+                          "fixed": 12.0
+                        },
+                        "décalage": {
+                          "fixed": 0.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 3.1415927,
+                            "source": 3
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.9
+                      },
+                      "g": {
+                        "fixed": 0.3
+                      },
+                      "b": {
+                        "fixed": 0.6
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 5,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Cristal",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 4.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        4
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 4
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Étoile",
+                    "fields": {
+                      "branches": {
+                        "fixed": 6.0
+                      },
+                      "creux": {
+                        "modulated": {
+                          "base": 0.5,
+                          "depth": 0.18,
+                          "source": 1
+                        }
+                      },
+                      "rayon": {
+                        "fixed": 0.8
+                      },
+                      "rotation": {
+                        "fixed": 0.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 3.1415927,
+                            "source": 3
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.35
+                      },
+                      "g": {
+                        "fixed": 0.75
+                      },
+                      "b": {
+                        "fixed": 0.95
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 5,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Engrenage",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rectangle",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "hauteur": {
+                        "fixed": 0.12
+                      },
+                      "largeur": {
+                        "fixed": 0.24
+                      },
+                      "segments d'arrondi": {
+                        "fixed": 8.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.62
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "fixed": 0.0
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Répétition radiale",
+                      "fields": {
+                        "copies": {
+                          "fixed": 14.0
+                        },
+                        "décalage": {
+                          "fixed": 0.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 3.1415927,
+                            "source": 1
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.7
+                      },
+                      "g": {
+                        "fixed": 0.72
+                      },
+                      "b": {
+                        "fixed": 0.78
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Kaléidoscope",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 4.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Noise",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "amp": {
+                          "fixed": 1.0
+                        },
+                        "octaves": 1,
+                        "persistence": 0.5,
+                        "rate": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "seed": 23
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        4
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 4
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Polygone",
+                    "fields": {
+                      "arrondi": {
+                        "fixed": 0.0
+                      },
+                      "côtés": {
+                        "fixed": 4.0
+                      },
+                      "rayon": {
+                        "fixed": 0.3
+                      },
+                      "rotation": {
+                        "fixed": 0.0
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Bruit",
+                      "fields": {
+                        "décalage": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 2.0,
+                            "source": 1
+                          }
+                        },
+                        "force": {
+                          "fixed": 0.1
+                        },
+                        "graine": 23,
+                        "échelle": {
+                          "fixed": 3.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.4
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "fixed": 0.0
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Répétition radiale",
+                      "fields": {
+                        "copies": {
+                          "fixed": 6.0
+                        },
+                        "décalage": {
+                          "fixed": 0.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 3.1415927,
+                            "source": 3
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": {
+                      "r": {
+                        "fixed": 0.2
+                      },
+                      "g": {
+                        "fixed": 0.8
+                      },
+                      "b": {
+                        "fixed": 0.75
+                      },
+                      "a": {
+                        "fixed": 1.0
+                      }
+                    },
+                    "stroke": null
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 5,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                }
+              ]
+            },
+            {
+              "name": "Traits",
+              "blend": {
+                "opacity": {
+                  "modulated": {
+                    "base": 0.45,
+                    "depth": 0.55,
+                    "source": 0
+                  }
+                },
+                "mode": "add"
+              },
+              "active": 0,
+              "cells": [
+                {
+                  "name": "Étoile",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Étoile",
+                    "fields": {
+                      "branches": {
+                        "fixed": 7.0
+                      },
+                      "creux": {
+                        "fixed": 0.42
+                      },
+                      "rayon": {
+                        "fixed": 0.95
+                      },
+                      "rotation": {
+                        "fixed": 0.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 3.1415927,
+                            "source": 1
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.012
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Lissajous",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Lissajous",
+                    "fields": {
+                      "amplitude": {
+                        "fixed": 1.0
+                      },
+                      "fréquence x": {
+                        "fixed": 3.0
+                      },
+                      "fréquence y": {
+                        "fixed": 2.0
+                      },
+                      "phase": {
+                        "modulated": {
+                          "base": 0.0,
+                          "depth": 0.5,
+                          "source": 1
+                        }
+                      },
+                      "segments": {
+                        "fixed": 512.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.008
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Anneau",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 4.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Ellipse",
+                    "fields": {
+                      "excentricité": {
+                        "fixed": 1.0
+                      },
+                      "rayon": {
+                        "fixed": 0.85
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Déformation",
+                      "fields": {
+                        "force": {
+                          "fixed": 0.12
+                        },
+                        "fréquence": {
+                          "fixed": 3.0
+                        },
+                        "phase": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 1
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.01
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Superformule",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Superformule",
+                    "fields": {
+                      "a": {
+                        "fixed": 1.0
+                      },
+                      "b": {
+                        "fixed": 1.0
+                      },
+                      "n1": {
+                        "modulated": {
+                          "base": 1.0,
+                          "depth": 0.4,
+                          "source": 1
+                        }
+                      },
+                      "n2": {
+                        "fixed": 1.0
+                      },
+                      "n3": {
+                        "fixed": 1.0
+                      },
+                      "rayon": {
+                        "fixed": 1.0
+                      },
+                      "segments": {
+                        "fixed": 256.0
+                      },
+                      "symétrie": {
+                        "fixed": 6.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.008
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Arcs",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 4.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "saw"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        4
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 4
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Arc",
+                    "fields": {
+                      "début": {
+                        "fixed": 0.0
+                      },
+                      "ouverture": {
+                        "modulated": {
+                          "base": 2.5,
+                          "depth": 1.5,
+                          "source": 1
+                        }
+                      },
+                      "rayon": {
+                        "fixed": 0.8
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Répétition radiale",
+                      "fields": {
+                        "copies": {
+                          "fixed": 3.0
+                        },
+                        "décalage": {
+                          "fixed": 0.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Transformation",
+                      "fields": {
+                        "position x": {
+                          "fixed": 0.0
+                        },
+                        "position y": {
+                          "fixed": 0.0
+                        },
+                        "rotation": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 3.1415927,
+                            "source": 3
+                          }
+                        },
+                        "échelle": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.016
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 5,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Spirographe",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 16.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Rose",
+                    "fields": {
+                      "pétales": {
+                        "modulated": {
+                          "base": 7.0,
+                          "depth": 2.0,
+                          "source": 1
+                        }
+                      },
+                      "rayon": {
+                        "fixed": 0.9
+                      },
+                      "segments": {
+                        "fixed": 512.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.006
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Anneau",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 4.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Ellipse",
+                    "fields": {
+                      "excentricité": {
+                        "fixed": 1.0
+                      },
+                      "rayon": {
+                        "fixed": 0.85
+                      },
+                      "segments": {
+                        "fixed": 128.0
+                      }
+                    }
+                  },
+                  "effects": [
+                    {
+                      "kind": "Déformation",
+                      "fields": {
+                        "force": {
+                          "fixed": 0.12
+                        },
+                        "fréquence": {
+                          "fixed": 3.0
+                        },
+                        "phase": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 1
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.01
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                },
+                {
+                  "name": "Superformule",
+                  "speed": {
+                    "fixed": 1.0
+                  },
+                  "graph": [
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 8.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "Lfo",
+                      "deps": [
+                        0
+                      ],
+                      "fields": {
+                        "freq": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 0
+                          }
+                        },
+                        "unipolar": false,
+                        "waveform": "sine"
+                      }
+                    },
+                    {
+                      "kind": "BeatRate",
+                      "deps": [],
+                      "fields": {
+                        "beats": {
+                          "fixed": 1.0
+                        }
+                      }
+                    },
+                    {
+                      "kind": "PositionSignal",
+                      "deps": [
+                        2
+                      ],
+                      "fields": {
+                        "speed": {
+                          "modulated": {
+                            "base": 0.0,
+                            "depth": 1.0,
+                            "source": 2
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "generator": {
+                    "kind": "Superformule",
+                    "fields": {
+                      "a": {
+                        "fixed": 1.0
+                      },
+                      "b": {
+                        "fixed": 1.0
+                      },
+                      "n1": {
+                        "modulated": {
+                          "base": 1.0,
+                          "depth": 0.4,
+                          "source": 1
+                        }
+                      },
+                      "n2": {
+                        "fixed": 1.0
+                      },
+                      "n3": {
+                        "fixed": 1.0
+                      },
+                      "rayon": {
+                        "fixed": 1.0
+                      },
+                      "segments": {
+                        "fixed": 256.0
+                      },
+                      "symétrie": {
+                        "fixed": 6.0
+                      }
+                    }
+                  },
+                  "effects": [],
+                  "style": {
+                    "fill": null,
+                    "stroke": {
+                      "width": {
+                        "fixed": 0.008
+                      },
+                      "color": {
+                        "r": {
+                          "fixed": 0.9
+                        },
+                        "g": {
+                          "fixed": 0.95
+                        },
+                        "b": {
+                          "fixed": 1.0
+                        },
+                        "a": {
+                          "fixed": 1.0
+                        }
+                      }
+                    }
+                  },
+                  "feedback": null,
+                  "transport": {
+                    "bpm_sync": {
+                      "position": 3,
+                      "duration_beats": {
+                        "fixed": 8.0
+                      },
+                      "play_mode": "loop"
+                    }
+                  },
+                  "transition": "cut"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "state": null
+}

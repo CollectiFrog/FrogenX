@@ -122,6 +122,12 @@ pub enum Command {
         mode: PlayMode,
         beats: f32,
     },
+    /// Choisit la lecture d'une vidéo : `beats` à `0` pour sa vitesse réelle (§9.3).
+    SetVideoPlayback {
+        clip: ClipId,
+        mode: PlayMode,
+        beats: f32,
+    },
     /// L'éditeur de nœuds (§23.10).
     AddNode {
         scope: GraphScope,
@@ -223,7 +229,7 @@ impl Command {
             Self::SetTrigModulation { .. } => "Source de trig",
             Self::SetAudioModulation { .. } => "Source audio",
             Self::SetClipTransition { .. } => "Transition",
-            Self::SetClipPlayback { .. } => "Lecture",
+            Self::SetClipPlayback { .. } | Self::SetVideoPlayback { .. } => "Lecture",
             Self::AddNode { .. } => "Ajout d'un nœud",
             Self::RemoveNode { .. } => "Retrait d'un nœud",
             Self::Connect { .. } | Self::Disconnect { .. } => "Câblage",
@@ -266,6 +272,7 @@ impl Command {
             | Self::SetTempoFollow(_)
             | Self::SetClipTransition { .. }
             | Self::SetClipPlayback { .. }
+            | Self::SetVideoPlayback { .. }
             | Self::AddNode { .. }
             | Self::RemoveNode { .. }
             | Self::Connect { .. }
@@ -370,6 +377,9 @@ impl Composition {
             Command::SetClipPlayback { clip, mode, beats } => self
                 .clip_mut(clip)
                 .is_some_and(|c| c.set_playback(mode, beats)),
+            Command::SetVideoPlayback { clip, mode, beats } => self
+                .clip_mut(clip)
+                .is_some_and(|c| c.set_video_playback(mode, beats)),
             Command::AddNode { scope, kind } => self.add_node(scope, kind).is_some(),
             Command::RemoveNode { scope, node } => self.remove_node(scope, node),
             Command::Connect { target, source } => self.connect(target, source),

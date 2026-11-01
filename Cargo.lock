@@ -846,6 +846,7 @@ dependencies = [
  "frogenx-render",
  "frogenx-shape",
  "frogenx-ui",
+ "frogenx-video",
  "glam",
  "pollster 1.0.1",
  "rfd",
@@ -969,6 +970,10 @@ dependencies = [
  "frogenx-osc",
  "frogenx-shape",
 ]
+
+[[package]]
+name = "frogenx-video"
+version = "0.1.0"
 
 [[package]]
 name = "futures-core"

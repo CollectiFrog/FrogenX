@@ -17,7 +17,7 @@ use frogenx_output::{
     CpuFrame, CpuSink, GpuFrame, GpuSink, OutputSink, PixelLayout, PngSequenceSink, SinkStatus,
     StreamFormat,
 };
-use frogenx_shape::{EffectKind, FeedbackParams, Rect};
+use frogenx_shape::{EffectKind, FeedbackParams, Rect, VideoParams};
 use glam::UVec2;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1283,6 +1283,104 @@ fn annuler_l_ordre_des_effets_le_rend() {
     let fait = m.undo().expect("un pas à annuler");
     assert_eq!(noms(&m, fait.map.clip(rouge).unwrap()), avant);
     m.finish();
+}
+
+/// Une vidéo d'une seule couleur, fabriquée par ffmpeg. `None` sans lui : le test
+/// s'arrête avec succès, comme sans GPU (§24.3).
+fn video_unie(nom: &str, couleur: &str) -> Option<std::path::PathBuf> {
+    let f = std::env::temp_dir().join(format!("frogenx-{nom}-{}.mp4", std::process::id()));
+    let fait = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+        .args(["-i", &format!("color={couleur}:s=64x64:r=30:d=2")])
+        .args(["-c:v", "libx264", "-qp", "10", "-pix_fmt", "yuv420p"])
+        .arg(&f)
+        .status()
+        .is_ok_and(|s| s.success());
+    if !fait {
+        eprintln!("ffmpeg absent, test sauté (§9.3)");
+    }
+    fait.then_some(f)
+}
+
+fn clip_video(fichier: &std::path::Path) -> Clip {
+    Clip::video(VideoParams::new(fichier.display().to_string(), 2.0))
+}
+
+/// Une piste, deux clips : la vidéo dans la première case, puis une forme.
+fn piste_video(fichier: &std::path::Path) -> (Composition, LayerId, ClipId, ClipId) {
+    let (mut composition, piste, rouge, bleu) = une_piste();
+    composition.remove_clip(piste, composition.columns()[0]);
+    let colonne = composition.columns()[0];
+    let video = composition
+        .place_clip(piste, colonne, clip_video(fichier))
+        .unwrap();
+    let _ = rouge;
+    (composition, piste, video, bleu)
+}
+
+#[test]
+fn une_video_se_dessine_a_l_image() {
+    let Some(gpu) = gpu() else { return };
+    let Some(fichier) = video_unie("rouge", "red") else {
+        return;
+    };
+    let (composition, piste, video, _) = piste_video(&fichier);
+    let (mut m, recu) = moteur(gpu, composition);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: video,
+    });
+    frames(&mut m, 3);
+    m.finish();
+    let p = recu.dernier_pixel(16, 16);
+    assert!(p[0] > 240 && p[1] < 30 && p[2] < 30, "{p:?}");
+    assert_eq!(p[3], 255);
+    let _ = std::fs::remove_file(fichier);
+}
+
+#[test]
+fn une_video_introuvable_dit_pourquoi_sans_rien_casser() {
+    let Some(gpu) = gpu() else { return };
+    let (mut composition, piste, rouge, _) = une_piste();
+    composition.remove_clip(piste, composition.columns()[0]);
+    let colonne = composition.columns()[0];
+    let absente = std::path::Path::new("n-existe-pas.mp4");
+    let video = composition
+        .place_clip(piste, colonne, clip_video(absente))
+        .unwrap();
+    let _ = rouge;
+    let (mut m, recu) = moteur(gpu, composition);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: video,
+    });
+    frames(&mut m, 3);
+    m.finish();
+    assert_eq!(recu.dernier_pixel(16, 16)[3], 0, "la couche reste vide");
+    assert!(m.video_error(video).unwrap().contains("n-existe-pas"));
+}
+
+#[test]
+fn annuler_rend_une_video_sans_la_redecoder() {
+    let Some(gpu) = gpu() else { return };
+    let Some(fichier) = video_unie("annule", "blue") else {
+        return;
+    };
+    let (composition, piste, video, _) = piste_video(&fichier);
+    let (mut m, _) = moteur(gpu, composition);
+    m.push(Command::TriggerClip {
+        layer: piste,
+        clip: video,
+    });
+    frames(&mut m, 3);
+    m.push(Command::AddColumn);
+    frames(&mut m, 20);
+    let fait = m.undo().expect("un pas à annuler");
+    let suit = fait.map.clip(video).unwrap();
+    assert_eq!(m.video_error(suit), None);
+    frames(&mut m, 2);
+    m.finish();
+    let _ = std::fs::remove_file(fichier);
 }
 
 #[test]

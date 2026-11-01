@@ -32,7 +32,7 @@ Détail dans la skill `modular-design`, contrats complets en partie II de l'arch
 
 ## Règle de dépendance des crates
 
-`core` → `osc` → `shape` → `composition` → `audio` → `library` → `patch` → `layer` → `render` → `output` →
+`core` → `osc` → `shape` → `composition` → `audio` → `video` → `library` → `patch` → `layer` → `render` → `output` →
 `ui` → `app`, les flèches vers le haut. `core` ne dépend de rien ; `shape` et `composition` ne
 connaissent ni wgpu ni l'audio.
 
@@ -55,9 +55,9 @@ d'elles connaît le GPU, la carte son ou une fenêtre » (docs/ARCHITECTURE.md �
 
 ## État
 
-**Étapes 1 à 11 faites : la première version est là, avec le feedback, les flux et l'enregistrement.** `cargo run` ouvre l'application : une interface egui sur la
+**Étapes 1 à 12 faites : la première version est là, avec le feedback, les flux, l'enregistrement et les clips vidéo.** `cargo run` ouvre l'application : une interface egui sur la
 grille de départ, à 60 fps. On y déclenche des clips, on en glisse d'autres depuis la
-bibliothèque, on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
+bibliothèque, on importe des vidéos (clic droit sur une case vide), on règle leurs paramètres, leur vitesse et le tempo ; au clavier, 1 à 8 pour
 les colonnes, Espace pour taper et R pour poser le premier temps. Les clips peuvent attendre le
 prochain temps (`Quantize`), et la grille des temps se recale sans saut (`BeatGrid`, §3bis.3). Le menu `Sortie` envoie l'image en plein écran sur un
 autre écran (§8.4), publie des flux Spout que KyberFrog porte sur le réseau, à la résolution et
@@ -94,13 +94,17 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   features fixes et BPM (`features.rs`, `tempo.rs`, §7.1). Seul
   `capture.rs` touche à la carte son ; le reste se teste sur des signaux de synthèse. Dépend
   de `core` seule : `app` pose les features dans `Engine` (`set_audio`).
+- `crates/video` : le décodage des clips vidéo (§9.3), ffmpeg en pipe et tampon de tête ; `plan` y
+  décide d'où vient une image. Ne dépend de rien, ni wgpu ni `Graph`. `app` passe ses images à
+  `VideoRenderer` (`layer`), qui convertit le YUV en shader.
 - `crates/library` : les 27 clips prédéfinis et la grille de départ (§23.6), en code
   jusqu'au format de l'étape 7e. Sans GPU ni carte son.
 - `crates/patch` : le format de fichier (§19), `Composition` ↔ JSON, version et fixture,
   écriture par fichier temporaire. Seule crate à connaître le JSON ; `core` décrit un nœud
   par une `Spec` neutre. Un nouveau `Signal` doit entrer dans `composition/src/signals.rs`.
-- Un clip est une forme ou un écho (`ClipSource::Feedback`, §6.1) : l'écho relit l'image
-  finale de la frame d'avant, et ses réglages s'expriment par seconde, jamais par frame.
+- Un clip est une forme, un écho (`ClipSource::Feedback`, §6.1) ou une vidéo (`ClipSource::Video`,
+  §9.3). L'écho relit l'image finale de la frame d'avant, et ses réglages s'expriment par seconde,
+  jamais par frame.
 - `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
   `ShapeRenderer` (un par piste, le clip lui prête son `ShapeContent`), `ShapeLayer`,
   tessellation lyon (module sans wgpu).

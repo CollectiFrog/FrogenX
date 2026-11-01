@@ -94,6 +94,16 @@ pub const STREAM_SIZES: [(u32, u32); 6] = [
 /// Les cadences proposées pour un flux.
 pub const STREAM_RATES: [u32; 7] = [15, 20, 24, 25, 30, 50, 60];
 
+/// Une vidéo à poser dans une case : `app` ouvre la boîte de dialogue et interroge
+/// le fichier (§9.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoImport {
+    pub layer: LayerId,
+    pub column: ColumnId,
+    /// `None` : demander le fichier.
+    pub path: Option<std::path::PathBuf>,
+}
+
 /// L'enregistreur, déjà mis en mots (§8.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RecordingView<'a> {
@@ -249,6 +259,8 @@ pub struct UiState {
     /// choisi. `None` avant la première frame d'une grille, dont les trigs ne
     /// viennent pas de naître.
     pub known_trigs: Option<usize>,
+    /// Les vidéos demandées depuis la dernière lecture.
+    pub video_imports: Vec<VideoImport>,
     /// La courbe de crêtes du spectre.
     pub peak_hold: [f32; SPECTRUM_BANDS],
     /// L'historique du spectre, en bande sous le tracé.
@@ -294,6 +306,7 @@ impl Default for UiState {
             selected_trig: None,
             zone_gesture: None,
             known_trigs: None,
+            video_imports: Vec::new(),
             peak_hold: [0.0; SPECTRUM_BANDS],
             spectrogram: Spectrogram::default(),
         }
@@ -326,6 +339,8 @@ pub struct FrameView<'a> {
     /// Le tempo détecté dans le son, `0` s'il n'y en a pas (§7.1).
     pub detected_bpm: f32,
     pub history: HistoryView,
+    /// Pourquoi le clip choisi ne se lit pas, si c'est une vidéo en panne.
+    pub video_error: Option<&'a str>,
 }
 
 /// Dessine toute l'interface et remplit `commands`, `placements`, `output` et
@@ -346,6 +361,7 @@ pub fn draw(
     } else if let Some(demande) = history_shortcut(ui) {
         state.history = Some(demande);
     }
+    receive_files(ui, state, view.composition);
     let entete = egui::Frame::new()
         .fill(theme::HEADER)
         .inner_margin(Margin::symmetric(10, 5));
@@ -384,6 +400,33 @@ pub fn draw(
 /// passerait dessous.
 fn title_center(window_center: f32, width: f32, left_limit: f32) -> f32 {
     window_center.max(left_limit + width * 0.5)
+}
+
+/// Les fichiers lâchés sur la fenêtre vont dans les cases vides de la piste choisie,
+/// sinon de la plus haute : winit ne dit pas où ils sont tombés (§9.3).
+fn receive_files(ui: &Ui, state: &mut UiState, c: &Composition) {
+    let lache = ui.input(|i| i.raw.dropped_files.clone());
+    if lache.is_empty() {
+        return;
+    }
+    let mut pistes = Vec::new();
+    c.layers_in_order(&mut pistes);
+    let choisie = state.selected.map(|(l, _)| l).or(pistes.last().copied());
+    let Some(layer) = choisie else { return };
+    let piste_libres = c.layer(layer).map_or(Vec::new(), |p| {
+        (0..c.columns().len())
+            .filter(|i| p.cell(*i).is_none())
+            .filter_map(|i| c.columns().get(i).copied())
+            .collect()
+    });
+    let fichiers = lache.iter().map(|f| f.path().to_path_buf());
+    for (column, path) in piste_libres.into_iter().zip(fichiers) {
+        state.video_imports.push(VideoImport {
+            layer,
+            column,
+            path: Some(path),
+        });
+    }
 }
 
 /// La pulsation du tempo : 1 sur le temps de la grille, puis elle retombe.
@@ -768,6 +811,10 @@ fn stream_menu(
 /// L'avancement de la boucle d'un clip, dans `[0, 1)`. Un clip en temps absolu
 /// n'a pas de boucle : `None`.
 pub fn loop_progress(clip: &Clip) -> Option<f32> {
+    if let Some((params, _, _)) = clip.video_playback() {
+        let temps = clip.video_time()? as f32;
+        return (params.duration > 0.0).then(|| (temps / params.duration).clamp(0.0, 1.0));
+    }
     let Transport::BpmSync {
         position,
         duration_beats,
@@ -934,7 +981,20 @@ fn grid(
                             remove_menu(&reponse, "Retirer le clip", retire, commands);
                             reponse
                         }
-                        None => empty_cell(ui),
+                        None => {
+                            let vide = empty_cell(ui);
+                            vide.context_menu(|ui| {
+                                if ui.button("Importer une vidéo…").clicked() {
+                                    state.video_imports.push(VideoImport {
+                                        layer: *layer,
+                                        column: *column,
+                                        path: None,
+                                    });
+                                    ui.close();
+                                }
+                            });
+                            vide
+                        }
                     };
                     if let Some(preset) = drop_target(ui, &reponse) {
                         placements.push(Placement {
@@ -1226,6 +1286,7 @@ mod tests {
                             undo: Some("Câblage"),
                             redo: None,
                         },
+                        video_error: None,
                     };
                     draw(
                         ui,
@@ -2724,6 +2785,64 @@ mod tests {
             recording_label(&r),
             "Enregistrement : H.264, 1280×720, 30 i/s"
         );
+    }
+
+    #[test]
+    fn une_case_vide_importe_une_video_au_clic_droit() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.get_all_by_label(EMPTY_CELL)
+            .next()
+            .unwrap()
+            .click_secondary();
+        h.run();
+        h.get_by_label("Importer une vidéo…").click();
+        h.run();
+        assert_eq!(
+            h.state().ui.video_imports,
+            [VideoImport {
+                layer: g.piste,
+                column: g.colonnes[2],
+                path: None,
+            }]
+        );
+    }
+
+    #[derive(Debug)]
+    struct FichierLache;
+
+    impl egui::DroppedFile for FichierLache {
+        fn path(&self) -> &std::path::Path {
+            std::path::Path::new("a.mp4")
+        }
+
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn un_fichier_lache_va_dans_la_premiere_case_vide() {
+        let g = grille();
+        let mut h = harness(&g.composition);
+        h.input_mut()
+            .dropped_files
+            .push(std::sync::Arc::new(FichierLache));
+        h.run();
+        assert_eq!(
+            h.state().ui.video_imports,
+            [VideoImport {
+                layer: g.piste,
+                column: g.colonnes[2],
+                path: Some("a.mp4".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn la_barre_d_une_video_suit_son_temps() {
+        let clip = Clip::video(frogenx_shape::VideoParams::new("a.mp4", 4.0));
+        assert_eq!(loop_progress(&clip), Some(0.0));
     }
 
     #[test]

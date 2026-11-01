@@ -81,6 +81,48 @@ impl Signal for BeatRate {
     }
 }
 
+/// La vitesse de la position d'une vidéo, en secondes de vidéo par seconde (§9.3).
+///
+/// `beats` nul : sa vitesse réelle. Sinon, toute la vidéo tient en `beats`
+/// battements : elle suit le tempo sans rien savoir de la musique.
+pub struct VideoRate {
+    pub duration: Param,
+    pub beats: Param,
+}
+
+impl VideoRate {
+    pub fn new(duration: f32, beats: f32) -> Self {
+        Self {
+            duration: Param::fixed(duration),
+            beats: Param::fixed(beats),
+        }
+    }
+
+    pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
+        Ok(Self {
+            duration: spec.param("duration")?,
+            beats: spec.param("beats")?,
+        })
+    }
+}
+
+impl Signal for VideoRate {
+    fn spec(&self) -> Spec {
+        Spec::new("VideoRate")
+            .with("duration", self.duration)
+            .with("beats", self.beats)
+    }
+
+    fn eval(&self, _t: f64, ctx: &Ctx, _state: &mut NodeState) -> f32 {
+        let (duree, beats) = (self.duration.eval(ctx), self.beats.eval(ctx));
+        if beats.is_finite() && beats > 0.0 && duree.is_finite() {
+            duree * ctx.bpm / 60.0 / beats
+        } else {
+            1.0
+        }
+    }
+}
+
 impl PositionSignal {
     pub fn from_spec(spec: &Spec) -> Result<Self, SpecError> {
         Ok(Self {
@@ -103,6 +145,38 @@ impl Signal for PositionSignal {
 
     fn state_size(&self) -> usize {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests_video {
+    use super::*;
+    use frogenx_core::Graph;
+
+    fn vitesse(r: VideoRate, bpm: f32) -> f32 {
+        let mut g = Graph::new();
+        let id = g.add(Box::new(r));
+        g.set_bpm(bpm);
+        g.eval_frame(0.0, 1.0 / 60.0);
+        g.value(id)
+    }
+
+    #[test]
+    fn sans_calage_une_video_va_a_sa_vitesse_reelle() {
+        assert_eq!(vitesse(VideoRate::new(12.0, 0.0), 120.0), 1.0);
+    }
+
+    #[test]
+    fn calee_toute_la_video_tient_dans_ses_temps() {
+        // 12 s en 16 temps à 120 BPM, soit 8 s : une fois et demie plus vite.
+        assert_eq!(vitesse(VideoRate::new(12.0, 16.0), 120.0), 1.5);
+        assert_eq!(vitesse(VideoRate::new(12.0, 16.0), 60.0), 0.75);
+    }
+
+    #[test]
+    fn une_duree_absurde_reste_a_vitesse_reelle() {
+        assert_eq!(vitesse(VideoRate::new(f32::NAN, 8.0), 120.0), 1.0);
+        assert_eq!(vitesse(VideoRate::new(12.0, f32::NAN), 120.0), 1.0);
     }
 }
 

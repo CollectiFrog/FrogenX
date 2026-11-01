@@ -1,0 +1,11 @@
+[package]
+name = "frogenx-video"
+description = "Le décodage des clips vidéo : ffmpeg en pipe et tampon de tête (§9.3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Aucune dépendance : ni wgpu, ni `Graph`. `app` passe les frames à `layer` (§10).
+# Elle se teste sur de vraies vidéos fabriquées par ffmpeg, sans GPU.
+[dependencies]

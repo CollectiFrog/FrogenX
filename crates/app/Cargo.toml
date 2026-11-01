@@ -18,6 +18,7 @@ path = "src/main.rs"
 frogenx-core.workspace = true
 frogenx-composition.workspace = true
 frogenx-audio.workspace = true
+frogenx-video.workspace = true
 frogenx-library.workspace = true
 frogenx-patch.workspace = true
 frogenx-layer.workspace = true

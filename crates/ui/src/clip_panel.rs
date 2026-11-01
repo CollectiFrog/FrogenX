@@ -56,6 +56,9 @@ pub fn wrap_cards(counts: &[usize], per_row: usize) -> Vec<Range<usize>> {
     rangees
 }
 
+/// La durée proposée quand on cale une vidéo sur le tempo : une mesure de quatre.
+const VIDEO_DEFAULT_BEATS: f32 = 16.0;
+
 /// Une partie du clip : son titre, sa pastille si c'est une couleur, et ses
 /// potentiomètres par rangées. Rend `true` si la pastille a été cliquée.
 fn card<T>(
@@ -293,6 +296,54 @@ fn playback_row(ui: &mut Ui, id: ClipId, clip: &Clip, commands: &mut Vec<Command
     }
 }
 
+/// La lecture d'une vidéo : son mode, et le nombre de temps que dure sa boucle.
+/// `0` temps : sa vitesse réelle (§9.3).
+fn video_row(ui: &mut Ui, id: ClipId, clip: &Clip, commands: &mut Vec<Command>) {
+    let Some((_, actuel, beats)) = clip.video_playback() else {
+        return;
+    };
+    let nom = ui.label(RichText::new("Lecture").size(11.0).color(theme::TEXT_DIM));
+    egui::ComboBox::from_id_salt(("lecture vidéo", id))
+        .selected_text(actuel.label())
+        .width(120.0)
+        .show_ui(ui, |ui| {
+            for mode in PlayMode::ALL {
+                if ui.selectable_label(mode == actuel, mode.label()).clicked() {
+                    commands.push(Command::SetVideoPlayback {
+                        clip: id,
+                        mode,
+                        beats,
+                    });
+                }
+            }
+        })
+        .response
+        .labelled_by(nom.id);
+    let calee = beats > 0.0;
+    if ui.selectable_label(calee, "Caler sur").clicked() {
+        commands.push(Command::SetVideoPlayback {
+            clip: id,
+            mode: actuel,
+            beats: if calee { 0.0 } else { VIDEO_DEFAULT_BEATS },
+        });
+    }
+    if calee {
+        let mut duree = beats;
+        let reglage = egui::DragValue::new(&mut duree)
+            .range(0.25..=256.0)
+            .speed(0.05)
+            .suffix(" temps")
+            .max_decimals(2);
+        if ui.add(reglage).changed() {
+            commands.push(Command::SetVideoPlayback {
+                clip: id,
+                mode: actuel,
+                beats: duree,
+            });
+        }
+    }
+}
+
 /// Les réglages propres au clip et à sa piste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipKnob {
@@ -360,12 +411,16 @@ pub fn floating(
                     }
                 });
             });
+            if let Some(erreur) = view.video_error {
+                ui.label(RichText::new(erreur).size(11.0).color(theme::ACCENT));
+            }
             ui.horizontal(|ui| playback_row(ui, id, clip, commands));
+            ui.horizontal(|ui| video_row(ui, id, clip, commands));
             ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
             let chaine = match clip.source {
                 ClipSource::Shape { .. } => clip.effects.len(),
-                ClipSource::Feedback { .. } => 0,
+                ClipSource::Feedback { .. } | ClipSource::Video { .. } => 0,
             };
             let trigs: Vec<(String, u32)> = c
                 .trigs()

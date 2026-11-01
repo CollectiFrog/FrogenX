@@ -1,15 +1,16 @@
 //! Le `Clip` — point de jonction avec le graphe modulaire, §3bis.2 de
 //! `docs/ARCHITECTURE.md`.
 
-use frogenx_core::{FeatureKind, Graph, Param, Signal};
+use frogenx_core::{FeatureKind, Graph, NodeId, Param, Signal};
 use frogenx_osc::{AudioFeature, TrigInput};
 use frogenx_shape::{
     ColorParam, FeedbackParams, MixKind, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle,
-    COLOR_CHANNELS,
+    VideoParams, COLOR_CHANNELS,
 };
+use std::path::Path;
 
 use crate::crossfader::FadeCurve;
-use crate::position::PositionSignal;
+use crate::position::{PositionSignal, VideoRate};
 use crate::transport::{PlayMode, Transport};
 
 /// Ce qu'un clip joue. La distinction se fait ici, pas sur le type `Clip`
@@ -29,9 +30,16 @@ pub enum ClipSource {
         graph: Graph,
         params: FeedbackParams,
     },
-    // `Scene3d(Graph)` et `Video(VideoTrack)` arrivent aux étapes 13 et 12
-    // de la feuille de route (§12) — non représentés avant que `scene3d` et
-    // le décodage vidéo n'existent, pour ne pas figer un contrat deviné.
+    /// Un fichier vidéo. `composition` ne décode rien : elle dit lequel, et quel
+    /// instant montrer (§9.3).
+    Video {
+        graph: Graph,
+        params: VideoParams,
+        /// Ce qu'il fait au bout du fichier.
+        mode: PlayMode,
+    },
+    // `Scene3d(Graph)` arrive à l'étape 13 de la feuille de route (§12), pour ne
+    // pas figer un contrat deviné.
 }
 
 /// Comment un clip entre en scène ou en sort quand un autre clip prend sa
@@ -220,6 +228,104 @@ impl Clip {
         }
     }
 
+    /// Un clip vidéo, à sa vitesse réelle. Il porte le nom du fichier.
+    pub fn video(params: VideoParams) -> Self {
+        let mut graph = Graph::new();
+        let rate = graph.add(Box::new(VideoRate::new(params.duration, 0.0)));
+        let speed = Param::modulated(0.0, 1.0, rate);
+        let position = graph
+            .add_with_deps(Box::new(PositionSignal::new(speed)), vec![rate])
+            .expect("`rate` vient d'être créé");
+        Self::video_with(
+            graph,
+            params,
+            PlayMode::Loop,
+            Transport::Timeline { position, speed },
+        )
+    }
+
+    /// Un clip vidéo dont le graphe existe déjà : celui d'un fichier.
+    pub fn video_with(
+        graph: Graph,
+        params: VideoParams,
+        mode: PlayMode,
+        transport: Transport,
+    ) -> Self {
+        let nom = Path::new(&params.path).file_stem().map_or_else(
+            || params.kind().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        Self {
+            name: nom,
+            source: ClipSource::Video {
+                graph,
+                params,
+                mode,
+            },
+            effects: Vec::new(),
+            transport,
+            transition: ClipTransition::Cut,
+            speed: Param::fixed(1.0),
+        }
+    }
+
+    /// Ce que dit un clip vidéo : son fichier, son mode, et ses temps de boucle
+    /// (`0` : vitesse réelle).
+    pub fn video_playback(&self) -> Option<(&VideoParams, PlayMode, f32)> {
+        let ClipSource::Video { params, mode, .. } = &self.source else {
+            return None;
+        };
+        let beats = self
+            .video_rate()
+            .and_then(|rate| self.graph().node_spec(rate))
+            .and_then(|spec| spec.param("beats").ok())
+            .map_or(0.0, |p| p.base());
+        Some((params, *mode, beats))
+    }
+
+    fn video_rate(&self) -> Option<NodeId> {
+        match self.transport {
+            Transport::Timeline { speed, .. } => speed.source(),
+            Transport::BpmSync { .. } => None,
+        }
+    }
+
+    /// Choisit sa lecture. `beats` à `0` : sa vitesse réelle. Rend `false` si le
+    /// clip n'est pas une vidéo.
+    pub fn set_video_playback(&mut self, mode: PlayMode, beats: f32) -> bool {
+        let Some(rate) = self.video_rate() else {
+            return false;
+        };
+        let ClipSource::Video {
+            graph,
+            params,
+            mode: actuel,
+        } = &mut self.source
+        else {
+            return false;
+        };
+        if !beats.is_finite() || beats < 0.0 {
+            return false;
+        }
+        *actuel = mode;
+        let signal = VideoRate::new(params.duration, beats);
+        graph.replace(rate, Box::new(signal)).is_ok()
+    }
+
+    /// L'instant de la vidéo à montrer, en secondes. La position avance sans fin :
+    /// en boucle, elle se replie sur la durée.
+    pub fn video_time(&self) -> Option<f64> {
+        let (mode, position, duree) = self.position_beats()?;
+        let ClipSource::Video { .. } = self.source else {
+            return None;
+        };
+        let (position, duree) = (position as f64, duree as f64);
+        Some(match mode {
+            PlayMode::Loop => position.rem_euclid(duree),
+            PlayMode::Once | PlayMode::PingPong => position.clamp(0.0, duree),
+        })
+    }
+
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
@@ -247,6 +353,12 @@ impl Clip {
                 generator, style, ..
             } => (generator, style),
             ClipSource::Feedback { params, .. } => {
+                return vec![ParamGroup {
+                    label: params.kind().to_string(),
+                    params: enumere(params.params(), &ParamSlot::Generator),
+                }];
+            }
+            ClipSource::Video { params, .. } => {
                 return vec![ParamGroup {
                     label: params.kind().to_string(),
                     params: enumere(params.params(), &ParamSlot::Generator),
@@ -391,6 +503,12 @@ impl Clip {
                     _ => None,
                 };
             }
+            ClipSource::Video { params, .. } => {
+                return match slot {
+                    ParamSlot::Generator(i) => params.param_mut(i),
+                    _ => None,
+                };
+            }
         };
         match slot {
             ParamSlot::Generator(i) => generator.param_mut(i),
@@ -417,13 +535,17 @@ impl Clip {
     /// Le graphe qui pilote ce clip.
     pub fn graph(&self) -> &Graph {
         match &self.source {
-            ClipSource::Shape { graph, .. } | ClipSource::Feedback { graph, .. } => graph,
+            ClipSource::Shape { graph, .. }
+            | ClipSource::Feedback { graph, .. }
+            | ClipSource::Video { graph, .. } => graph,
         }
     }
 
     pub fn graph_mut(&mut self) -> &mut Graph {
         match &mut self.source {
-            ClipSource::Shape { graph, .. } | ClipSource::Feedback { graph, .. } => graph,
+            ClipSource::Shape { graph, .. }
+            | ClipSource::Feedback { graph, .. }
+            | ClipSource::Video { graph, .. } => graph,
         }
     }
 
@@ -510,6 +632,14 @@ impl Clip {
     /// Ce que sa position impose à la piste cette frame : `None` si sa durée n'a
     /// pas de sens, et le clip reste en boucle (§18.4).
     pub(crate) fn position_beats(&self) -> Option<(PlayMode, f32, f32)> {
+        // Une vidéo compte en secondes : sa durée remplace `duration_beats` (§9.3).
+        if let (ClipSource::Video { params, mode, .. }, Transport::Timeline { position, .. }) =
+            (&self.source, self.transport)
+        {
+            let duree = params.duration;
+            return (duree.is_finite() && duree > 0.0)
+                .then(|| (*mode, self.graph().value(position), duree));
+        }
         let Transport::BpmSync {
             position,
             duration_beats,
@@ -545,6 +675,100 @@ impl Clip {
     pub fn with_transition(mut self, transition: ClipTransition) -> Self {
         self.transition = transition;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests_video {
+    use super::*;
+
+    fn video() -> Clip {
+        Clip::video(VideoParams::new("D:/prises/concert.mp4", 4.0))
+    }
+
+    fn avance(c: &mut Clip, secondes: f64) {
+        for _ in 0..(secondes * 60.0).round() as usize {
+            c.graph_mut().set_bpm(120.0);
+            c.graph_mut().eval_frame(0.0, 1.0 / 60.0);
+        }
+    }
+
+    #[test]
+    fn un_clip_video_porte_le_nom_de_son_fichier() {
+        assert_eq!(video().name, "concert");
+    }
+
+    #[test]
+    fn son_temps_avance_a_sa_vitesse_reelle() {
+        let mut c = video();
+        avance(&mut c, 1.5);
+        assert!((c.video_time().unwrap() - 1.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn en_boucle_son_temps_se_replie_sur_sa_duree() {
+        let mut c = video();
+        avance(&mut c, 5.0);
+        assert!((c.video_time().unwrap() - 1.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn une_fois_son_temps_s_arrete_a_la_fin() {
+        let mut c = video();
+        assert!(c.set_video_playback(PlayMode::Once, 0.0));
+        avance(&mut c, 5.0);
+        assert_eq!(c.video_time(), Some(4.0));
+    }
+
+    #[test]
+    fn calee_sur_le_tempo_sa_boucle_dure_ses_temps() {
+        let mut c = video();
+        // 2 temps à 120 BPM : les 4 s tiennent en 1 s.
+        assert!(c.set_video_playback(PlayMode::Loop, 2.0));
+        avance(&mut c, 0.25);
+        assert!((c.video_time().unwrap() - 1.0).abs() < 0.05);
+        assert_eq!(c.video_playback().unwrap().2, 2.0);
+    }
+
+    #[test]
+    fn revenir_a_la_vitesse_reelle_efface_le_calage() {
+        let mut c = video();
+        c.set_video_playback(PlayMode::Loop, 2.0);
+        c.set_video_playback(PlayMode::Loop, 0.0);
+        assert_eq!(c.video_playback().unwrap().2, 0.0);
+    }
+
+    #[test]
+    fn un_calage_absurde_est_refuse() {
+        let mut c = video();
+        assert!(!c.set_video_playback(PlayMode::Loop, -1.0));
+        assert!(!c.set_video_playback(PlayMode::Loop, f32::NAN));
+    }
+
+    #[test]
+    fn une_forme_n_a_pas_de_lecture_video() {
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+        let mut c = Clip::shape(g, Box::new(frogenx_shape::Ellipse::circle(0.5)), transport);
+        assert_eq!(c.video_playback().map(|v| v.1), None);
+        assert_eq!(c.video_time(), None);
+        assert!(!c.set_video_playback(PlayMode::Loop, 0.0));
+    }
+
+    #[test]
+    fn ses_reglages_passent_par_les_slots_du_generateur() {
+        let mut c = video();
+        let groupes = c.params();
+        assert_eq!(groupes.len(), 1);
+        assert_eq!(groupes[0].params.len(), 4);
+        assert!(c.set_param(ParamSlot::Generator(0), 2.0));
+        assert_eq!(c.params()[0].params[0].desc.value.base(), 2.0);
+    }
+
+    #[test]
+    fn une_duree_nulle_ne_lit_rien() {
+        let c = Clip::video(VideoParams::new("a.mp4", 0.0));
+        assert_eq!(c.video_time(), None);
     }
 }
 

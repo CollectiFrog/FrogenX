@@ -29,9 +29,8 @@
 //!
 //! ## Ce qui n'est pas encore représenté
 //!
-//! - `ClipSource::Scene3d`/`Video` (étapes 12-13, §12) : non ajoutés avant
-//!   que `scene3d` et le décodage vidéo n'existent.
-//! - L'effet de `PlayMode` : rien ne le lit encore (§3bis.3).
+//! - `ClipSource::Scene3d` (étape 13, §12) : non ajouté avant que `scene3d`
+//!   n'existe.
 
 pub mod analysis;
 pub mod beat;
@@ -60,7 +59,7 @@ pub use hierarchy::{
     Column, Composition, Deck, Layer, LayerGroup, TransitionView, MIN_TEMPO_CONFIDENCE,
 };
 pub use ids::{ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
-pub use position::{BeatRate, PositionSignal};
+pub use position::{BeatRate, PositionSignal, VideoRate};
 pub use signals::signal_from_spec;
 pub use transport::{sanitize_bpm, PlayMode, TempoController, Transport, MAX_BPM, MIN_BPM};
 pub use trig::{RestoredTrig, Trig, TrigSlot, TrigTarget};

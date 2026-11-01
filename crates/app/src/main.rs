@@ -27,10 +27,11 @@ use frogenx_app::settings::{MachineSettings, DEFAULT_RENDER};
 use frogenx_app::streams::{open_spout, Streams, STREAMS_AVAILABLE};
 use frogenx_app::{next_deadline, Engine, FrameRate};
 use frogenx_audio::AudioInput;
-use frogenx_composition::Command;
+use frogenx_composition::{Clip, ColumnId, Command, LayerId};
 use frogenx_core::Clock;
 use frogenx_layer::{Gpu, LAYER_FORMAT};
 use frogenx_output::{MonitorSink, OutputSink, RecordPreset, StreamFormat};
+use frogenx_shape::VideoParams;
 use frogenx_ui::{HistoryRequest, OutputRequest, OutputView, RecordingView};
 use glam::UVec2;
 use gui::Gui;
@@ -39,7 +40,7 @@ use rfd::AsyncFileDialog;
 use stage::Stage;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
@@ -157,6 +158,15 @@ fn toggle_stream(flux: &mut Streams, i: usize, moteur: &mut Engine) {
     flux.toggle(i, moteur, &mut |nom, taille| open_spout(&info, nom, taille));
 }
 
+/// Ce que propose la boîte de dialogue. ffmpeg en lit d'autres : un fichier lâché
+/// sur la fenêtre n'est pas filtré.
+const VIDEO_EXTENSIONS: [&str; 9] = [
+    "mp4", "mov", "m4v", "mkv", "avi", "webm", "mpg", "mpeg", "wmv",
+];
+
+/// La réponse d'un fichier interrogé : où le poser, et ce qu'il est.
+type Imported = (LayerId, ColumnId, Result<VideoParams, String>);
+
 /// Les noms des préréglages, dans l'ordre de `RecordPreset::ALL`.
 const PRESETS: [&str; 2] = [RecordPreset::H264.label(), RecordPreset::ProRes.label()];
 
@@ -179,6 +189,8 @@ struct Running {
     pending_record: Option<PathBuf>,
     /// Le dossier choisi dans sa fenêtre, quand elle se ferme.
     folder: Option<Receiver<PathBuf>>,
+    /// Les vidéos interrogées sur un thread : l'envoi pour chacun, et leurs réponses.
+    imports: (Sender<Imported>, Receiver<Imported>),
     /// Le rendu, la cadence et les flux tels qu'ils seront retenus (§8.5).
     settings: MachineSettings,
     /// Où les retenir. `None` sans dossier de configuration.
@@ -289,6 +301,7 @@ impl Running {
             recording: Recording::new(),
             pending_record: options.record.clone(),
             folder: None,
+            imports: channel(),
             settings,
             settings_dir,
             period,
@@ -391,6 +404,7 @@ impl Running {
             fenetre.draw(&mut self.engine, self.gui.selected_clip());
         }
         self.apply_history();
+        self.apply_imports();
         self.last = now;
         self.frames += 1;
         self.deadline = next_deadline(self.deadline, now, self.period);
@@ -507,6 +521,39 @@ impl Running {
 
     /// Annuler ou rétablir, demandé d'une fenêtre ou de l'autre. Un bouton tenu dans
     /// l'une ou l'autre garde le pas ouvert (§23.11).
+    /// Ce que l'interface demande, puis ce que les fichiers ont répondu. Rien ici
+    /// ne bloque : boîte de dialogue et interrogation du fichier sont sur un thread.
+    fn apply_imports(&mut self) {
+        for demande in self.gui.take_video_imports() {
+            let (reponse, layer, column) = (self.imports.0.clone(), demande.layer, demande.column);
+            let boite = demande.path.is_none().then(|| {
+                AsyncFileDialog::new()
+                    .add_filter("Vidéo", &VIDEO_EXTENSIONS)
+                    .set_parent(&*self.window)
+                    .pick_file()
+            });
+            let donne = demande.path;
+            std::thread::spawn(move || {
+                let choisi = match boite {
+                    Some(b) => pollster::block_on(b).map(|f| f.path().to_path_buf()),
+                    None => donne,
+                };
+                let Some(fichier) = choisi else { return };
+                let lu = frogenx_video::probe(&fichier).map(|info| {
+                    let chemin = fichier.display().to_string();
+                    VideoParams::new(chemin, info.duration as f32)
+                });
+                let _ = reponse.send((layer, column, lu));
+            });
+        }
+        while let Ok((layer, column, lu)) = self.imports.1.try_recv() {
+            match lu {
+                Ok(params) => self.engine.place(layer, column, Clip::video(params)),
+                Err(e) => self.files.set_status(e),
+            }
+        }
+    }
+
     fn apply_history(&mut self) {
         let editeur = self.nodes.as_mut();
         let tenu = editeur.as_ref().is_some_and(|f| f.pointer_held());

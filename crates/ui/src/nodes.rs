@@ -185,6 +185,7 @@ pub fn node_label(kind: &str) -> &str {
         "Noise" => "Bruit",
         "Envelope" => "Enveloppe",
         "Trigger" => "Seuil",
+        "VideoRate" => "Vitesse de la vidéo",
         "TrigInput" => "Trig",
         "SampleHold" => "Échantillonneur",
         "Sum" => "Somme",
@@ -401,7 +402,7 @@ fn clip_sinks(c: &Composition, id: ClipId, column: usize) -> Vec<NodeBox> {
     };
     let effets = match clip.source {
         ClipSource::Shape { .. } => clip.effects.len(),
-        ClipSource::Feedback { .. } => 0,
+        ClipSource::Feedback { .. } | ClipSource::Video { .. } => 0,
     };
     clip.params()
         .iter()

@@ -205,6 +205,15 @@ fn transition(t: &ClipTransition, positions: &Positions) -> Result<FileTransitio
 
 fn clip(c: &Clip, composition: &Positions) -> Result<FileClip, PatchError> {
     let (noeuds, positions) = graph(c.graph())?;
+    let video_ = match &c.source {
+        ClipSource::Video { params, mode, .. } => Some(FileVideo {
+            path: params.path.clone(),
+            duration: params.duration,
+            mode: play_mode(*mode).to_string(),
+            params: spec(&params.spec(), &positions)?,
+        }),
+        _ => None,
+    };
     let (generator, style_, feedback) = match &c.source {
         ClipSource::Shape {
             generator,
@@ -218,6 +227,7 @@ fn clip(c: &Clip, composition: &Positions) -> Result<FileClip, PatchError> {
         ClipSource::Feedback { params, .. } => {
             (None, None, Some(spec(&params.spec(), &positions)?))
         }
+        ClipSource::Video { .. } => (None, None, None),
     };
     Ok(FileClip {
         name: c.name.clone(),
@@ -231,6 +241,7 @@ fn clip(c: &Clip, composition: &Positions) -> Result<FileClip, PatchError> {
             .collect::<Result<_, _>>()?,
         style: style_,
         feedback,
+        video: video_,
         transport: transport(&c.transport, &positions)?,
         transition: transition(&c.transition, &positions)?,
     })

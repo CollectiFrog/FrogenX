@@ -72,6 +72,15 @@ impl<T> Arena<T> {
         }
     }
 
+    /// Ce qui est là, avec son index et sa génération.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, u32, &T)> {
+        self.slots
+            .iter()
+            .zip(&self.gens)
+            .enumerate()
+            .filter_map(|(i, (slot, gen))| Some((i as u32, *gen, slot.as_ref()?)))
+    }
+
     pub(crate) fn get(&self, index: u32, gen: u32) -> Option<&T> {
         if self.gens.get(index as usize).copied() != Some(gen) {
             return None;

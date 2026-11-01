@@ -15,7 +15,7 @@ use frogenx_core::{AmpScale, AnalysisMethod, FreqScale, Graph, NodeId, Param, Sp
 use frogenx_osc::{Divider, SpectrumZone};
 use frogenx_shape::{
     generator_from_spec, op_from_spec, BlendMode, BlendParams, ColorParam, FeedbackParams,
-    ShapeStyle, StrokeStyle,
+    ShapeStyle, StrokeStyle, VideoParams,
 };
 use std::collections::BTreeMap;
 
@@ -210,6 +210,14 @@ fn clip(file: &FileClip, composition: &[NodeId]) -> Result<Clip, PatchError> {
     let (nodes, _) = graph(&file.graph, &mut g)?;
     let transport_ = transport(&file.transport, &nodes)?;
     let c = match (&file.feedback, &file.generator, &file.style) {
+        (None, None, None) if file.video.is_some() => {
+            let Some(v) = &file.video else {
+                return Err(invalid("vidéo absente".to_string()));
+            };
+            let params = spec(&v.params.kind, &v.params.fields, &nodes)?;
+            let params = VideoParams::from_spec(&params, v.path.clone(), v.duration)?;
+            Clip::video_with(g, params, play_mode(&v.mode)?, transport_)
+        }
         (Some(feedback), None, None) => {
             let params = spec(&feedback.kind, &feedback.fields, &nodes)?;
             Clip::feedback(g, FeedbackParams::from_spec(&params)?, transport_)
@@ -221,7 +229,9 @@ fn clip(file: &FileClip, composition: &[NodeId]) -> Result<Clip, PatchError> {
         }
         _ => {
             let nom = &file.name;
-            return Err(invalid(format!("« {nom} » n'est ni une forme ni un écho")));
+            return Err(invalid(format!(
+                "« {nom} » n'est ni une forme, ni un écho, ni une vidéo"
+            )));
         }
     };
     let mut c = c

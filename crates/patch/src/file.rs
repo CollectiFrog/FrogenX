@@ -145,8 +145,20 @@ pub struct FileClip {
     pub style: Option<FileStyle>,
     #[serde(default)]
     pub feedback: Option<FileSpec>,
+    /// Ou `video` (§9.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<FileVideo>,
     pub transport: FileTransport,
     pub transition: FileTransition,
+}
+
+/// Un fichier vidéo : son chemin, et ce que le calage sur le tempo doit savoir.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileVideo {
+    pub path: String,
+    pub duration: f32,
+    pub mode: String,
+    pub params: FileSpec,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -20,6 +20,7 @@ crates/osc/          oscillateurs, LFO, bruit, enveloppes      ← core         
 crates/shape/        Path, primitives, opérateurs, style       ← core, osc, glam    ✅
 crates/composition/  grille, tempo, Trig, Command              ← core, osc, shape   ✅
 crates/audio/        cpal, FFT, spectre, features, BPM         ← core               ✅
+crates/video/        décodage des clips, ffmpeg en pipe, tampon de tête ← aucune      ✅
 crates/layer/        Gpu, trait RenderLayer, ShapeRenderer, tessellation ← core, shape, wgpu ✅
 crates/render/       compositeur, readback, PNG                      ← core, layer, wgpu  ✅
 crates/output/       GpuSink / CpuSink, Outputs, passe 8 bits, Preview, PngSequenceSink, FfmpegSink, SpoutSink ← layer, render, wgpu ✅

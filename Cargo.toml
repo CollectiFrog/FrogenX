@@ -6,6 +6,7 @@ members = [
     "crates/shape",
     "crates/composition",
     "crates/audio",
+    "crates/video",
     "crates/library",
     "crates/patch",
     "crates/layer",
@@ -25,6 +26,7 @@ frogenx-osc = { path = "crates/osc" }
 frogenx-shape = { path = "crates/shape" }
 frogenx-composition = { path = "crates/composition" }
 frogenx-audio = { path = "crates/audio" }
+frogenx-video = { path = "crates/video" }
 frogenx-library = { path = "crates/library" }
 frogenx-patch = { path = "crates/patch" }
 frogenx-layer = { path = "crates/layer" }

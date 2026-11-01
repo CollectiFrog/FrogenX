@@ -276,7 +276,7 @@ fn un_clip_ni_forme_ni_echo_est_refuse() {
     let mut v = texte();
     let clip = &mut v["decks"][0]["groups"][0]["layers"][0]["cells"][0];
     clip["generator"] = serde_json::Value::Null;
-    assert!(refuse(v).to_string().contains("ni une forme ni un écho"));
+    assert!(refuse(v).to_string().contains("ni une vidéo"));
 }
 
 #[test]

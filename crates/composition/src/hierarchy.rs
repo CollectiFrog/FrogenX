@@ -11,12 +11,12 @@
 
 use crate::analysis::AudioAnalysis;
 use crate::beat::{BeatGrid, Launch, Quantize};
-use crate::clip::Clip;
+use crate::clip::{Clip, ClipSource};
 use crate::ids::{Arena, ClipId, ColumnId, DeckId, LayerGroupId, LayerId, TrigId};
 use crate::transport::{sanitize_bpm, PlayMode, TempoController};
 use crate::trig::Trig;
 use frogenx_core::{AudioFeatures, Graph, Param, DEFAULT_BPM};
-use frogenx_shape::{BlendParams, MixKind};
+use frogenx_shape::{BlendParams, MixKind, VideoParams};
 
 /// Sous cette fiabilité, un tempo détecté ne déforme pas le set (§7.1).
 pub const MIN_TEMPO_CONFIDENCE: f32 = 0.3;
@@ -457,6 +457,16 @@ impl Composition {
             c.graph_mut().reset_state();
         }
         true
+    }
+
+    /// Les clips vidéo de toute la grille, ce qu'`app` doit préparer (§9.3).
+    pub fn video_clips(&self) -> impl Iterator<Item = (ClipId, &VideoParams)> {
+        self.clips
+            .iter()
+            .filter_map(|(i, g, clip)| match &clip.source {
+                ClipSource::Video { params, .. } => Some((ClipId::new(i, g), params)),
+                _ => None,
+            })
     }
 
     /// Le clip qui sort de `layer`, s'il y a une transition en cours.

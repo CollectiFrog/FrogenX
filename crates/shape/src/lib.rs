@@ -60,6 +60,7 @@ pub mod path;
 pub mod primitives;
 pub mod spec;
 pub mod style;
+pub mod video;
 
 pub use feedback::{FeedbackParams, FeedbackStep};
 pub use generator::{ParamDesc, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
@@ -72,3 +73,4 @@ pub use style::{
     srgb_to_linear, BlendMode, BlendParams, ColorParam, MixKind, ShapeStyle, StrokeStyle,
     COLOR_CHANNELS,
 };
+pub use video::{VideoParams, VideoStep};
