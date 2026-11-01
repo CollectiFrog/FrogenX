@@ -334,8 +334,6 @@ pub enum Transport {
 
 pub struct TempoController {
     pub tempo: Param,              // BPM
-    pub tap: EventSink,            // tempo tap
-    pub resync: EventSink,
 }
 ```
 
@@ -409,9 +407,8 @@ impl Signal for PositionSignal {
   mutable. Ça respecte §2.3 sans exception, et ça rend `position` sérialisable et
   réinitialisable gratuitement, comme tout `NodeState` (§16.1).
 - `BpmSync` branche la même `PositionSignal` mais avec `speed` dérivée du `tempo`
-  du `TempoController` plutôt qu'un `Param` fixe — un `resync` (tap, re-sync DJ) se
-  traduit par un `Command` qui réécrit `state.slots[0]` via le `Graph`, pas par une
-  mutation directe de `Transport`.
+  du `TempoController` plutôt qu'un `Param` fixe. Un recalage ne réécrit pas sa position : il
+  pousse le tempo qu'elle lit (`BeatGrid`, plus bas).
 - `ClipTransition` (§3bis.2) suit le même principe pour sa progression — un fondu
   qui dure N frames est aussi un accumulateur, pas un `Param` statique.
 
@@ -453,6 +450,51 @@ Dans le moteur : le clip qui quitte l'image à sa fin, un temps qui redescend, e
 qui retrouve sa forme de départ après un aller-retour. Annuler garde le sens de lecture. Le réglage
 se teste par clics simulés, et revient d'un fichier sans changer le format. **Pas encore essayés :**
 le réglage à la vraie souris, et le rendu d'un aller-retour regardé sur une image.
+
+**La place du temps : `BeatGrid`.** Le tempo dit la durée d'un battement, pas où il tombe.
+`Composition` tient donc une grille partagée, en battements depuis le dernier premier temps. C'est
+un état de jeu, comme le clip actif : absent des fichiers, gardé par une annulation (§23.11).
+
+```rust
+pub struct BeatGrid {
+    reference: f64,   // où est le temps, d'après le dernier geste ou le son
+    played: f64,      // où en est ce qui joue
+}
+
+pub enum Quantize { Off, Beat, Bar }   // dans le fichier : aucune, 1 temps, 4 temps
+```
+
+**Deux positions, pour ne jamais sauter.** `reference` est écrite d'un coup par un recalage. `played`
+la rejoint : son écart, ramené à `[-0,5, 0,5)` battement, pousse le tempo que voient les clips, de
+12 % au plus, en proportion de l'écart. Comme un DJ pousse son disque, les positions et les LFO
+glissent ensemble sans saut, et un quart de battement se rattrape en environ 1,5 s à 120 BPM. Le
+tempo affiché et le `Param` ne bougent pas : `Engine` pose ce tempo poussé dans `Graph::set_bpm`,
+et les transitions le suivent aussi. Ce qui change le tempo reste une seule source (§3bis.3).
+
+**Trois recalages.**
+
+| Geste | Effet sur `reference` |
+|---|---|
+| `Temps 1` (touche `R`, `Command::ResyncBeat`) | cet instant est le premier temps de la mesure |
+| Tap | cet instant est un temps. Le premier d'une série est le premier temps |
+| `Suivre` | chaque frame, la phase détectée dans le son (§7.1), au temps le plus proche |
+
+Le son ne sait pas où commence la mesure : lui ne touche jamais au compte des temps, seulement à
+leur place. Un geste gagne sur le son : après `Temps 1`, la phase ne suit plus la détection, le
+BPM oui, jusqu'à ce qu'on réactive `Suivre`. Sans cela, le geste qui corrige une erreur de la
+détection serait écrasé à la frame suivante. `Temps 1` n'est pas une modification du fichier : il
+ne change ni le BPM ni le choix de suivre.
+
+**La quantification.** Un clip lancé repart de zéro : lancé entre deux temps, il le reste, et aucun
+recalage n'y peut rien. `Composition.quantize` fait donc attendre le prochain temps, ou le
+prochain multiple de 4. La case qui attend porte un contour or. `Aucune` par défaut : rien ne
+change tant qu'on ne l'active pas. Le dernier geste gagne sur une piste, et lancer une colonne
+remplace ce qui attendait. Vider une piste annule ce qu'elle attendait.
+
+**Les gestes attendent, pas les trigs.** `Command::LaunchClip` et `LaunchColumn` sont les gestes :
+la grille, le clavier, plus tard le MIDI. `TriggerClip` et `TriggerColumn` restent immédiats :
+un trig tient son rythme du son, et le retarder le décalerait. Le lancement a lieu dans la frame où
+`played` franchit la limite, avant l'évaluation des clips : il a au plus une frame de retard.
 
 **Non couvert.** `Once` termine en coupure : la transition du clip suivant ne s'applique pas à une
 piste qui se vide. La durée ne se module pas depuis l'interface, et une boucle ne fait pas repartir
@@ -924,6 +966,7 @@ doit déplacer ni le tempo ni une modulation.
 | `onset` | `1` au transitoire, puis retombe en 120 ms | `[0, 1]` |
 | `chroma` | l'énergie de chaque note, do en tête, la plus forte à `1` | `[0, 1]` |
 | `bpm`, `bpm_confidence` | le tempo détecté (`0` : aucun), et sa fiabilité | BPM, `[0, 1]` |
+| `beat_phase`, `beat_confidence` | où on en est dans le battement (`0` : sur le temps), et sa fiabilité | `[0, 1)`, `[0, 1]` |
 
 **`onset` est une valeur qui retombe, pas un booléen.** Le thread d'analyse tourne plus vite
 que les frames : un drapeau levé entre deux lectures du triple buffer serait perdu. Une
@@ -946,6 +989,16 @@ tempo double ou moitié se distingue mal : une courbe en cloche autour de 120 BP
 la détection peut donc rendre 87 pour un morceau à 174. Elle attend 4 s de son, n'accepte un
 saut de tempo que confirmé deux fois de suite, et rend `0` sans signal rythmique.
 
+**La phase.** `TempoTracker` trouve aussi où tombe le temps. À chaque réestimation, il replie les
+8 derniers battements sur la période du tempo : la place où la force s'accumule le plus est le
+temps, et le contraste de ce repli donne `beat_confidence`. Entre deux réestimations, la phase
+avance avec les analyses : `beat_phase`, `0` sur le temps, ne saute qu'une fois par seconde, et
+de peu. Un retard constant, mesuré sur des boucles de synthèse, corrige le décalage de la
+transitoire dans la fenêtre d'analyse. La latence de la carte son n'est pas corrigée. Rendre
+`0` à `beat_confidence` veut dire : aucune phase, la grille garde la sienne. La force la plus
+haute gagne : une grosse caisse l'emporte sur le charleston du contretemps, mais sans grosse
+caisse le temps peut tomber sur le contretemps. `Temps 1` est là pour ça.
+
 **Ce qui distingue un rythme d'un son tenu : le contraste, pas le niveau.** Une note tenue
 produit une force minuscule, mais régulière, qui donnait un faux tempo avec une fiabilité
 de 0,84. Un seuil absolu perdait une boucle 30 dB plus basse. Les coups doivent donc dépasser
@@ -955,8 +1008,8 @@ cinq fois la force moyenne : mesuré, 4 pour une note tenue, 19 pour une boucle 
 écrit le BPM détecté dans le `Param` du tempo, si sa fiabilité dépasse 0,3 : le tempo garde
 sa source unique (§3bis.3), et le dernier reste en place dans un silence. Taper ou fixer le
 tempo coupe le suivi : un geste explicite gagne. Ce mouvement n'est pas une modification du
-fichier (§23.8), seul le choix de suivre en est une. Le tempo se cale, pas la phase : le
-battement détecté ne recale pas la position des clips.
+fichier (§23.8), seul le choix de suivre en est une. La phase suit aussi : elle pose le temps de
+la grille (`BeatGrid`, §3bis.3), et les clips le rejoignent par glissement.
 
 **Déterminisme.** Rien de tout cela ne lit l'horloge : un rendu offline écrit ses propres
 `AudioFeatures`, BPM compris, et obtient la même image (§20.3).
@@ -977,7 +1030,7 @@ trig : l'entrée de cette machine était silencieuse. Les seuils viennent de son
 et peuvent demander un réglage. Le menu de clic droit à la vraie souris non plus. Un tempo
 au-delà de 150 BPM n'est pas garanti : 174 peut se lire 87.
 
-**Non couvert.** La phase : le tempo se cale, pas le battement. Une source audio sur
+**Non couvert.** Le premier temps de la mesure : le son ne donne que les temps. Une source audio sur
 l'opacité d'une piste ou la vitesse d'un clip au clic droit : elles vivent dans le graphe de
 composition, et se branchent depuis l'éditeur de nœuds (§23.10), comme le lissage d'une
 source et la chroma.
@@ -1773,16 +1826,15 @@ qui les livre (skill `doc-sync`).
 
 | Priorité | Feature | Pourquoi | Taille |
 |---|---|---|---|
-| 1 | Recalage de la phase du tempo | le tempo se cale, pas le battement (§7.1) | moyenne |
-| 2 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
-| 3 | Enregistrement, étape 10 | un fichier vidéo | grande |
-| 4 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
-| 5 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
-| 6 | Scène 3D, étape 13 | | très grande |
-| 7 | Art-Net / DMX, étape 14 | | moyenne |
-| 8 | Scripting Lua, étape 15 | | moyenne |
-| 9 | Shaders personnalisés WGSL, étape 16 | | moyenne |
-| 10 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
+| 1 | Éditeur de nœuds, suite | la place des nœuds dans le fichier, le zoom, l'ordre des effets (§23.10) | moyenne |
+| 2 | Enregistrement, étape 10 | un fichier vidéo | grande |
+| 3 | NDI, Syphon, copie directe vers Spout | les récepteurs sans Kyber, macOS, moins de latence | grande |
+| 4 | Clips vidéo, étape 12 | le vrai morceau (§9.3) | grande |
+| 5 | Scène 3D, étape 13 | | très grande |
+| 6 | Art-Net / DMX, étape 14 | | moyenne |
+| 7 | Scripting Lua, étape 15 | | moyenne |
+| 8 | Shaders personnalisés WGSL, étape 16 | | moyenne |
+| 9 | MIDI et OSC, étape 17 | une surface de contrôle sur scène | moyenne |
 
 **À vérifier de main d'homme**
 
@@ -1875,6 +1927,9 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **La vitesse d'un clip multiplie son `dt`** (§3bis.2) | un seul réglage accélère tout le clip sans connaître son contenu, puisque tout s'intègre sur `dt` |
 | **Clips prédéfinis en code, dans une crate `library`** (§10, §23.6) | le format de fichier n'arrive qu'à l'étape 7e ; le contenu reste séparé de la mécanique de la grille et se teste sans GPU |
 | **L'interface demande un clip prédéfini par identifiant, `app` le construit** (§23.6) | `Command` reste `Copy` et comparable, donc testable ; `Clip` porte des `Box<dyn ...>` et ne le peut pas |
+| **Un recalage pousse le tempo vu par les clips, il ne réécrit aucune position** (§3bis.3) | l'image ne saute pas, et les positions comme les LFO glissent ensemble sans rien connaître du recalage ; réécrire `slots[0]` ne rattraperait que la position |
+| **Les gestes attendent le temps, pas les trigs** (§3bis.3) | un trig tient son rythme du son : le retarder le décalerait, alors qu'un clic n'est jamais sur le temps |
+| **Un geste de phase coupe la phase du son, pas son BPM** (§3bis.3) | sinon la correction d'une détection fausse serait écrasée à la frame suivante, et rien n'oblige à perdre le BPM pour autant |
 | **`TempoController` au-dessus de `Clock`**, pas une redéfinition (§3bis.3) | `Clock` répond à l'heure pour le déterminisme ; le tempo répond à la durée d'un beat, partagée et modifiable en live (tap, resync) |
 | **`Transport.position` est un `Signal` accumulateur**, pas un `Param` (§3bis.3) | une valeur qui avance seule à chaque frame est le rôle d'un `Signal` (§16.1), pas d'un `Param` — l'écrire via `Command::SetParam` à 60 fps détournerait un mécanisme pensé pour l'édition ponctuelle |
 | **Une arena par niveau de la grille** (`DeckId`/`LayerGroupId`/`LayerId`/`ColumnId`/`ClipId`), pas une arena unique (§3bis.1) | un identifiant typé par niveau rend une confusion détectable à la compilation, pas à l'exécution ; même idiome que `core::Graph` |
@@ -3460,11 +3515,11 @@ haut de Pro-Q. À gauche le nom, les menus et le tempo, au plus près parce que 
 qu'on touche le plus sur scène ; au milieu le fichier, centré sur la fenêtre et non sur la
 place laissée par les menus ; à droite l'état de la machine. Le nom du fichier, ses refus,
 et l'état de la sortie y restent toujours lisibles (§8.4, §23.8). La pastille du tempo
-pulse à chaque temps : elle dit le tempo, **pas la place dans la mesure**, puisque rien ne
-recale encore la phase (§3bis.3).
+pulse à chaque temps de la grille, celui que suivent les clips (§3bis.3).
 
-**Le tempo** a deux gestes de plus : `Suivre`, et à côté ce que le son en dit, `son : 128.0`
-ou `son : —` (§7.1).
+**Le tempo** a trois gestes de plus : `Temps 1`, `Suivre`, et à côté ce que le son en dit,
+`son : 128.0` ou `son : —` (§7.1). `Lancement`, sous la grille, choisit la quantification : elle
+agit sur la grille, et l'en-tête n'a plus la place à côté du fichier.
 
 **La scène.** L'image est calée à gauche, entière. **Le panneau du clip ne la couvre pas :
 c'est la seule entorse au modèle du spectre, et elle est voulue.** Un spectre se lit encore
