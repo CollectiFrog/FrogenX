@@ -243,6 +243,7 @@ mod params_tests {
             (Box::new(RadialRepeat::new(3.0)), 2),
             (Box::new(Transform::default()), 4),
             (Box::new(Smooth::new(1.0, 0.5)), 2),
+            (Box::new(Quantize::new(0.0)), 1),
             (Box::new(LinearWave::new(0.0, 0.5)), 4),
             (Box::new(Dashes::new(0.1, 0.0)), 3),
             (Box::new(Trim::default()), 3),

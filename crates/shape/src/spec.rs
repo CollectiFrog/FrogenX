@@ -6,7 +6,7 @@
 
 use crate::generator::ShapeGenerator;
 use crate::ops::{
-    Chain, Dashes, Deform, GridRepeat, LinearWave, Mirror, NoiseDisplace, RadialRepeat,
+    Chain, Dashes, Deform, GridRepeat, LinearWave, Mirror, NoiseDisplace, Quantize, RadialRepeat,
     ShapeEchoes, ShapeOp, Smooth, Transform, Trim, Twist,
 };
 use crate::parametric::{Lissajous, Rose, Superformula};
@@ -29,10 +29,11 @@ pub enum EffectKind {
     Trim,
     Dashes,
     LinearWave,
+    Quantize,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 12] = [
+    pub const ALL: [EffectKind; 13] = [
         EffectKind::Deform,
         EffectKind::Noise,
         EffectKind::RadialRepeat,
@@ -45,6 +46,7 @@ impl EffectKind {
         EffectKind::Trim,
         EffectKind::Dashes,
         EffectKind::LinearWave,
+        EffectKind::Quantize,
     ];
 
     /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
@@ -62,6 +64,7 @@ impl EffectKind {
             EffectKind::Trim => Box::new(Trim::default()),
             EffectKind::Dashes => Box::new(Dashes::new(0.1, 0.0)),
             EffectKind::LinearWave => Box::new(LinearWave::new(0.0, 0.5)),
+            EffectKind::Quantize => Box::new(Quantize::new(0.0)),
         }
     }
 
@@ -108,6 +111,7 @@ pub fn op_from_spec(spec: &Spec) -> Result<Box<dyn ShapeOp>, SpecError> {
         "Découpe" => Box::new(Trim::default()),
         "Pointillés" => Box::new(Dashes::new(0.1, 0.0)),
         "Onde linéaire" => Box::new(LinearWave::new(0.0, 0.5)),
+        "Quantification" => Box::new(Quantize::new(0.0)),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
     };
     for (i, desc) in effet.params().iter().enumerate() {
@@ -166,6 +170,7 @@ mod tests {
             Box::new(RadialRepeat::new(5.0)),
             Box::new(Transform::default()),
             Box::new(Smooth::new(2.0, 0.25)),
+            Box::new(Quantize::new(0.05)),
             Box::new(LinearWave::new(0.1, 0.4).with_phase(0.25).with_angle(0.5)),
             Box::new(Dashes::new(0.15, 0.05).with_phase(0.25)),
             Box::new(Trim::new(0.1, 0.6).with_offset(0.25)),

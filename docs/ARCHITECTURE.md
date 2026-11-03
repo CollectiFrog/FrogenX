@@ -764,6 +764,8 @@ composent en chaîne :
 - **Onde linéaire** : chaque point se déplace perpendiculairement à une direction, selon une
   sinusoïde de sa position le long d'elle (`amplitude`, `longueur d'onde`, `phase` en tours,
   `angle`). La `phase` modulée par un LFO fait défiler l'onde
+- **Quantification** : chaque sommet s'accroche à une grille de `pas` : le look pixel, ou un
+  glitch vectoriel quand le pas est modulé. Un pas nul ne fait rien
 
 > **Où investir l'effort :** ajouter un opérateur multiplie les possibilités de toutes
 > les primitives existantes. Ajouter une primitive n'ajoute qu'elle-même. En cas de
@@ -2065,7 +2067,7 @@ qui les livre (skill `doc-sync`).
 | Feature | Détail |
 |---|---|
 | Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
-| Formes | 8 générateurs, 12 effets, style de remplissage et de trait |
+| Formes | 8 générateurs, 13 effets, style de remplissage et de trait |
 | Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
 | Bibliothèque | 27 clips calés sur le tempo, grille de départ (§23.6) |
 | Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |

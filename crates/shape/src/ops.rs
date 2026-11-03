@@ -1129,6 +1129,40 @@ impl ShapeOp for LinearWave {
     }
 }
 
+/// Accroche chaque sommet à une grille : le look pixel, ou un glitch vectoriel
+/// quand le pas est modulé.
+///
+/// Opérateur ponctuel. Un pas nul ou négatif ne fait rien.
+pub struct Quantize {
+    /// Le côté d'une cellule, en unités d'espace.
+    pub step: Param,
+}
+
+impl Quantize {
+    pub fn new(step: f32) -> Self {
+        Self {
+            step: Param::fixed(step),
+        }
+    }
+}
+
+impl ShapeOp for Quantize {
+    params! {
+        "Quantification";
+        step: "pas", 0.0, 0.5;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let pas = self.step.get(g);
+        if !pas.is_finite() || pas <= 1e-6 {
+            return;
+        }
+        for p in path.points.iter_mut() {
+            *p = (*p / pas).round() * pas;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1514,6 +1548,9 @@ mod tests {
             Box::new(Dashes::new(1e-9, 1e-9)),
             Box::new(LinearWave::new(f32::NAN, f32::NAN)),
             Box::new(LinearWave::new(f32::INFINITY, 0.0).with_angle(f32::NAN)),
+            Box::new(Quantize::new(f32::NAN)),
+            Box::new(Quantize::new(f32::INFINITY)),
+            Box::new(Quantize::new(-0.1)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1654,6 +1691,7 @@ mod tests_operateurs {
             || Box::new(Trim::new(0.2, 0.7).with_offset(0.4)),
             || Box::new(Dashes::new(0.1, 0.05).with_phase(0.3)),
             || Box::new(LinearWave::new(0.1, 0.3).with_phase(0.2).with_angle(0.4)),
+            || Box::new(Quantize::new(0.08)),
             // ACTIFS
         ]
     }
@@ -2006,5 +2044,21 @@ mod tests_operateurs {
             );
             assert!((h + b).length() < 1e-3, "{h} {b}");
         }
+    }
+
+    #[test]
+    fn chaque_sommet_tombe_sur_la_grille() {
+        let p = applique(Box::new(Ellipse::circle(0.7)), Box::new(Quantize::new(0.1)));
+        for q in &p.points {
+            for v in [q.x, q.y] {
+                let k = v / 0.1;
+                assert!((k - k.round()).abs() < 1e-3, "{v}");
+            }
+        }
+        assert_eq!(
+            p.points.len(),
+            crate::generator::SMOOTH_SEGMENTS,
+            "le nombre de points reste"
+        );
     }
 }
