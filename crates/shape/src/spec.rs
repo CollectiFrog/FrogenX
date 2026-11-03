@@ -6,8 +6,8 @@
 
 use crate::generator::ShapeGenerator;
 use crate::ops::{
-    Chain, Dashes, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeEchoes, ShapeOp,
-    Smooth, Transform, Trim, Twist,
+    Chain, Dashes, Deform, GridRepeat, LinearWave, Mirror, NoiseDisplace, RadialRepeat,
+    ShapeEchoes, ShapeOp, Smooth, Transform, Trim, Twist,
 };
 use crate::parametric::{Lissajous, Rose, Superformula};
 use crate::primitives::{Arc, Ellipse, Polygon, Rect, Star};
@@ -28,10 +28,11 @@ pub enum EffectKind {
     ShapeEchoes,
     Trim,
     Dashes,
+    LinearWave,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 11] = [
+    pub const ALL: [EffectKind; 12] = [
         EffectKind::Deform,
         EffectKind::Noise,
         EffectKind::RadialRepeat,
@@ -43,6 +44,7 @@ impl EffectKind {
         EffectKind::ShapeEchoes,
         EffectKind::Trim,
         EffectKind::Dashes,
+        EffectKind::LinearWave,
     ];
 
     /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
@@ -59,6 +61,7 @@ impl EffectKind {
             EffectKind::ShapeEchoes => Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)),
             EffectKind::Trim => Box::new(Trim::default()),
             EffectKind::Dashes => Box::new(Dashes::new(0.1, 0.0)),
+            EffectKind::LinearWave => Box::new(LinearWave::new(0.0, 0.5)),
         }
     }
 
@@ -104,6 +107,7 @@ pub fn op_from_spec(spec: &Spec) -> Result<Box<dyn ShapeOp>, SpecError> {
         "Échos de forme" => Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)),
         "Découpe" => Box::new(Trim::default()),
         "Pointillés" => Box::new(Dashes::new(0.1, 0.0)),
+        "Onde linéaire" => Box::new(LinearWave::new(0.0, 0.5)),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
     };
     for (i, desc) in effet.params().iter().enumerate() {
@@ -162,6 +166,7 @@ mod tests {
             Box::new(RadialRepeat::new(5.0)),
             Box::new(Transform::default()),
             Box::new(Smooth::new(2.0, 0.25)),
+            Box::new(LinearWave::new(0.1, 0.4).with_phase(0.25).with_angle(0.5)),
             Box::new(Dashes::new(0.15, 0.05).with_phase(0.25)),
             Box::new(Trim::new(0.1, 0.6).with_offset(0.25)),
             Box::new(ShapeEchoes::new(5.0, 0.7, 0.3)),

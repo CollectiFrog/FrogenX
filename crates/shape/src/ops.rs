@@ -1055,6 +1055,80 @@ impl ShapeOp for Dashes {
     }
 }
 
+/// Déplace chaque point selon une sinusoïde de sa position le long d'une
+/// direction, perpendiculairement à elle : un drapeau, une ondulation.
+///
+/// Opérateur ponctuel. La phase est en tours : modulée par un LFO, l'onde défile
+/// à la vitesse du clip (§5.4).
+pub struct LinearWave {
+    /// En unités d'espace.
+    pub amplitude: Param,
+    /// En unités d'espace. Saturée à 0,001 au moins.
+    pub wavelength: Param,
+    /// En tours.
+    pub phase: Param,
+    /// La direction de propagation, en radians.
+    pub angle: Param,
+}
+
+impl LinearWave {
+    pub fn new(amplitude: f32, wavelength: f32) -> Self {
+        Self {
+            amplitude: Param::fixed(amplitude),
+            wavelength: Param::fixed(wavelength),
+            phase: Param::fixed(0.0),
+            angle: Param::fixed(0.0),
+        }
+    }
+
+    pub fn with_phase(mut self, phase: f32) -> Self {
+        self.phase = Param::fixed(phase);
+        self
+    }
+
+    pub fn with_angle(mut self, angle: f32) -> Self {
+        self.angle = Param::fixed(angle);
+        self
+    }
+}
+
+impl ShapeOp for LinearWave {
+    params! {
+        "Onde linéaire";
+        amplitude: "amplitude", 0.0, 0.5;
+        wavelength: "longueur d'onde", 0.05, 2.0;
+        phase: "phase", 0.0, 1.0;
+        angle: "angle", -std::f32::consts::PI, std::f32::consts::PI;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let amplitude = self.amplitude.get(g);
+        let amplitude = if amplitude.is_finite() {
+            amplitude
+        } else {
+            0.0
+        };
+        if amplitude == 0.0 {
+            return;
+        }
+        let onde = self.wavelength.get(g);
+        let onde = if onde.is_finite() {
+            onde.abs().max(1e-3)
+        } else {
+            1.0
+        };
+        let phase = self.phase.get(g);
+        let phase = if phase.is_finite() { phase } else { 0.0 };
+        let angle = self.angle.get(g);
+        let angle = if angle.is_finite() { angle } else { 0.0 };
+        let (s, c) = angle.sin_cos();
+        let (sens, cote) = (Vec2::new(c, s), Vec2::new(-s, c));
+        for p in path.points.iter_mut() {
+            *p += cote * (((p.dot(sens) / onde + phase) * TAU).sin() * amplitude);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1438,6 +1512,8 @@ mod tests {
             Box::new(Trim::new(0.9, 0.1).with_offset(-7.5)),
             Box::new(Dashes::new(f32::NAN, f32::INFINITY).with_phase(f32::NAN)),
             Box::new(Dashes::new(1e-9, 1e-9)),
+            Box::new(LinearWave::new(f32::NAN, f32::NAN)),
+            Box::new(LinearWave::new(f32::INFINITY, 0.0).with_angle(f32::NAN)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1577,6 +1653,7 @@ mod tests_operateurs {
             || Box::new(ShapeEchoes::new(5.0, 0.8, 0.25)),
             || Box::new(Trim::new(0.2, 0.7).with_offset(0.4)),
             || Box::new(Dashes::new(0.1, 0.05).with_phase(0.3)),
+            || Box::new(LinearWave::new(0.1, 0.3).with_phase(0.2).with_angle(0.4)),
             // ACTIFS
         ]
     }
@@ -1884,5 +1961,50 @@ mod tests_operateurs {
         let entier = gen_path(&dense(), &g);
         let p = applique(Box::new(dense()), Box::new(Dashes::new(1e-6, 1e-6)));
         assert!(memes_formes(&entier, &p));
+    }
+
+    #[test]
+    fn l_onde_deplace_perpendiculairement_a_sa_direction() {
+        let g = Graph::new();
+        let audio = frogenx_core::AudioFeatures::default();
+        let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+        let mut path = Path::new();
+        path.points.extend([
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.25, 0.0),
+            Vec2::new(0.5, 0.0),
+        ]);
+        path.end_contour(false);
+        LinearWave::new(0.1, 1.0).apply(0.0, &ctx, &g, &mut path);
+        assert!(
+            (path.points[1] - Vec2::new(0.25, 0.1)).length() < EPS,
+            "{}",
+            path.points[1]
+        );
+        assert!(
+            (path.points[2] - Vec2::new(0.5, 0.0)).length() < EPS,
+            "{}",
+            path.points[2]
+        );
+    }
+
+    #[test]
+    fn une_demi_phase_inverse_l_onde() {
+        let haut = applique(
+            Box::new(Arc::new(0.0, 1.0, 0.5)),
+            Box::new(LinearWave::new(0.1, 0.3)),
+        );
+        let bas = applique(
+            Box::new(Arc::new(0.0, 1.0, 0.5)),
+            Box::new(LinearWave::new(0.1, 0.3).with_phase(0.5)),
+        );
+        let base = gen_path(&Arc::new(0.0, 1.0, 0.5), &Graph::new());
+        for i in 0..base.points.len() {
+            let (h, b) = (
+                haut.points[i] - base.points[i],
+                bas.points[i] - base.points[i],
+            );
+            assert!((h + b).length() < 1e-3, "{h} {b}");
+        }
     }
 }

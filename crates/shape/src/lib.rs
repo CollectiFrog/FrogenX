@@ -67,8 +67,8 @@ pub use crt::{CrtParams, CrtStep, FilterKind, FilterStep, ImageFilter};
 pub use feedback::{FeedbackParams, FeedbackStep};
 pub use generator::{ParamDesc, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 pub use ops::{
-    Chain, Dashes, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeEchoes, ShapeOp,
-    Smooth, Transform, Trim, Twist,
+    Chain, Dashes, Deform, GridRepeat, LinearWave, Mirror, NoiseDisplace, RadialRepeat,
+    ShapeEchoes, ShapeOp, Smooth, Transform, Trim, Twist,
 };
 pub use parametric::{Lissajous, Rose, Superformula};
 pub use path::{Contour, Path};
