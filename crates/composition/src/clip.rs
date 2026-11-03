@@ -4,8 +4,8 @@
 use frogenx_core::{FeatureKind, Graph, NodeId, Param, Signal};
 use frogenx_osc::{AudioFeature, TrigInput};
 use frogenx_shape::{
-    ColorParam, FeedbackParams, MixKind, ParamDesc, ShapeGenerator, ShapeOp, ShapeStyle,
-    VideoParams, COLOR_CHANNELS,
+    ColorParam, FeedbackParams, ImageFilter, MixKind, ParamDesc, ShapeGenerator, ShapeOp,
+    ShapeStyle, VideoParams, COLOR_CHANNELS,
 };
 use std::path::Path;
 
@@ -191,6 +191,9 @@ pub struct Clip {
     pub name: String,
     pub source: ClipSource,
     pub effects: Vec<Box<dyn ShapeOp>>,
+    /// Les effets d'image, après les effets de forme : la géométrie d'abord, les
+    /// pixels ensuite (§6.2). Ils partagent la numérotation de `ParamSlot::Effect`.
+    pub filters: Vec<ImageFilter>,
     pub transport: Transport,
     pub transition: ClipTransition,
     /// Multiplie le `dt` de son graphe (§3bis.2). Se résout dans le graphe de
@@ -210,6 +213,7 @@ impl Clip {
                 style: ShapeStyle::default(),
             },
             effects: Vec::new(),
+            filters: Vec::new(),
             transport,
             transition: ClipTransition::Cut,
             speed: Param::fixed(1.0),
@@ -222,6 +226,7 @@ impl Clip {
             name: params.kind().to_string(),
             source: ClipSource::Feedback { graph, params },
             effects: Vec::new(),
+            filters: Vec::new(),
             transport,
             transition: ClipTransition::Cut,
             speed: Param::fixed(1.0),
@@ -263,6 +268,7 @@ impl Clip {
                 mode,
             },
             effects: Vec::new(),
+            filters: Vec::new(),
             transport,
             transition: ClipTransition::Cut,
             speed: Param::fixed(1.0),
@@ -334,6 +340,39 @@ impl Clip {
     /// Tout ce qui se règle dans ce clip, sans connaître aucun type de forme
     /// (§16.3 ter). Les `Param` de son graphe interne n'y figurent pas.
     pub fn params(&self) -> Vec<ParamGroup> {
+        let mut groupes = self.source_params();
+        // Les effets d'image viennent juste après la source et ses effets de forme,
+        // avant le style : leur rang suit celui de `ParamSlot::Effect` (§6.2).
+        let apres = match self.source {
+            ClipSource::Shape { .. } => 1 + self.effects.len(),
+            _ => 1,
+        };
+        let graph = self.graph();
+        let filtres = self.filters.iter().enumerate().map(|(i, f)| {
+            let effect = self.effects.len() + i;
+            ParamGroup {
+                label: f.kind().to_string(),
+                params: f
+                    .params()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(param, desc)| ClipParam {
+                        slot: ParamSlot::Effect { effect, param },
+                        desc,
+                        audio: audio_source(graph, desc.value),
+                        trig: trig_source(graph, desc.value),
+                    })
+                    .collect(),
+            }
+        });
+        let reste = groupes.split_off(apres.min(groupes.len()));
+        groupes.extend(filtres);
+        groupes.extend(reste);
+        groupes
+    }
+
+    /// La source, ses effets de forme et son style.
+    fn source_params(&self) -> Vec<ParamGroup> {
         let graph = self.graph();
         let enumere = |descs: Vec<ParamDesc>, slot: &dyn Fn(usize) -> ParamSlot| {
             descs
@@ -493,6 +532,14 @@ impl Clip {
     }
 
     fn param_mut(&mut self, slot: ParamSlot) -> Option<&mut Param> {
+        if let ParamSlot::Effect { effect, param } = slot {
+            if effect >= self.effects.len() {
+                return self
+                    .filters
+                    .get_mut(effect - self.effects.len())
+                    .and_then(|f| f.param_mut(param));
+            }
+        }
         let (generator, style) = match &mut self.source {
             ClipSource::Shape {
                 generator, style, ..
@@ -512,6 +559,10 @@ impl Clip {
         };
         match slot {
             ParamSlot::Generator(i) => generator.param_mut(i),
+            ParamSlot::Effect { effect, param } if effect >= self.effects.len() => self
+                .filters
+                .get_mut(effect - self.effects.len())
+                .and_then(|f| f.param_mut(param)),
             ParamSlot::Effect { effect, param } => self
                 .effects
                 .get_mut(effect)
@@ -547,6 +598,26 @@ impl Clip {
             | ClipSource::Feedback { graph, .. }
             | ClipSource::Video { graph, .. } => graph,
         }
+    }
+
+    pub fn with_filter(mut self, filter: ImageFilter) -> Self {
+        self.filters.push(filter);
+        self
+    }
+
+    /// Les effets de la chaîne, ceux de forme puis ceux d'image.
+    pub fn effect_count(&self) -> usize {
+        self.effects.len() + self.filters.len()
+    }
+
+    /// Un effet peut-il aller de `index` à `to` ? Jamais par-dessus la frontière :
+    /// la géométrie passe toujours avant les pixels (§6.2).
+    pub fn can_move_effect(&self, index: usize, to: usize) -> bool {
+        let formes = self.effects.len();
+        index != to
+            && index < self.effect_count()
+            && to < self.effect_count()
+            && (index < formes) == (to < formes)
     }
 
     pub fn with_effect(mut self, op: Box<dyn ShapeOp>) -> Self {

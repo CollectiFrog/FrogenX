@@ -16,6 +16,7 @@ const V4: &str = include_str!("fixtures/patch_v4.json");
 const V5: &str = include_str!("fixtures/patch_v5.json");
 const V6: &str = include_str!("fixtures/patch_v6.json");
 const V7: &str = include_str!("fixtures/patch_v7.json");
+const V8: &str = include_str!("fixtures/patch_v8.json");
 
 fn pistes(c: &Composition) -> Vec<String> {
     let mut ids = Vec::new();
@@ -133,11 +134,36 @@ fn la_fixture_v7_garde_sa_video_son_mode_et_son_calage() {
     assert_eq!(beats, 16.0);
 }
 
-/// Tant que `CURRENT_VERSION` vaut 7, relire puis réécrire la fixture rend le
+#[test]
+fn un_fichier_v7_n_a_pas_d_effet_d_image() {
+    let c = from_json(V7).unwrap();
+    let mut pistes = Vec::new();
+    c.layers_in_order(&mut pistes);
+    for p in pistes {
+        let piste = c.layer(p).unwrap();
+        for i in 0..c.columns().len() {
+            if let Some(id) = piste.cell(i) {
+                assert!(c.clip(id).unwrap().filters.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn la_fixture_v8_garde_son_crt_et_ses_reglages() {
+    let c = from_json(V8).unwrap();
+    let (id, _) = c.video_clips().next().expect("la vidéo de la v7");
+    let filtres = &c.clip(id).unwrap().filters;
+    assert_eq!(filtres.len(), 1);
+    let frogenx_shape::ImageFilter::Crt(p) = filtres[0];
+    assert_eq!(p.lines.base(), 480.0);
+}
+
+/// Tant que `CURRENT_VERSION` vaut 8, relire puis réécrire la fixture rend le
 /// même contenu. Sinon, le format a changé sans changer de version.
 #[test]
 fn le_format_n_a_pas_change_sans_changer_de_version() {
-    if CURRENT_VERSION != 7 {
+    if CURRENT_VERSION != 8 {
         return;
     }
     let sans_meta = |texte: &str| {
@@ -145,6 +171,6 @@ fn le_format_n_a_pas_change_sans_changer_de_version() {
         v.as_object_mut().unwrap().remove("meta");
         v
     };
-    let reecrit = to_json(&from_json(V7).unwrap()).unwrap();
-    assert_eq!(sans_meta(&reecrit), sans_meta(V7));
+    let reecrit = to_json(&from_json(V8).unwrap()).unwrap();
+    assert_eq!(sans_meta(&reecrit), sans_meta(V8));
 }

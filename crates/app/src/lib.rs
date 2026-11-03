@@ -28,15 +28,15 @@ use frogenx_core::{
     AnalysisSettings, AudioFeatures, Clock, ClockMode, Ctx, Diagnostics, Graph, TrigValues,
 };
 use frogenx_layer::{
-    BlendParams, FeedbackRenderer, FeedbackStep, FrameHistory, Gpu, MixKind, MixRenderer,
-    RenderLayer, ShapeContent, ShapeRenderer, VideoImage, VideoRenderer,
+    BlendParams, FeedbackRenderer, FeedbackStep, FilterChain, FrameHistory, Gpu, MixKind,
+    MixRenderer, RenderLayer, ShapeContent, ShapeRenderer, VideoImage, VideoRenderer,
 };
 use frogenx_output::{
     CpuSink, CpuSinkId, DropPolicy, GpuSink, GpuSinkId, OutputError, OutputSink, Outputs,
     SinkStatus, StreamFormat,
 };
 use frogenx_render::{Compositor, LayerInput};
-use frogenx_shape::VideoStep;
+use frogenx_shape::{FilterStep, VideoStep};
 use frogenx_video::{Frame, Loader, VideoPlayer};
 use glam::UVec2;
 use history::{History, Restore};
@@ -154,6 +154,9 @@ struct Track {
     /// Créé à sa première vidéo.
     video: Option<VideoRenderer>,
     outgoing_video: Option<VideoRenderer>,
+    /// Les effets d'image du clip qui joue, et de celui qui sort (§6.2).
+    filters: Option<FilterChain>,
+    outgoing_filters: Option<FilterChain>,
     /// Le clip qui sort d'une transition, et leur mélange : créés à la première
     /// de la piste (§3bis.2).
     outgoing: Option<ShapeRenderer>,
@@ -179,6 +182,13 @@ enum ClipLayer<'a> {
         frame: Option<Arc<Frame>>,
         step: VideoStep,
         blend: BlendParams,
+    },
+    /// Un clip, puis ses effets d'image (§6.2).
+    Filtered {
+        inner: Box<ClipLayer<'a>>,
+        chain: &'a mut FilterChain,
+        steps: Vec<FilterStep>,
+        t: f64,
     },
     /// Deux clips mélangés : chacun garde son graphe, l'appel n'en porte qu'un.
     Mix {
@@ -212,6 +222,15 @@ impl RenderLayer for ClipLayer<'_> {
                 });
                 renderer.prepare(image, step, gpu);
             }
+            Self::Filtered {
+                inner,
+                chain,
+                steps,
+                t: temps,
+            } => {
+                inner.prepare(t, ctx, g, gpu);
+                chain.prepare(gpu, inner.output(), steps, *temps);
+            }
             Self::Mix {
                 incoming,
                 outgoing,
@@ -238,6 +257,10 @@ impl RenderLayer for ClipLayer<'_> {
             Self::Shape { renderer, .. } => renderer.encode(encoder),
             Self::Feedback { renderer, .. } => renderer.encode(encoder),
             Self::Video { renderer, .. } => renderer.encode(encoder),
+            Self::Filtered { inner, chain, .. } => {
+                inner.encode(encoder);
+                chain.encode(encoder);
+            }
             Self::Mix {
                 incoming,
                 outgoing,
@@ -256,6 +279,7 @@ impl RenderLayer for ClipLayer<'_> {
             Self::Shape { renderer, .. } => renderer.output(),
             Self::Feedback { renderer, .. } => renderer.output(),
             Self::Video { renderer, .. } => renderer.output(),
+            Self::Filtered { inner, chain, .. } => chain.output().unwrap_or(inner.output()),
             Self::Mix { renderer, .. } => renderer.output(),
         }
     }
@@ -266,13 +290,16 @@ impl RenderLayer for ClipLayer<'_> {
             | Self::Feedback { blend, .. }
             | Self::Video { blend, .. }
             | Self::Mix { blend, .. } => *blend,
+            Self::Filtered { inner, .. } => inner.blend(),
         }
     }
 
     /// La taille d'un feedback ne change pas : `Engine` n'en a qu'une (§8).
     fn resize(&mut self, size: UVec2, gpu: &Gpu) {
-        if let Self::Shape { renderer, .. } = self {
-            renderer.resize(size, gpu);
+        match self {
+            Self::Shape { renderer, .. } => renderer.resize(size, gpu),
+            Self::Filtered { inner, .. } => inner.resize(size, gpu),
+            _ => {}
         }
     }
 }
@@ -283,8 +310,17 @@ struct Drawing<'a> {
     size: UVec2,
     history: &'a FrameHistory,
     composition: &'a Composition,
+    t: f64,
     dt: f64,
     blend: BlendParams,
+}
+
+/// Les renderers d'une place de la piste : le clip qui joue, ou celui qui sort.
+struct Place<'a> {
+    shape: &'a mut ShapeRenderer,
+    feedback: &'a mut Option<FeedbackRenderer>,
+    video: &'a mut Option<VideoRenderer>,
+    filters: &'a mut Option<FilterChain>,
 }
 
 /// Les lecteurs de la grille (§9.3). Un clip qui ne joue pas garde sa tête en
@@ -342,16 +378,46 @@ impl Players {
     }
 }
 
-/// Les renderers vidéo d'une place de la piste.
-type VideoSlot<'a> = &'a mut Option<VideoRenderer>;
-
 impl<'a> Drawing<'a> {
+    /// Le clip, puis ses effets d'image s'il en a.
     fn layer(
         &self,
         (id, clip): (ClipId, &'a Clip),
+        place: Place<'a>,
+        players: &mut Players,
+    ) -> ClipLayer<'a> {
+        let Place {
+            shape,
+            feedback,
+            video,
+            filters,
+        } = place;
+        let couche = self.source(id, clip, shape, feedback, video, players);
+        if clip.filters.is_empty() {
+            return couche;
+        }
+        let taille = self.size;
+        let vitesse = sanitize_speed(clip.speed.get(self.composition.graph()));
+        let dt = self.dt * vitesse as f64;
+        ClipLayer::Filtered {
+            inner: Box::new(couche),
+            chain: filters.get_or_insert_with(|| FilterChain::new(taille)),
+            steps: clip
+                .filters
+                .iter()
+                .map(|f| f.step(clip.graph(), dt))
+                .collect(),
+            t: self.t,
+        }
+    }
+
+    fn source(
+        &self,
+        id: ClipId,
+        clip: &'a Clip,
         renderer: &'a mut ShapeRenderer,
         feedback: &'a mut Option<FeedbackRenderer>,
-        video: VideoSlot<'a>,
+        video: &'a mut Option<VideoRenderer>,
         players: &mut Players,
     ) -> ClipLayer<'a> {
         match &clip.source {
@@ -541,6 +607,10 @@ impl Engine {
             track.outgoing = None;
             track.outgoing_feedback = None;
             track.mix = None;
+            track.video = None;
+            track.outgoing_video = None;
+            track.filters = None;
+            track.outgoing_filters = None;
         }
         Ok(())
     }
@@ -764,6 +834,7 @@ impl Engine {
                 size: self.size,
                 history: &self.history,
                 composition,
+                t,
                 dt,
                 blend: piste.blend,
             };
@@ -773,9 +844,12 @@ impl Engine {
             let actif = piste.active_clip();
             let entrant = dessin.layer(
                 (actif.unwrap_or(clip_id), clip),
-                &mut track.renderer,
-                &mut track.feedback,
-                &mut track.video,
+                Place {
+                    shape: &mut track.renderer,
+                    feedback: &mut track.feedback,
+                    video: &mut track.video,
+                    filters: &mut track.filters,
+                },
                 &mut self.players,
             );
             let couche = match transition {
@@ -784,11 +858,14 @@ impl Engine {
                     let (gpu, taille) = (&self.gpu, self.size);
                     let sortie = dessin.layer(
                         (sortant_id, sortant),
-                        track
-                            .outgoing
-                            .get_or_insert_with(|| ShapeRenderer::new(gpu, taille)),
-                        &mut track.outgoing_feedback,
-                        &mut track.outgoing_video,
+                        Place {
+                            shape: track
+                                .outgoing
+                                .get_or_insert_with(|| ShapeRenderer::new(gpu, taille)),
+                            feedback: &mut track.outgoing_feedback,
+                            video: &mut track.outgoing_video,
+                            filters: &mut track.outgoing_filters,
+                        },
                         &mut self.players,
                     );
                     ClipLayer::Mix {
@@ -849,6 +926,8 @@ impl Engine {
                         feedback: None,
                         video: None,
                         outgoing_video: None,
+                        filters: None,
+                        outgoing_filters: None,
                         outgoing: None,
                         outgoing_feedback: None,
                         mix: None,

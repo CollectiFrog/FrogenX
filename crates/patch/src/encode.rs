@@ -239,6 +239,11 @@ fn clip(c: &Clip, composition: &Positions) -> Result<FileClip, PatchError> {
             .iter()
             .map(|e| spec(&e.spec(), &positions))
             .collect::<Result<_, _>>()?,
+        filters: c
+            .filters
+            .iter()
+            .map(|f| spec(&f.spec(), &positions))
+            .collect::<Result<_, _>>()?,
         style: style_,
         feedback,
         video: video_,

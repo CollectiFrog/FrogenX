@@ -141,6 +141,9 @@ pub struct FileClip {
     #[serde(default)]
     pub generator: Option<FileSpec>,
     pub effects: Vec<FileSpec>,
+    /// Les effets d'image, après ceux de forme (§6.2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<FileSpec>,
     #[serde(default)]
     pub style: Option<FileStyle>,
     #[serde(default)]

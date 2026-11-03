@@ -15,7 +15,7 @@ use frogenx_core::{AmpScale, AnalysisMethod, FreqScale, Graph, NodeId, Param, Sp
 use frogenx_osc::{Divider, SpectrumZone};
 use frogenx_shape::{
     generator_from_spec, op_from_spec, BlendMode, BlendParams, ColorParam, FeedbackParams,
-    ShapeStyle, StrokeStyle, VideoParams,
+    ImageFilter, ShapeStyle, StrokeStyle, VideoParams,
 };
 use std::collections::BTreeMap;
 
@@ -240,6 +240,13 @@ fn clip(file: &FileClip, composition: &[NodeId]) -> Result<Clip, PatchError> {
     c.speed = param(file.speed, composition)?;
     for effect in &file.effects {
         c = c.with_effect(op_from_spec(&spec(&effect.kind, &effect.fields, &nodes)?)?);
+    }
+    for filter in &file.filters {
+        c = c.with_filter(ImageFilter::from_spec(&spec(
+            &filter.kind,
+            &filter.fields,
+            &nodes,
+        )?)?);
     }
     Ok(c)
 }

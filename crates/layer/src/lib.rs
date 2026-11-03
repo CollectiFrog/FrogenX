@@ -22,6 +22,7 @@
 //! crate désigne un objet qui produit une texture ; les deux coexisteront dans
 //! `render` et `ui` (§6).
 
+pub mod crt;
 pub mod feedback;
 pub mod gpu;
 pub mod render_layer;
@@ -31,6 +32,7 @@ pub mod tessellate;
 pub mod transition;
 pub mod video;
 
+pub use crt::{CrtRenderer, FilterChain};
 pub use feedback::{FeedbackRenderer, FrameHistory};
 pub use frogenx_shape::{
     srgb_to_linear, BlendMode, BlendParams, ColorParam, FeedbackParams, FeedbackStep, MixKind,

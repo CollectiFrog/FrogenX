@@ -14,10 +14,10 @@ use crate::widgets::{floating_panel, knob, knob_with_menu, Knob, Modulation, KNO
 use crate::{theme, FrameView, UiState};
 use egui::{Button, Rect, RichText, Ui};
 use frogenx_composition::{
-    Clip, ClipId, ClipParam, ClipSource, Command, Layer, LayerId, PlayMode, TransitionKind,
-    MAX_CLIP_SPEED,
+    Clip, ClipId, ClipParam, Command, Layer, LayerId, PlayMode, TransitionKind, MAX_CLIP_SPEED,
 };
 use frogenx_core::FeatureKind;
+use frogenx_shape::FilterKind;
 use std::ops::Range;
 
 /// La largeur qu'on garde à côté de l'image pour le panneau.
@@ -92,15 +92,20 @@ fn card<T>(
 
 /// Les flèches d'un effet : la chaîne se lit de gauche à droite. Rend sa nouvelle
 /// place, si l'une est cliquée.
-fn effect_arrows(ui: &mut Ui, index: usize, chaine: usize) -> Option<usize> {
+fn effect_arrows(ui: &mut Ui, index: usize, clip: &Clip) -> Option<usize> {
     let mut place = None;
     ui.spacing_mut().item_spacing.x = 2.0;
     let fleche = |texte| Button::new(RichText::new(texte).size(10.5)).small();
-    if ui.add_enabled(index > 0, fleche("<")).clicked() {
-        place = Some(index - 1);
+    // Une flèche se grise au bout de la chaîne, et à la frontière des pixels (§6.2).
+    let avant = index
+        .checked_sub(1)
+        .filter(|to| clip.can_move_effect(index, *to));
+    if ui.add_enabled(avant.is_some(), fleche("<")).clicked() {
+        place = avant;
     }
-    if ui.add_enabled(index + 1 < chaine, fleche(">")).clicked() {
-        place = Some(index + 1);
+    let apres = Some(index + 1).filter(|to| clip.can_move_effect(index, *to));
+    if ui.add_enabled(apres.is_some(), fleche(">")).clicked() {
+        place = apres;
     }
     place
 }
@@ -344,6 +349,18 @@ fn video_row(ui: &mut Ui, id: ClipId, clip: &Clip, commands: &mut Vec<Command>) 
     }
 }
 
+/// Ajouter un effet d'image d'ici : il vaut pour toute sorte de clip (§6.2).
+fn filter_menu(ui: &mut Ui, id: ClipId, commands: &mut Vec<Command>) {
+    ui.menu_button("Effet d'image", |ui| {
+        for kind in FilterKind::ALL {
+            if ui.button(kind.label()).clicked() {
+                commands.push(Command::AddFilter { clip: id, kind });
+                ui.close();
+            }
+        }
+    });
+}
+
 /// Les réglages propres au clip et à sa piste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipKnob {
@@ -414,14 +431,14 @@ pub fn floating(
             if let Some(erreur) = view.video_error {
                 ui.label(RichText::new(erreur).size(11.0).color(theme::ACCENT));
             }
-            ui.horizontal(|ui| playback_row(ui, id, clip, commands));
+            ui.horizontal(|ui| {
+                playback_row(ui, id, clip, commands);
+                filter_menu(ui, id, commands);
+            });
             ui.horizontal(|ui| video_row(ui, id, clip, commands));
             ui.horizontal(|ui| transition_row(ui, id, clip, commands));
             let groupes = clip.params();
-            let chaine = match clip.source {
-                ClipSource::Shape { .. } => clip.effects.len(),
-                ClipSource::Feedback { .. } | ClipSource::Video { .. } => 0,
-            };
+            let chaine = clip.effect_count();
             let trigs: Vec<(String, u32)> = c
                 .trigs()
                 .iter()
@@ -469,7 +486,7 @@ pub fn floating(
                                     par_rangee,
                                     |ui| {
                                         if let Some(index) = effet {
-                                            deplace = effect_arrows(ui, index, chaine)
+                                            deplace = effect_arrows(ui, index, clip)
                                                 .map(|to| (index, to));
                                         }
                                     },

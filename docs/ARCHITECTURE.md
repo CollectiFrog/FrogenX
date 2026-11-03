@@ -899,7 +899,28 @@ comparent au shader, comme pour le mélange (§22.1).
 l'alpha. Le halo, qui éclaire, remonte l'alpha au niveau de la couleur. Hors de l'écran bombé, la
 couche est transparente : les pistes du dessous se voient dans les coins.
 
+**Les gestes.** Le panneau du clip porte `Effet d'image`, à côté de sa lecture ; l'éditeur de
+nœuds le propose aussi au clic droit du fond, pour toute sorte de clip. Une fois ajouté, le CRT
+est une carte comme une autre : ses flèches, son clic droit pour le retirer ou le déplacer.
+
 **Le fichier.** Version 8 : un clip porte `filters`, facultatif.
+
+**Pièges.** Un nombre de lignes sous 16 est ramené à 16 : un test qui en demandait 8 lisait la
+même valeur sur chaque rangée. Deux points d'entrée aux liaisons différentes ne partagent pas un
+module WGSL : le flou a le sien (`crt_blur.wgsl`). Un tableau WGSL indexé par une variable doit
+être `var`, pas `let`.
+
+**Ce qui est vérifié, et comment.** La référence en Rust : écran bombé, lignes, masque, vignette,
+rémanence par seconde, réglages absurdes saturés. La chaîne : toute sorte de clip, la
+numérotation partagée, la frontière infranchissable, le retrait par rang global, la modulation.
+Le fichier : une fixture v8 relue et réécrite à l'identique. Dans le moteur, par pixels : les
+réglages d'usine compilent les deux shaders et gardent l'image, un CRT éteint ne change rien, les
+lignes alternent sans toucher l'alpha, l'écran bombé vide ses coins, la vignette assombrit les
+bords. Sur la vraie fenêtre, un CRT sur une vidéo 1080p60 sous deux pistes de formes : courbure,
+lignes et halo visibles sur une capture, les formes intactes au-dessus, 59,8 fps.
+
+**Pas encore essayés :** la rémanence et le bruit regardés à l'écran, le menu `Effet d'image` à la
+vraie souris, plusieurs CRT à la suite, et le coût en 4K.
 
 ## 7. Audio
 
@@ -2034,6 +2055,7 @@ qui les livre (skill `doc-sync`).
 | Spectrogramme | l'historique du spectre sur 2 à 30 s, en bande sous le tracé (§23.7) |
 | Enregistrement | H.264 ou ProRes par ffmpeg, avec le son, temps réel ou offline (§8.2) |
 | Clips vidéo | tout ce que lit ffmpeg, départ instantané, calage sur le tempo, muets (§9.3) |
+| Effet CRT | lignes, masque, courbure, vignette, halo, aberration, bruit, rémanence, par clip (§6.2) |
 | Flux réseau | Spout vers KyberFrog, résolution et cadence par flux, rendu réglable, relecture en direct (§8.5) |
 | Modes de lecture | boucle, une fois, aller-retour, durée réglable (§3bis.3) |
 | Transitions | fondu et volets, en battements, réglés clip par clip (§3bis.2) |
@@ -2813,7 +2835,8 @@ fichier v1 se migre en le mettant à `false`, ce qu'il faisait déjà sans le di
 fichier v2 n'a rien à changer. La version 4 donne un canal à chaque trig (§3bis.6). La version 5
 ajoute `quantize` (§3bis.3) : un fichier v4 lançait au clic, il reçoit `off`. La version 6 ajoute
 `place` aux nœuds, facultative (§23.10) : un fichier v5 n'a rien à changer, ses nœuds restent
-placés d'office.
+placés d'office. La version 7 ajoute les clips vidéo (§9.3), la 8 les effets d'image (§6.2) : ni
+l'une ni l'autre n'a rien à changer dans un fichier plus ancien.
 
 Migrations **en chaîne**, une fonction par saut de version. Un patch v1 traverse
 `1→2→3` — on n'écrit jamais de migration directe `1→3`, qui doublerait le travail à

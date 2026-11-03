@@ -12,7 +12,7 @@ use crate::trig::{TrigSlot, TrigTarget};
 use crate::wiring::{GraphScope, NodeKind, NodeValue, ParamTarget};
 use frogenx_core::{AmpScale, AnalysisMethod, FeatureKind, FreqScale, NodeId, Param};
 use frogenx_osc::SpectrumZone;
-use frogenx_shape::EffectKind;
+use frogenx_shape::{EffectKind, FilterKind};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
@@ -166,6 +166,12 @@ pub enum Command {
         clip: ClipId,
         index: usize,
     },
+    /// Ajoute un effet d'image (§6.2). Retirer et déplacer passent par les commandes
+    /// des effets, dont il partage la numérotation.
+    AddFilter {
+        clip: ClipId,
+        kind: FilterKind,
+    },
     /// Change la place d'un effet dans la chaîne (§23.10).
     MoveEffect {
         clip: ClipId,
@@ -233,7 +239,7 @@ impl Command {
             Self::AddNode { .. } => "Ajout d'un nœud",
             Self::RemoveNode { .. } => "Retrait d'un nœud",
             Self::Connect { .. } | Self::Disconnect { .. } => "Câblage",
-            Self::AddEffect { .. } => "Ajout d'un effet",
+            Self::AddEffect { .. } | Self::AddFilter { .. } => "Ajout d'un effet",
             Self::RemoveEffect { .. } => "Retrait d'un effet",
             Self::MoveEffect { .. } => "Ordre des effets",
             Self::SetNodePlace { .. } => "Place d'un nœud",
@@ -281,6 +287,7 @@ impl Command {
             | Self::SetTargetDepth { .. }
             | Self::SetNodeValue { .. }
             | Self::AddEffect { .. }
+            | Self::AddFilter { .. }
             | Self::RemoveEffect { .. }
             | Self::MoveEffect { .. }
             | Self::SetNodePlace { .. }
@@ -394,6 +401,7 @@ impl Composition {
             } => self.set_node_value(scope, node, field, value),
             Command::AddEffect { clip, kind } => self.add_effect(clip, kind),
             Command::RemoveEffect { clip, index } => self.remove_effect(clip, index),
+            Command::AddFilter { clip, kind } => self.add_filter(clip, kind),
             Command::MoveEffect { clip, index, to } => self.move_effect(clip, index, to),
             Command::SetNodePlace { scope, node, place } => self.set_node_place(scope, node, place),
             Command::SetTempoFollow(suivre) => {

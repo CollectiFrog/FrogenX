@@ -103,9 +103,11 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
   écriture par fichier temporaire. Seule crate à connaître le JSON ; `core` décrit un nœud
   par une `Spec` neutre. Un nouveau `Signal` doit entrer dans `composition/src/signals.rs`.
 - Un clip est une forme, un écho (`ClipSource::Feedback`, §6.1) ou une vidéo (`ClipSource::Video`,
-  §9.3). L'écho relit l'image finale de la frame d'avant, et ses réglages s'expriment par seconde,
+  §9.3). Ses effets d'image (`Clip.filters`, le CRT, §6.2) suivent ses effets de forme et partagent
+  leur numérotation. L'écho relit l'image finale de la frame d'avant, et ses réglages s'expriment par seconde,
   jamais par frame.
-- `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`),
+- `crates/layer` : `Gpu`, trait `RenderLayer` (`prepare`/`encode`/`output`), `CrtRenderer` et
+  `FilterChain` (référence CPU du CRT dans `shape/src/crt.rs`),
   `ShapeRenderer` (un par piste, le clip lui prête son `ShapeContent`), `ShapeLayer`,
   tessellation lyon (module sans wgpu).
 - `crates/render` : `Compositor` (passes shader en ping-pong, 5 modes), relecture

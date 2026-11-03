@@ -16,7 +16,7 @@ use frogenx_composition::{
 };
 use frogenx_core::{FeatureKind, NodeId, Param, SpecValue, CHROMA_NOTES};
 use frogenx_osc::TrigOutput;
-use frogenx_shape::EffectKind;
+use frogenx_shape::{EffectKind, FilterKind};
 use std::collections::HashMap;
 
 /// La largeur d'une boîte, ses lignes et l'écart entre deux colonnes.
@@ -400,10 +400,7 @@ fn clip_sinks(c: &Composition, id: ClipId, column: usize) -> Vec<NodeBox> {
     let Some(clip) = c.clip(id) else {
         return Vec::new();
     };
-    let effets = match clip.source {
-        ClipSource::Shape { .. } => clip.effects.len(),
-        ClipSource::Feedback { .. } | ClipSource::Video { .. } => 0,
-    };
+    let effets = clip.effect_count();
     clip.params()
         .iter()
         .enumerate()
@@ -728,15 +725,18 @@ fn draw_box(
         }
         Removal::Effect(index) => {
             if let GraphScope::Clip(clip) = scope {
-                let chaine = c.clip(clip).map_or(0, |c| c.effects.len());
+                let peut = |to: Option<usize>| {
+                    to.is_some_and(|to| c.clip(clip).is_some_and(|c| c.can_move_effect(index, to)))
+                };
+                let (avant, apres) = (peut(index.checked_sub(1)), peut(Some(index + 1)));
                 barre.context_menu(|ui| {
-                    let reculer = ui.add_enabled(index > 0, Button::new("Reculer"));
+                    let reculer = ui.add_enabled(avant, Button::new("Reculer"));
                     if reculer.clicked() {
                         let to = index - 1;
                         commands.push(Command::MoveEffect { clip, index, to });
                         ui.close();
                     }
-                    let avancer = ui.add_enabled(index + 1 < chaine, Button::new("Avancer"));
+                    let avancer = ui.add_enabled(apres, Button::new("Avancer"));
                     if avancer.clicked() {
                         let to = index + 1;
                         commands.push(Command::MoveEffect { clip, index, to });
@@ -844,18 +844,28 @@ fn add_menu(
             }
         }
     }
-    if let (true, GraphScope::Clip(clip)) = (effets, scope) {
-        ui.separator();
-        ui.label(
-            RichText::new("Ajouter un effet")
-                .color(theme::TEXT_DIM)
-                .size(11.0),
-        );
+    let GraphScope::Clip(clip) = scope else {
+        return;
+    };
+    ui.separator();
+    ui.label(
+        RichText::new("Ajouter un effet")
+            .color(theme::TEXT_DIM)
+            .size(11.0),
+    );
+    // Les effets de forme veulent une forme ; ceux d'image, n'importe quel clip (§6.2).
+    if effets {
         for kind in EffectKind::ALL {
             if ui.button(kind.label()).clicked() {
                 commands.push(Command::AddEffect { clip, kind });
                 ui.close();
             }
+        }
+    }
+    for kind in FilterKind::ALL {
+        if ui.button(kind.label()).clicked() {
+            commands.push(Command::AddFilter { clip, kind });
+            ui.close();
         }
     }
 }

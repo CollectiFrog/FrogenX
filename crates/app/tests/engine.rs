@@ -17,7 +17,7 @@ use frogenx_output::{
     CpuFrame, CpuSink, GpuFrame, GpuSink, OutputSink, PixelLayout, PngSequenceSink, SinkStatus,
     StreamFormat,
 };
-use frogenx_shape::{EffectKind, FeedbackParams, Rect, VideoParams};
+use frogenx_shape::{CrtParams, EffectKind, FeedbackParams, ImageFilter, Rect, VideoParams};
 use glam::UVec2;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1381,6 +1381,108 @@ fn annuler_rend_une_video_sans_la_redecoder() {
     frames(&mut m, 2);
     m.finish();
     let _ = std::fs::remove_file(fichier);
+}
+
+/// Un aplat rouge qui couvre tout le rendu, et ce CRT.
+fn rouge_sous_crt(crt: CrtParams) -> (Composition, LayerId, ClipId) {
+    let mut c = Composition::new();
+    let deck = c.add_deck("test");
+    let groupe = c.add_layer_group(deck).unwrap();
+    let piste = c.add_layer(groupe).unwrap();
+    let mut g = Graph::new();
+    let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+    let clip = Clip::shape(g, Box::new(Rect::new(4.0, 4.0)), transport)
+        .with_style(ShapeStyle::filled(ColorParam::srgb(1.0, 0.0, 0.0, 1.0)))
+        .with_filter(ImageFilter::Crt(crt));
+    let id = c.add_clip(piste, clip).unwrap();
+    (c, piste, id)
+}
+
+/// Un CRT dont tout est coupé : chaque test allume ce qu'il regarde.
+fn crt_eteint() -> CrtParams {
+    let zero = Param::fixed(0.0);
+    CrtParams {
+        lines: Param::fixed(240.0),
+        scanlines: zero,
+        mask: zero,
+        curvature: zero,
+        vignette: zero,
+        halo: zero,
+        aberration: zero,
+        noise: zero,
+        flicker: zero,
+        band: zero,
+        persistence: zero,
+    }
+}
+
+fn rendu_crt(gpu: Gpu, crt: CrtParams) -> Recu {
+    let (composition, piste, clip) = rouge_sous_crt(crt);
+    let (mut m, recu) = moteur(gpu, composition);
+    m.push(Command::TriggerClip { layer: piste, clip });
+    frames(&mut m, 3);
+    m.finish();
+    recu
+}
+
+#[test]
+fn le_crt_par_defaut_compile_et_garde_l_image() {
+    let Some(gpu) = gpu() else { return };
+    // Les réglages d'usine allument tout, halo compris : ses deux shaders compilent.
+    let recu = rendu_crt(gpu, CrtParams::default());
+    let p = recu.dernier_pixel(16, 16);
+    assert!(p[0] > 120 && p[1] < 60 && p[2] < 60, "{p:?}");
+    assert_eq!(p[3], 255);
+}
+
+#[test]
+fn un_crt_eteint_ne_change_rien() {
+    let Some(gpu) = gpu() else { return };
+    let recu = rendu_crt(gpu, crt_eteint());
+    assert_eq!(recu.dernier_pixel(5, 27), [255, 0, 0, 255]);
+}
+
+#[test]
+fn les_lignes_alternent_le_clair_et_le_sombre() {
+    let Some(gpu) = gpu() else { return };
+    // 24 lignes sur 32 pixels : la rangée 9 tombe sur une ligne (7,125), la 11 entre
+    // deux (8,625). Sous 16, le nombre de lignes est ramené à 16.
+    let crt = CrtParams {
+        lines: Param::fixed(24.0),
+        scanlines: Param::fixed(1.0),
+        ..crt_eteint()
+    };
+    let recu = rendu_crt(gpu, crt);
+    let (clair, sombre) = (recu.dernier_pixel(16, 9)[0], recu.dernier_pixel(16, 11)[0]);
+    assert!(clair > 200 && sombre < 140, "{clair} contre {sombre}");
+    assert_eq!(recu.dernier_pixel(16, 11)[3], 255, "l'alpha ne bouge pas");
+}
+
+#[test]
+fn un_ecran_bombe_vide_ses_coins_et_garde_son_centre() {
+    let Some(gpu) = gpu() else { return };
+    let crt = CrtParams {
+        curvature: Param::fixed(1.0),
+        ..crt_eteint()
+    };
+    let recu = rendu_crt(gpu, crt);
+    assert_eq!(
+        recu.dernier_pixel(0, 0)[3],
+        0,
+        "hors de l'écran : transparent"
+    );
+    assert_eq!(recu.dernier_pixel(16, 16), [255, 0, 0, 255]);
+}
+
+#[test]
+fn la_vignette_assombrit_les_bords() {
+    let Some(gpu) = gpu() else { return };
+    let crt = CrtParams {
+        vignette: Param::fixed(1.0),
+        ..crt_eteint()
+    };
+    let recu = rendu_crt(gpu, crt);
+    assert!(recu.dernier_pixel(1, 1)[0] < recu.dernier_pixel(16, 16)[0]);
 }
 
 #[test]

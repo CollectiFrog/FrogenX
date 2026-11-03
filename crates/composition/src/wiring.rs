@@ -15,7 +15,7 @@ use frogenx_osc::{
     AudioFeature, Envelope, Lfo, Mix, Noise, Oscillator, Product, SampleHold, Sum, TrigInput,
     Trigger, Waveform,
 };
-use frogenx_shape::EffectKind;
+use frogenx_shape::{EffectKind, FilterKind};
 
 /// Le graphe qu'on édite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -432,17 +432,31 @@ impl Composition {
         }
     }
 
+    /// Ajoute un effet d'image, à toute sorte de clip (§6.2).
+    pub fn add_filter(&mut self, clip: ClipId, kind: FilterKind) -> bool {
+        self.clip_mut(clip)
+            .map(|c| c.filters.push(kind.build()))
+            .is_some()
+    }
+
     /// Déplace un effet dans la chaîne. Ses modulations le suivent : elles vivent
-    /// dans ses `Param`.
+    /// dans ses `Param`. Jamais par-dessus la frontière entre formes et pixels.
     pub fn move_effect(&mut self, clip: ClipId, index: usize, to: usize) -> bool {
-        match self.clip_mut(clip) {
-            Some(c) if index < c.effects.len() && to < c.effects.len() && index != to => {
-                let effet = c.effects.remove(index);
-                c.effects.insert(to, effet);
-                true
-            }
-            _ => false,
+        let Some(c) = self.clip_mut(clip) else {
+            return false;
+        };
+        if !c.can_move_effect(index, to) {
+            return false;
         }
+        let formes = c.effects.len();
+        if index < formes {
+            let effet = c.effects.remove(index);
+            c.effects.insert(to, effet);
+        } else {
+            let filtre = c.filters.remove(index - formes);
+            c.filters.insert(to - formes, filtre);
+        }
+        true
     }
 
     /// Range un nœud dans l'éditeur (§23.10).
@@ -457,8 +471,131 @@ impl Composition {
                 c.effects.remove(index);
                 true
             }
+            Some(c) if index < c.effect_count() => {
+                let formes = c.effects.len();
+                c.filters.remove(index - formes);
+                true
+            }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_filtres {
+    use super::*;
+    use crate::clip::Clip;
+    use crate::command::Command;
+    use crate::transport::{PlayMode, Transport};
+    use frogenx_core::{Constant, Graph, Param};
+    use frogenx_shape::ImageFilter;
+    use frogenx_shape::{Ellipse, FeedbackParams, VideoParams};
+
+    fn grille(clip: Clip) -> (Composition, ClipId) {
+        let mut c = Composition::new();
+        let deck = c.add_deck("A");
+        let groupe = c.add_layer_group(deck).unwrap();
+        let piste = c.add_layer(groupe).unwrap();
+        let colonne = c.add_column();
+        let id = c.place_clip(piste, colonne, clip).unwrap();
+        (c, id)
+    }
+
+    fn forme() -> Clip {
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+        Clip::shape(g, Box::new(Ellipse::circle(0.5)), transport)
+    }
+
+    #[test]
+    fn toute_sorte_de_clip_accepte_un_effet_d_image() {
+        let mut g = Graph::new();
+        let transport = Transport::bpm_sync(&mut g, Param::fixed(4.0), PlayMode::Loop);
+        for clip in [
+            forme(),
+            Clip::feedback(g, FeedbackParams::default(), transport),
+            Clip::video(VideoParams::new("a.mp4", 2.0)),
+        ] {
+            let (mut c, id) = grille(clip);
+            assert!(c.apply(
+                Command::AddFilter {
+                    clip: id,
+                    kind: FilterKind::Crt
+                },
+                0.0
+            ));
+            assert_eq!(c.clip(id).unwrap().filters.len(), 1);
+            let groupes = c.clip(id).unwrap().params();
+            assert!(groupes.iter().any(|g| g.label == "CRT"), "{groupes:?}");
+        }
+    }
+
+    #[test]
+    fn la_numerotation_suit_les_effets_de_forme_puis_d_image() {
+        let (mut c, id) = grille(forme());
+        c.add_effect(id, EffectKind::Smooth);
+        c.add_filter(id, FilterKind::Crt);
+        let clip = c.clip(id).unwrap();
+        assert_eq!(clip.effect_count(), 2);
+        let groupes = clip.params();
+        let noms: Vec<&str> = groupes.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(&noms[..3], ["Ellipse", "Lissage", "CRT"]);
+        let crt = &clip.params()[2].params[1];
+        assert_eq!(
+            crt.slot,
+            ParamSlot::Effect {
+                effect: 1,
+                param: 1
+            }
+        );
+        assert!(c.clip_mut(id).unwrap().set_param(crt.slot, 0.9));
+        let ImageFilter::Crt(p) = c.clip(id).unwrap().filters[0];
+        assert_eq!(p.scanlines.base(), 0.9);
+    }
+
+    #[test]
+    fn un_effet_ne_franchit_pas_la_frontiere_des_pixels() {
+        let (mut c, id) = grille(forme());
+        c.add_effect(id, EffectKind::Smooth);
+        c.add_filter(id, FilterKind::Crt);
+        c.add_filter(id, FilterKind::Crt);
+        assert!(!c.move_effect(id, 0, 1), "forme vers pixels");
+        assert!(!c.move_effect(id, 1, 0), "pixels vers forme");
+        let ImageFilter::Crt(mut deuxieme) = c.clip(id).unwrap().filters[1];
+        deuxieme.lines = Param::fixed(480.0);
+        c.clip_mut(id).unwrap().filters[1] = ImageFilter::Crt(deuxieme);
+        assert!(c.move_effect(id, 2, 1));
+        let ImageFilter::Crt(premier) = c.clip(id).unwrap().filters[0];
+        assert_eq!(premier.lines.base(), 480.0);
+    }
+
+    #[test]
+    fn retirer_un_effet_d_image_par_son_rang_global() {
+        let (mut c, id) = grille(forme());
+        c.add_effect(id, EffectKind::Smooth);
+        c.add_filter(id, FilterKind::Crt);
+        assert!(c.remove_effect(id, 1));
+        let clip = c.clip(id).unwrap();
+        assert!(clip.filters.is_empty() && clip.effects.len() == 1);
+        assert!(!c.remove_effect(id, 1), "plus rien à ce rang");
+    }
+
+    #[test]
+    fn un_effet_d_image_se_module_comme_un_autre() {
+        let (mut c, id) = grille(Clip::video(VideoParams::new("a.mp4", 2.0)));
+        c.add_filter(id, FilterKind::Crt);
+        let source = c
+            .clip_mut(id)
+            .unwrap()
+            .graph_mut()
+            .add(Box::new(Constant(1.0)));
+        let slot = ParamSlot::Effect {
+            effect: 0,
+            param: 7,
+        };
+        assert!(c.connect(ParamTarget::ClipParam { clip: id, slot }, source));
+        let ImageFilter::Crt(p) = c.clip(id).unwrap().filters[0];
+        assert_eq!(p.noise.source(), Some(source));
     }
 }
 
