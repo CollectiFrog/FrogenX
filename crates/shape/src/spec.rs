@@ -5,7 +5,7 @@
 //! noms de [`params!`](crate::generator) suffisent, sans code par type.
 
 use crate::generator::ShapeGenerator;
-use crate::ops::{Chain, Deform, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform};
+use crate::ops::{Chain, Deform, Mirror, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform};
 use crate::parametric::{Lissajous, Rose, Superformula};
 use crate::primitives::{Arc, Ellipse, Polygon, Rect, Star};
 use frogenx_core::{Spec, SpecError};
@@ -19,15 +19,17 @@ pub enum EffectKind {
     RadialRepeat,
     Transform,
     Smooth,
+    Mirror,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 5] = [
+    pub const ALL: [EffectKind; 6] = [
         EffectKind::Deform,
         EffectKind::Noise,
         EffectKind::RadialRepeat,
         EffectKind::Transform,
         EffectKind::Smooth,
+        EffectKind::Mirror,
     ];
 
     /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
@@ -38,6 +40,7 @@ impl EffectKind {
             EffectKind::RadialRepeat => Box::new(RadialRepeat::new(1.0)),
             EffectKind::Transform => Box::new(Transform::default()),
             EffectKind::Smooth => Box::new(Smooth::new(0.0, 0.5)),
+            EffectKind::Mirror => Box::new(Mirror::default()),
         }
     }
 
@@ -77,6 +80,7 @@ pub fn op_from_spec(spec: &Spec) -> Result<Box<dyn ShapeOp>, SpecError> {
         "Répétition radiale" => Box::new(RadialRepeat::new(1.0)),
         "Transformation" => Box::new(Transform::default()),
         "Lissage" => Box::new(Smooth::new(1.0, 0.5)),
+        "Miroir" => Box::new(Mirror::default()),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
     };
     for (i, desc) in effet.params().iter().enumerate() {
@@ -135,6 +139,7 @@ mod tests {
             Box::new(RadialRepeat::new(5.0)),
             Box::new(Transform::default()),
             Box::new(Smooth::new(2.0, 0.25)),
+            Box::new(Mirror::new(3.0, 0.25)),
         ]
     }
 

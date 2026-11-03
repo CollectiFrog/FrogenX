@@ -745,10 +745,22 @@ composent en chaîne :
 - **Répétition** radiale ou en grille, avec décalage modulable
 - **Bruit** sur les sommets (Perlin, simplex)
 - **Subdivision** et lissage
+- **Miroir** : symétrie gauche-droite, haut-bas ou quadruple, autour d'axes tournés d'un angle.
+  Chaque copie devient son propre contour, et garde l'orientation de l'original : une copie
+  retournée tournerait dans l'autre sens, et le remplissage `NonZero` l'annulerait là où elle
+  recouvre l'original
 
 > **Où investir l'effort :** ajouter un opérateur multiplie les possibilités de toutes
 > les primitives existantes. Ajouter une primitive n'ajoute qu'elle-même. En cas de
 > doute, écrire un opérateur.
+
+**Un opérateur n'anime rien lui-même.** Il n'a pas d'état, et le `t` qu'il reçoit est celui du
+moteur : il ne suit pas la vitesse du clip, et un mouvement calculé depuis lui sauterait à chaque
+changement de vitesse (§2.3). Le mouvement vient donc d'un `Param` modulé par le graphe du clip :
+un LFO accumule sa phase et suit le `dt` du clip, vitesse comprise, et une vitesse nulle fige
+tout. Le tracé qui se dessine, c'est une `Découpe` dont la `fin` est modulée par un LFO. Un
+opérateur ajouté à un clip est neutre : son `build()` ne change pas l'image, et un test le
+vérifie sur chaque effet.
 
 ---
 
@@ -2038,7 +2050,7 @@ qui les livre (skill `doc-sync`).
 | Feature | Détail |
 |---|---|
 | Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
-| Formes | 8 générateurs, 5 effets, style de remplissage et de trait |
+| Formes | 8 générateurs, 6 effets, style de remplissage et de trait |
 | Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
 | Bibliothèque | 27 clips calés sur le tempo, grille de départ (§23.6) |
 | Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |
@@ -2078,6 +2090,7 @@ qui les livre (skill `doc-sync`).
 
 | Point | État |
 |---|---|
+| Opérateurs de forme ajoutés (miroir…) regardés sur une forme | vérifiés par tests seulement |
 | BPM, phase, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
 | Menus `Sortie`, `Fichier` et `Édition`, clic droit des potentiomètres, fils de l'éditeur, Ctrl+Z, à la vraie souris et au vrai clavier | validés par clics simulés seulement |
 | Un flux entre deux machines, sur un vrai réseau, et sa latence jusqu'à l'écran | essayé en boucle locale seulement (§8.5) |
@@ -2124,6 +2137,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Les gestes sur le spectre se calculent en coordonnées du tracé** (§23.7) | ni Hz ni pixels : un même geste vaut sur toutes les échelles, et se teste sans egui |
 | **Un `Signal` lit l'audio dans `Ctx`, pas dans le triple buffer** (§7, §20.1) | le buffer se lit une fois par frame, à l'étape 2 : deux lectures pendant l'évaluation verraient deux spectres, et le rendu ne serait plus déterministe |
 | **`Graph::replace`, plutôt qu'un `Param` partagé** (§3bis.6) | un `Signal` est opaque dans le graphe ; le remplacer garde son identifiant, ses dépendances et son état, donc le compte d'un trig qu'on règle en jouant |
+| **Un opérateur de forme n'anime rien lui-même** (§5.4) | sans état, il ne pourrait que calculer depuis `t`, qui ne suit pas la vitesse du clip : un `Param` modulé par un LFO accumule sa phase, suit le `dt` et se fige à vitesse nulle |
 | **Kyber remplace NDI pour le moment** (§8.1) | KyberFrog porte déjà le réseau à très basse latence, sous la même licence ; NDI ajouterait un SDK propriétaire pour les seuls récepteurs qui ne parlent pas Kyber |
 | **Spout par le chemin CPU** (§8.1, §8.5) | Spout alimente KyberFrog et sert aussi les logiciels locaux ; garder Vulkan évite `wgpu-hal` et ses fautes de synchronisation |
 | **KyberFrog en processus séparé** (§8.5) | il n'a pas d'API d'injection et sa chaîne de forks est lourde à compiler ; Spout suffit, et laisse les deux projets évoluer seuls |

@@ -485,6 +485,104 @@ impl ShapeOp for Smooth {
     }
 }
 
+/// Symétrie autour d'axes passant par l'origine.
+///
+/// Mode `0` : rien. `1` : gauche-droite, autour d'un axe vertical tourné de
+/// `angle`. `2` : haut-bas, autour de l'axe perpendiculaire. `3` : les deux, plus
+/// leur composition, soit quatre exemplaires. Chaque copie devient son propre
+/// contour. Une réflexion inverse le sens de parcours : les points d'une copie
+/// réfléchie sont repris à rebours, sans quoi le remplissage `NonZero` du
+/// rasteriseur annulerait l'original là où la copie le recouvre (§16.3).
+pub struct Mirror {
+    /// `0` aucun, `1` gauche-droite, `2` haut-bas, `3` quadruple. Arrondi.
+    pub mode: Param,
+    /// Rotation des axes, en radians.
+    pub angle: Param,
+}
+
+impl Default for Mirror {
+    /// Le mode `0` : ajouté à un clip, il ne change rien.
+    fn default() -> Self {
+        Self::new(0.0, 0.0)
+    }
+}
+
+impl Mirror {
+    pub fn new(mode: f32, angle: f32) -> Self {
+        Self {
+            mode: Param::fixed(mode),
+            angle: Param::fixed(angle),
+        }
+    }
+}
+
+/// Réfléchit `p` par rapport à la droite de normale unitaire `n`.
+fn reflechir(p: Vec2, n: Vec2) -> Vec2 {
+    p - 2.0 * p.dot(n) * n
+}
+
+impl ShapeOp for Mirror {
+    params! {
+        "Miroir";
+        mode: "mode", 0.0, 3.0;
+        angle: "angle", -std::f32::consts::PI, std::f32::consts::PI;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let mode = self.mode.get(g);
+        let mode = if mode.is_finite() {
+            mode.round().clamp(0.0, 3.0) as u8
+        } else {
+            0
+        };
+        if mode == 0 || path.points.is_empty() {
+            return;
+        }
+        let angle = self.angle.get(g);
+        let angle = if angle.is_finite() { angle } else { 0.0 };
+        // L'axe vertical a pour normale l'axe des x ; l'autre, sa perpendiculaire.
+        let (s, c) = angle.sin_cos();
+        let n1 = Vec2::new(c, s);
+        let n2 = Vec2::new(-s, c);
+        // Chaque copie : la transformation, et si elle retourne la forme.
+        let copies: &[(u8, bool)] = match mode {
+            1 => &[(1, true)],
+            2 => &[(2, true)],
+            _ => &[(1, true), (2, true), (3, false)],
+        };
+        let total = path.points.len().saturating_mul(1 + copies.len());
+        if total > MAX_POINTS {
+            return;
+        }
+        path.points.reserve(total - path.points.len());
+        let originaux = path.contours.len();
+        for &(quelle, retourne) in copies {
+            let image = |p: Vec2| match quelle {
+                1 => reflechir(p, n1),
+                2 => reflechir(p, n2),
+                // Les deux réflexions : un demi-tour, qui garde le sens de parcours.
+                _ => -p,
+            };
+            for ci in 0..originaux {
+                let contour = path.contours[ci];
+                let plage = contour.range();
+                if retourne {
+                    for i in plage.rev() {
+                        let p = image(path.points[i]);
+                        path.points.push(p);
+                    }
+                } else {
+                    for i in plage {
+                        let p = image(path.points[i]);
+                        path.points.push(p);
+                    }
+                }
+                path.end_contour(contour.closed);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,6 +954,8 @@ mod tests {
                 rotation: Param::fixed(f32::INFINITY),
                 ..Default::default()
             }),
+            Box::new(Mirror::new(f32::NAN, f32::INFINITY)),
+            Box::new(Mirror::new(-7.0, f32::NAN)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -885,5 +985,181 @@ mod tests {
                 assert!(path.is_valid(), "n={n} closed={closed}");
             }
         }
+    }
+}
+
+/// Ce que chaque opérateur ajouté doit tenir, quelle que soit sa nature.
+#[cfg(test)]
+mod tests_operateurs {
+    use super::*;
+    use crate::generator::test_util::{gen, gen_path, tous_finis};
+    use crate::primitives::{Arc, Ellipse, Polygon};
+    use frogenx_core::Graph;
+    use std::f32::consts::PI;
+
+    const EPS: f32 = 1e-4;
+
+    /// Un cercle fermé, un arc ouvert, et trois triangles : plusieurs contours.
+    fn formes_de_test() -> Vec<Box<dyn ShapeGenerator>> {
+        vec![
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Arc::new(0.0, 4.0, 0.5)),
+            Box::new(
+                Chain::new(Box::new(Polygon::new(3.0, 0.3))).then(Box::new(RadialRepeat::new(3.0))),
+            ),
+        ]
+    }
+
+    fn memes_formes(a: &Path, b: &Path) -> bool {
+        a.contours == b.contours
+            && a.points.len() == b.points.len()
+            && a.points
+                .iter()
+                .zip(b.points.iter())
+                .all(|(p, q)| (*p - *q).length() < EPS)
+    }
+
+    /// Réglé à son neutre, l'opérateur rend la forme telle quelle, sur chaque forme.
+    fn est_neutre(op: impl Fn() -> Box<dyn ShapeOp>) {
+        let g = Graph::new();
+        for (a, b) in formes_de_test().into_iter().zip(formes_de_test()) {
+            let avant = gen_path(a.as_ref(), &g);
+            let apres = gen_path(&Chain::new(b).then(op()), &g);
+            assert!(memes_formes(&avant, &apres), "{}", op().kind());
+        }
+    }
+
+    /// Le `Path` après l'opérateur, sur une forme : `gen_path` vérifie l'invariant.
+    fn applique(forme: Box<dyn ShapeGenerator>, op: Box<dyn ShapeOp>) -> Path {
+        gen_path(&Chain::new(forme).then(op), &Graph::new())
+    }
+
+    /// L'aire signée d'un contour fermé : son signe dit son orientation.
+    fn aire(pts: &[Vec2]) -> f32 {
+        let n = pts.len();
+        (0..n)
+            .map(|i| pts[i].perp_dot(pts[(i + 1) % n]))
+            .sum::<f32>()
+            * 0.5
+    }
+
+    fn centre(pts: &[Vec2]) -> Vec2 {
+        pts.iter().copied().sum::<Vec2>() / pts.len().max(1) as f32
+    }
+
+    #[test]
+    fn chaque_effet_ajoute_laisse_chaque_forme_intacte() {
+        for kind in crate::spec::EffectKind::ALL {
+            est_neutre(|| kind.build());
+        }
+    }
+
+    #[test]
+    fn chaque_operateur_garde_un_path_valide_sur_chaque_forme() {
+        // Tous réglés pour agir : l'invariant tient même quand ils travaillent.
+        for actif in operateurs_actifs() {
+            for forme in formes_de_test() {
+                let p = applique(forme, actif());
+                assert!(tous_finis(&p.points), "{}", actif().kind());
+                assert!(p.points.len() <= crate::generator::MAX_POINTS);
+            }
+        }
+    }
+
+    #[test]
+    fn chaque_operateur_tolere_une_forme_degeneree() {
+        let g = Graph::new();
+        let audio = frogenx_core::AudioFeatures::default();
+        let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+        for actif in operateurs_actifs() {
+            for n in 0..3 {
+                for closed in [true, false] {
+                    let mut path = Path::new();
+                    path.points.extend(std::iter::repeat_n(Vec2::ZERO, n));
+                    path.end_contour(closed);
+                    actif().apply(0.0, &ctx, &g, &mut path);
+                    assert!(tous_finis(&path.points), "{} n={n}", actif().kind());
+                    assert!(path.is_valid(), "{} n={n} closed={closed}", actif().kind());
+                }
+            }
+        }
+        let _ = gen(&Ellipse::circle(0.5), &g);
+    }
+
+    /// Un opérateur de chaque type, réglé pour agir.
+    fn operateurs_actifs() -> Vec<fn() -> Box<dyn ShapeOp>> {
+        vec![
+            || Box::new(Mirror::new(3.0, 0.3)),
+            // ACTIFS
+        ]
+    }
+
+    #[test]
+    fn le_miroir_gauche_droite_ajoute_l_image_retournee() {
+        let decale = Chain::new(Box::new(Ellipse::circle(0.2))).then(Box::new(Transform {
+            translate_x: Param::fixed(0.5),
+            ..Default::default()
+        }));
+        let p = applique(Box::new(decale), Box::new(Mirror::new(1.0, 0.0)));
+        assert_eq!(p.contours.len(), 2);
+        let (a, b) = (&p.contours[0], &p.contours[1]);
+        let (ca, cb) = (centre(p.contour_points(a)), centre(p.contour_points(b)));
+        assert!(
+            (ca.x - 0.5).abs() < EPS && (cb.x + 0.5).abs() < EPS,
+            "{ca} {cb}"
+        );
+        assert!(b.closed);
+    }
+
+    #[test]
+    fn une_copie_miroir_tourne_dans_le_meme_sens_que_l_original() {
+        for mode in [1.0, 2.0, 3.0] {
+            let p = applique(
+                Box::new(Polygon::new(5.0, 0.3)),
+                Box::new(Mirror::new(mode, 0.4)),
+            );
+            let reference = aire(p.contour_points(&p.contours[0]));
+            for c in &p.contours[1..] {
+                let a = aire(p.contour_points(c));
+                assert!(a * reference > 0.0, "mode {mode} : {a} contre {reference}");
+            }
+        }
+    }
+
+    #[test]
+    fn le_miroir_quadruple_rend_quatre_exemplaires_de_chaque_contour() {
+        let p = applique(
+            Box::new(
+                Chain::new(Box::new(Polygon::new(3.0, 0.3))).then(Box::new(RadialRepeat::new(2.0))),
+            ),
+            Box::new(Mirror::new(3.0, 0.0)),
+        );
+        assert_eq!(p.contours.len(), 8);
+    }
+
+    #[test]
+    fn un_contour_ouvert_reste_ouvert_dans_le_miroir() {
+        let p = applique(
+            Box::new(Arc::new(0.0, 1.0, 0.5)),
+            Box::new(Mirror::new(2.0, 0.0)),
+        );
+        assert!(p.contours.iter().all(|c| !c.closed));
+    }
+
+    #[test]
+    fn l_angle_tourne_l_axe_du_miroir() {
+        // Un point sur l'axe des x, réfléchi autour d'un axe tourné d'un quart de tour,
+        // reste où il est : l'axe passe par lui.
+        let n = Vec2::new((PI / 2.0).cos(), (PI / 2.0).sin());
+        let p = reflechir(Vec2::new(0.7, 0.0), n);
+        assert!((p - Vec2::new(0.7, 0.0)).length() < EPS, "{p}");
+    }
+
+    #[test]
+    fn le_miroir_respecte_la_borne_dure() {
+        let dense =
+            Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(64.0)));
+        let p = applique(Box::new(dense), Box::new(Mirror::new(3.0, 0.0)));
+        assert!(p.points.len() <= crate::generator::MAX_POINTS);
     }
 }
