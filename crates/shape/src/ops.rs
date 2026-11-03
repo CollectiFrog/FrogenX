@@ -731,6 +731,74 @@ impl ShapeOp for Twist {
     }
 }
 
+/// Ajoute des copies de plus en plus petites et tournées : la `k`-ième est
+/// réduite de `échelle^k` et tournée de `k × rotation`.
+///
+/// Des contours, sans mémoire : rien à voir avec l'écho d'image du §6.1, qui
+/// relit la frame d'avant. Chaque copie de chaque contour devient son propre
+/// contour (§16.3).
+pub struct ShapeEchoes {
+    /// Exemplaires, original compris. Saturé dans `[1, 32]`.
+    pub copies: Param,
+    /// Le facteur d'une copie à la suivante. Saturé dans `[0, 2]`.
+    pub scale: Param,
+    /// Radians d'une copie à la suivante.
+    pub rotation: Param,
+}
+
+impl ShapeEchoes {
+    pub fn new(copies: f32, scale: f32, rotation: f32) -> Self {
+        Self {
+            copies: Param::fixed(copies),
+            scale: Param::fixed(scale),
+            rotation: Param::fixed(rotation),
+        }
+    }
+}
+
+impl ShapeOp for ShapeEchoes {
+    params! {
+        "Échos de forme";
+        copies: "copies", 1.0, 16.0;
+        scale: "échelle", 0.0, 1.5;
+        rotation: "rotation", -std::f32::consts::PI, std::f32::consts::PI;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let copies = compte(self.copies.get(g), 32.0);
+        if copies <= 1 || path.points.is_empty() {
+            return;
+        }
+        let echelle = self.scale.get(g);
+        let echelle = if echelle.is_finite() {
+            echelle.clamp(0.0, 2.0)
+        } else {
+            1.0
+        };
+        let rotation = self.rotation.get(g);
+        let rotation = if rotation.is_finite() { rotation } else { 0.0 };
+        let total = path.points.len().saturating_mul(copies);
+        if total > MAX_POINTS {
+            return;
+        }
+        path.points.reserve(total - path.points.len());
+        let originaux = path.contours.len();
+        for k in 1..copies {
+            let e = echelle.powi(k as i32);
+            let (s, c) = (rotation * k as f32).sin_cos();
+            for ci in 0..originaux {
+                let contour = path.contours[ci];
+                for i in contour.range() {
+                    let p = path.points[i] * e;
+                    path.points
+                        .push(Vec2::new(p.x * c - p.y * s, p.x * s + p.y * c));
+                }
+                path.end_contour(contour.closed);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1108,6 +1176,8 @@ mod tests {
             Box::new(GridRepeat::new(-3.0, 1e9, -1.0).with_offset(f32::NAN)),
             Box::new(Twist::new(f32::NAN, f32::NAN)),
             Box::new(Twist::new(f32::INFINITY, 0.0)),
+            Box::new(ShapeEchoes::new(f32::NAN, f32::NAN, f32::INFINITY)),
+            Box::new(ShapeEchoes::new(1e9, -2.0, 0.0)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1244,6 +1314,7 @@ mod tests_operateurs {
             || Box::new(Mirror::new(3.0, 0.3)),
             || Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
             || Box::new(Twist::new(2.0, 0.5)),
+            || Box::new(ShapeEchoes::new(5.0, 0.8, 0.25)),
             // ACTIFS
         ]
     }
@@ -1380,5 +1451,35 @@ mod tests_operateurs {
             (path.points[2].length() - 1.0).abs() < EPS,
             "la distance reste"
         );
+    }
+
+    #[test]
+    fn chaque_echo_est_plus_petit_que_le_precedent() {
+        let p = applique(
+            Box::new(Ellipse::circle(1.0)),
+            Box::new(ShapeEchoes::new(3.0, 0.5, 0.0)),
+        );
+        assert_eq!(p.contours.len(), 3);
+        let rayon = |c: &crate::path::Contour| p.contour_points(c)[0].length();
+        assert!((rayon(&p.contours[1]) - 0.5).abs() < EPS);
+        assert!((rayon(&p.contours[2]) - 0.25).abs() < EPS);
+    }
+
+    #[test]
+    fn chaque_echo_tourne_d_un_pas() {
+        let p = applique(
+            Box::new(Ellipse::circle(1.0)),
+            Box::new(ShapeEchoes::new(2.0, 1.0, PI / 2.0)),
+        );
+        let (a, b) = (p.points[0], p.contour_points(&p.contours[1])[0]);
+        assert!((b - a.perp()).length() < EPS, "{a} {b}");
+    }
+
+    #[test]
+    fn les_echos_respectent_la_borne_dure() {
+        let dense =
+            Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(16.0)));
+        let p = applique(Box::new(dense), Box::new(ShapeEchoes::new(32.0, 0.9, 0.1)));
+        assert!(p.points.len() <= crate::generator::MAX_POINTS);
     }
 }

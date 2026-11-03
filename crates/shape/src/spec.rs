@@ -6,8 +6,8 @@
 
 use crate::generator::ShapeGenerator;
 use crate::ops::{
-    Chain, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform,
-    Twist,
+    Chain, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeEchoes, ShapeOp, Smooth,
+    Transform, Twist,
 };
 use crate::parametric::{Lissajous, Rose, Superformula};
 use crate::primitives::{Arc, Ellipse, Polygon, Rect, Star};
@@ -25,10 +25,11 @@ pub enum EffectKind {
     Mirror,
     GridRepeat,
     Twist,
+    ShapeEchoes,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 8] = [
+    pub const ALL: [EffectKind; 9] = [
         EffectKind::Deform,
         EffectKind::Noise,
         EffectKind::RadialRepeat,
@@ -37,6 +38,7 @@ impl EffectKind {
         EffectKind::Mirror,
         EffectKind::GridRepeat,
         EffectKind::Twist,
+        EffectKind::ShapeEchoes,
     ];
 
     /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
@@ -50,6 +52,7 @@ impl EffectKind {
             EffectKind::Mirror => Box::new(Mirror::default()),
             EffectKind::GridRepeat => Box::new(GridRepeat::default()),
             EffectKind::Twist => Box::new(Twist::new(0.0, 1.0)),
+            EffectKind::ShapeEchoes => Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)),
         }
     }
 
@@ -92,6 +95,7 @@ pub fn op_from_spec(spec: &Spec) -> Result<Box<dyn ShapeOp>, SpecError> {
         "Miroir" => Box::new(Mirror::default()),
         "Répétition en grille" => Box::new(GridRepeat::default()),
         "Torsion" => Box::new(Twist::new(0.0, 1.0)),
+        "Échos de forme" => Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
     };
     for (i, desc) in effet.params().iter().enumerate() {
@@ -150,6 +154,7 @@ mod tests {
             Box::new(RadialRepeat::new(5.0)),
             Box::new(Transform::default()),
             Box::new(Smooth::new(2.0, 0.25)),
+            Box::new(ShapeEchoes::new(5.0, 0.7, 0.3)),
             Box::new(Twist::new(1.5, 0.75)),
             Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
             Box::new(Mirror::new(3.0, 0.25)),

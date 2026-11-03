@@ -243,6 +243,7 @@ mod params_tests {
             (Box::new(RadialRepeat::new(3.0)), 2),
             (Box::new(Transform::default()), 4),
             (Box::new(Smooth::new(1.0, 0.5)), 2),
+            (Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)), 3),
             (Box::new(Twist::new(0.0, 1.0)), 2),
             (Box::new(GridRepeat::default()), 4),
             (Box::new(Mirror::default()), 2),
