@@ -7,6 +7,7 @@
 use crate::generator::ShapeGenerator;
 use crate::ops::{
     Chain, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform,
+    Twist,
 };
 use crate::parametric::{Lissajous, Rose, Superformula};
 use crate::primitives::{Arc, Ellipse, Polygon, Rect, Star};
@@ -23,10 +24,11 @@ pub enum EffectKind {
     Smooth,
     Mirror,
     GridRepeat,
+    Twist,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 7] = [
+    pub const ALL: [EffectKind; 8] = [
         EffectKind::Deform,
         EffectKind::Noise,
         EffectKind::RadialRepeat,
@@ -34,6 +36,7 @@ impl EffectKind {
         EffectKind::Smooth,
         EffectKind::Mirror,
         EffectKind::GridRepeat,
+        EffectKind::Twist,
     ];
 
     /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
@@ -46,6 +49,7 @@ impl EffectKind {
             EffectKind::Smooth => Box::new(Smooth::new(0.0, 0.5)),
             EffectKind::Mirror => Box::new(Mirror::default()),
             EffectKind::GridRepeat => Box::new(GridRepeat::default()),
+            EffectKind::Twist => Box::new(Twist::new(0.0, 1.0)),
         }
     }
 
@@ -87,6 +91,7 @@ pub fn op_from_spec(spec: &Spec) -> Result<Box<dyn ShapeOp>, SpecError> {
         "Lissage" => Box::new(Smooth::new(1.0, 0.5)),
         "Miroir" => Box::new(Mirror::default()),
         "Répétition en grille" => Box::new(GridRepeat::default()),
+        "Torsion" => Box::new(Twist::new(0.0, 1.0)),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
     };
     for (i, desc) in effet.params().iter().enumerate() {
@@ -145,6 +150,7 @@ mod tests {
             Box::new(RadialRepeat::new(5.0)),
             Box::new(Transform::default()),
             Box::new(Smooth::new(2.0, 0.25)),
+            Box::new(Twist::new(1.5, 0.75)),
             Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
             Box::new(Mirror::new(3.0, 0.25)),
         ]

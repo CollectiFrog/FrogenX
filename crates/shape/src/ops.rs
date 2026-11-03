@@ -684,6 +684,53 @@ impl ShapeOp for GridRepeat {
     }
 }
 
+/// Tourne chaque point d'un angle qui croît avec sa distance au centre.
+///
+/// `force` radians à la distance `rayon`, proportionnellement ailleurs : une
+/// spirale naît d'une étoile. Opérateur ponctuel : il ne connaît pas les contours,
+/// et garde la distance de chaque point au centre.
+pub struct Twist {
+    /// Radians à la distance `rayon`.
+    pub strength: Param,
+    /// La distance de référence, en unités d'espace.
+    pub radius: Param,
+}
+
+impl Twist {
+    pub fn new(strength: f32, radius: f32) -> Self {
+        Self {
+            strength: Param::fixed(strength),
+            radius: Param::fixed(radius),
+        }
+    }
+}
+
+impl ShapeOp for Twist {
+    params! {
+        "Torsion";
+        strength: "force", -6.3, 6.3;
+        radius: "rayon", 0.05, 2.0;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let force = self.strength.get(g);
+        let force = if force.is_finite() { force } else { 0.0 };
+        if force == 0.0 {
+            return;
+        }
+        let rayon = self.radius.get(g);
+        let rayon = if rayon.is_finite() {
+            rayon.abs().max(1e-3)
+        } else {
+            1.0
+        };
+        for p in path.points.iter_mut() {
+            let (s, c) = (force * p.length() / rayon).sin_cos();
+            *p = Vec2::new(p.x * c - p.y * s, p.x * s + p.y * c);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1059,6 +1106,8 @@ mod tests {
             Box::new(Mirror::new(-7.0, f32::NAN)),
             Box::new(GridRepeat::new(f32::NAN, f32::INFINITY, f32::NAN)),
             Box::new(GridRepeat::new(-3.0, 1e9, -1.0).with_offset(f32::NAN)),
+            Box::new(Twist::new(f32::NAN, f32::NAN)),
+            Box::new(Twist::new(f32::INFINITY, 0.0)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1194,6 +1243,7 @@ mod tests_operateurs {
         vec![
             || Box::new(Mirror::new(3.0, 0.3)),
             || Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
+            || Box::new(Twist::new(2.0, 0.5)),
             // ACTIFS
         ]
     }
@@ -1310,5 +1360,25 @@ mod tests_operateurs {
             Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(8.0)));
         let p = applique(Box::new(dense), Box::new(GridRepeat::new(16.0, 16.0, 0.1)));
         assert!(p.points.len() <= crate::generator::MAX_POINTS);
+    }
+
+    #[test]
+    fn la_torsion_tourne_d_autant_plus_loin_du_centre() {
+        let g = Graph::new();
+        let audio = frogenx_core::AudioFeatures::default();
+        let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+        let mut path = Path::new();
+        path.points
+            .extend([Vec2::ZERO, Vec2::new(0.5, 0.0), Vec2::new(1.0, 0.0)]);
+        path.end_contour(false);
+        Twist::new(PI / 2.0, 1.0).apply(0.0, &ctx, &g, &mut path);
+        assert!(path.points[0].length() < EPS, "le centre reste");
+        let angle = |p: Vec2| p.y.atan2(p.x);
+        assert!((angle(path.points[1]) - PI / 4.0).abs() < EPS);
+        assert!((angle(path.points[2]) - PI / 2.0).abs() < EPS);
+        assert!(
+            (path.points[2].length() - 1.0).abs() < EPS,
+            "la distance reste"
+        );
     }
 }

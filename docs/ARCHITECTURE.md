@@ -751,6 +751,8 @@ composent en chaîne :
   recouvre l'original
 - **Répétition en grille** : colonnes, lignes, espacement, et une ligne sur deux décalée. La grille
   est centrée sur l'origine ; une copie par cellule et par contour
+- **Torsion** : chaque point tourne d'autant plus qu'il est loin du centre, `force` radians à la
+  distance `rayon`. Le centre ne bouge pas, les distances non plus
 
 > **Où investir l'effort :** ajouter un opérateur multiplie les possibilités de toutes
 > les primitives existantes. Ajouter une primitive n'ajoute qu'elle-même. En cas de
@@ -2052,7 +2054,7 @@ qui les livre (skill `doc-sync`).
 | Feature | Détail |
 |---|---|
 | Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
-| Formes | 8 générateurs, 7 effets, style de remplissage et de trait |
+| Formes | 8 générateurs, 8 effets, style de remplissage et de trait |
 | Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
 | Bibliothèque | 27 clips calés sur le tempo, grille de départ (§23.6) |
 | Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |
