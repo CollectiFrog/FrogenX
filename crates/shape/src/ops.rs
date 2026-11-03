@@ -799,6 +799,175 @@ impl ShapeOp for ShapeEchoes {
     }
 }
 
+/// L'index du `k`-ième point d'un contour, en bouclant s'il est fermé.
+fn sommet(c: &crate::path::Contour, k: usize) -> usize {
+    c.start as usize + k % c.len().max(1)
+}
+
+/// Les segments d'un contour : un de plus s'il est fermé, du dernier au premier.
+fn segments(c: &crate::path::Contour) -> usize {
+    if c.closed {
+        c.len()
+    } else {
+        c.len().saturating_sub(1)
+    }
+}
+
+/// La longueur d'un contour.
+fn longueur(points: &[Vec2], c: &crate::path::Contour) -> f32 {
+    (0..segments(c))
+        .map(|k| (points[sommet(c, k + 1)] - points[sommet(c, k)]).length())
+        .sum()
+}
+
+/// Pousse à la fin de `points` la portion `[a, b]` d'un contour, en longueur
+/// parcourue depuis son premier point. Sur un contour fermé, `b` peut dépasser
+/// sa longueur : le parcours fait un second tour.
+fn tracer(points: &mut Vec<Vec2>, c: &crate::path::Contour, a: f32, b: f32) {
+    let tours = if c.closed { 2 } else { 1 };
+    let mut d = 0.0;
+    let mut debut = true;
+    for k in 0..segments(c) * tours {
+        let (p, q) = (points[sommet(c, k)], points[sommet(c, k + 1)]);
+        let l = (q - p).length();
+        let (d0, d1) = (d, d + l);
+        d = d1;
+        if d1 < a {
+            continue;
+        }
+        if d0 > b {
+            break;
+        }
+        let u = |x: f32| {
+            if l > 0.0 {
+                ((x - d0) / l).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        if debut {
+            points.push(p.lerp(q, u(a)));
+            debut = false;
+        }
+        if d1 < b {
+            points.push(q);
+        } else {
+            points.push(p.lerp(q, u(b)));
+            break;
+        }
+    }
+}
+
+/// Recopie un contour tel quel, à la suite.
+fn recopier(path: &mut Path, c: &crate::path::Contour) {
+    for i in c.range() {
+        let p = path.points[i];
+        path.points.push(p);
+    }
+    path.end_contour(c.closed);
+}
+
+/// Garde seulement ce qui a été ajouté après les `points` et `contours` d'origine.
+/// Les nouveaux ont été poussés à la suite ; retirer les anciens ne fait que
+/// déplacer la mémoire, sans allouer.
+fn garder_les_ajouts(path: &mut Path, points: usize, contours: usize) {
+    path.points.drain(..points);
+    path.contours.drain(..contours);
+    let n = points as u32;
+    for c in &mut path.contours {
+        c.start -= n;
+        c.end -= n;
+    }
+}
+
+/// Ne garde de chaque contour que la portion `[début, fin]` de sa longueur,
+/// décalée de `décalage` : le tracé qui se dessine, quand `fin` est modulée.
+///
+/// Sur un contour fermé, la fenêtre fait le tour et le contour gardé est ouvert,
+/// sauf s'il reste entier. Sur un contour ouvert, elle s'arrête à ses bouts. Les
+/// contours gardés s'écrivent à la suite des originaux, retirés ensuite : aucune
+/// allocation une fois la capacité atteinte.
+pub struct Trim {
+    /// En part de la longueur, `[0, 1]`.
+    pub start: Param,
+    /// En part de la longueur, `[0, 1]`.
+    pub end: Param,
+    /// Décale la fenêtre, en part de la longueur.
+    pub offset: Param,
+}
+
+impl Default for Trim {
+    /// Tout le contour : ajouté à un clip, il ne change rien.
+    fn default() -> Self {
+        Self::new(0.0, 1.0)
+    }
+}
+
+impl Trim {
+    pub fn new(start: f32, end: f32) -> Self {
+        Self {
+            start: Param::fixed(start),
+            end: Param::fixed(end),
+            offset: Param::fixed(0.0),
+        }
+    }
+
+    pub fn with_offset(mut self, offset: f32) -> Self {
+        self.offset = Param::fixed(offset);
+        self
+    }
+}
+
+impl ShapeOp for Trim {
+    params! {
+        "Découpe";
+        start: "début", 0.0, 1.0;
+        end: "fin", 0.0, 1.0;
+        offset: "décalage", -1.0, 1.0;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let lu = |p: Param, repli: f32| {
+            let v = p.get(g);
+            if v.is_finite() {
+                v
+            } else {
+                repli
+            }
+        };
+        let (debut, fin, decalage) = (lu(self.start, 0.0), lu(self.end, 1.0), lu(self.offset, 0.0));
+        let fenetre = (fin - debut).clamp(0.0, 1.0);
+        if fenetre >= 1.0 || path.points.is_empty() {
+            return;
+        }
+        let (points, contours) = (path.points.len(), path.contours.len());
+        // Au plus deux points de plus par contour : les deux bouts de la fenêtre.
+        if points + 2 * contours > MAX_POINTS {
+            return;
+        }
+        for ci in 0..contours {
+            let c = path.contours[ci];
+            let l = longueur(&path.points, &c);
+            if c.len() < 2 || l <= 1e-9 {
+                recopier(path, &c);
+                continue;
+            }
+            let (a, b) = if c.closed {
+                let a = (debut + decalage).rem_euclid(1.0) * l;
+                (a, a + fenetre * l)
+            } else {
+                let a = (debut + decalage).clamp(0.0, 1.0) * l;
+                (a, (fin + decalage).clamp(0.0, 1.0) * l)
+            };
+            if b - a > 1e-9 {
+                tracer(&mut path.points, &c, a, b);
+                path.end_contour(false);
+            }
+        }
+        garder_les_ajouts(path, points, contours);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1178,6 +1347,8 @@ mod tests {
             Box::new(Twist::new(f32::INFINITY, 0.0)),
             Box::new(ShapeEchoes::new(f32::NAN, f32::NAN, f32::INFINITY)),
             Box::new(ShapeEchoes::new(1e9, -2.0, 0.0)),
+            Box::new(Trim::new(f32::NAN, f32::INFINITY).with_offset(f32::NAN)),
+            Box::new(Trim::new(0.9, 0.1).with_offset(-7.5)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1315,6 +1486,7 @@ mod tests_operateurs {
             || Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
             || Box::new(Twist::new(2.0, 0.5)),
             || Box::new(ShapeEchoes::new(5.0, 0.8, 0.25)),
+            || Box::new(Trim::new(0.2, 0.7).with_offset(0.4)),
             // ACTIFS
         ]
     }
@@ -1481,5 +1653,98 @@ mod tests_operateurs {
             Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(16.0)));
         let p = applique(Box::new(dense), Box::new(ShapeEchoes::new(32.0, 0.9, 0.1)));
         assert!(p.points.len() <= crate::generator::MAX_POINTS);
+    }
+
+    /// La longueur d'un contour, tel que le dessinera le rasteriseur.
+    fn longueur_de(p: &Path, c: &crate::path::Contour) -> f32 {
+        let pts = p.contour_points(c);
+        let n = pts.len();
+        let segments = if c.closed { n } else { n - 1 };
+        (0..segments)
+            .map(|i| (pts[(i + 1) % n] - pts[i]).length())
+            .sum()
+    }
+
+    #[test]
+    fn la_decoupe_garde_la_portion_demandee() {
+        let g = Graph::new();
+        let cercle = gen_path(&Ellipse::circle(0.5), &g);
+        let tour = longueur_de(&cercle, &cercle.contours[0]);
+        let p = applique(
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Trim::new(0.0, 0.5)),
+        );
+        assert_eq!(p.contours.len(), 1);
+        assert!(!p.contours[0].closed, "un contour fermé découpé s'ouvre");
+        let moitie = longueur_de(&p, &p.contours[0]);
+        assert!((moitie - tour * 0.5).abs() < 1e-3, "{moitie} contre {tour}");
+        assert!(
+            (p.points[0] - cercle.points[0]).length() < EPS,
+            "le début reste au premier point"
+        );
+    }
+
+    #[test]
+    fn le_decalage_fait_glisser_la_fenetre_et_passe_le_point_de_depart() {
+        let cercle = gen_path(&Ellipse::circle(0.5), &Graph::new());
+        let quart = cercle.points[cercle.points.len() / 4];
+        let p = applique(
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Trim::new(0.0, 0.25).with_offset(0.25)),
+        );
+        assert!(
+            (p.points[0] - quart).length() < 1e-3,
+            "{} contre {quart}",
+            p.points[0]
+        );
+        // Une fenêtre qui chevauche le point de départ reste d'un seul tenant.
+        let p = applique(
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Trim::new(0.0, 0.5).with_offset(0.75)),
+        );
+        assert_eq!(p.contours.len(), 1);
+        let attendu = longueur_de(&cercle, &cercle.contours[0]) * 0.5;
+        assert!((longueur_de(&p, &p.contours[0]) - attendu).abs() < 1e-3);
+    }
+
+    #[test]
+    fn une_fenetre_vide_efface_le_contour() {
+        let p = applique(
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Trim::new(0.6, 0.4)),
+        );
+        assert!(p.contours.is_empty() && p.points.is_empty());
+    }
+
+    #[test]
+    fn sur_un_contour_ouvert_la_fenetre_s_arrete_aux_bouts() {
+        let arc = gen_path(&Arc::new(0.0, 2.0, 0.5), &Graph::new());
+        let entier = longueur_de(&arc, &arc.contours[0]);
+        let p = applique(
+            Box::new(Arc::new(0.0, 2.0, 0.5)),
+            Box::new(Trim::new(0.5, 1.0).with_offset(0.25)),
+        );
+        let reste = longueur_de(&p, &p.contours[0]);
+        assert!(
+            (reste - entier * 0.25).abs() < 1e-3,
+            "{reste} contre {entier}"
+        );
+    }
+
+    #[test]
+    fn une_fin_modulee_dessine_le_trace() {
+        let mut g = Graph::new();
+        let un = g.add(Box::new(frogenx_core::Constant(1.0)));
+        g.eval_frame(0.0, 1.0 / 60.0);
+        let audio = frogenx_core::AudioFeatures::default();
+        let ctx = Ctx::new(1.0 / 60.0, 0, &audio);
+        let mut trim = Trim::new(0.0, 0.0);
+        trim.end = Param::modulated(0.0, 0.3, un);
+        let mut p = Path::new();
+        Ellipse::circle(0.5).generate(0.0, &ctx, &g, &mut p);
+        let tour = longueur_de(&p, &p.contours[0]);
+        trim.apply(0.0, &ctx, &g, &mut p);
+        assert!(p.is_valid());
+        assert!((longueur_de(&p, &p.contours[0]) - tour * 0.3).abs() < 1e-3);
     }
 }

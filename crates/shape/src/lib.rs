@@ -68,7 +68,7 @@ pub use feedback::{FeedbackParams, FeedbackStep};
 pub use generator::{ParamDesc, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
 pub use ops::{
     Chain, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeEchoes, ShapeOp, Smooth,
-    Transform, Twist,
+    Transform, Trim, Twist,
 };
 pub use parametric::{Lissajous, Rose, Superformula};
 pub use path::{Contour, Path};

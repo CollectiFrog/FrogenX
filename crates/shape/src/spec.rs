@@ -7,7 +7,7 @@
 use crate::generator::ShapeGenerator;
 use crate::ops::{
     Chain, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeEchoes, ShapeOp, Smooth,
-    Transform, Twist,
+    Transform, Trim, Twist,
 };
 use crate::parametric::{Lissajous, Rose, Superformula};
 use crate::primitives::{Arc, Ellipse, Polygon, Rect, Star};
@@ -26,10 +26,11 @@ pub enum EffectKind {
     GridRepeat,
     Twist,
     ShapeEchoes,
+    Trim,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 9] = [
+    pub const ALL: [EffectKind; 10] = [
         EffectKind::Deform,
         EffectKind::Noise,
         EffectKind::RadialRepeat,
@@ -39,6 +40,7 @@ impl EffectKind {
         EffectKind::GridRepeat,
         EffectKind::Twist,
         EffectKind::ShapeEchoes,
+        EffectKind::Trim,
     ];
 
     /// Un effet neutre : l'ajouter ne change pas brutalement l'image.
@@ -53,6 +55,7 @@ impl EffectKind {
             EffectKind::GridRepeat => Box::new(GridRepeat::default()),
             EffectKind::Twist => Box::new(Twist::new(0.0, 1.0)),
             EffectKind::ShapeEchoes => Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)),
+            EffectKind::Trim => Box::new(Trim::default()),
         }
     }
 
@@ -96,6 +99,7 @@ pub fn op_from_spec(spec: &Spec) -> Result<Box<dyn ShapeOp>, SpecError> {
         "Répétition en grille" => Box::new(GridRepeat::default()),
         "Torsion" => Box::new(Twist::new(0.0, 1.0)),
         "Échos de forme" => Box::new(ShapeEchoes::new(1.0, 0.8, 0.2)),
+        "Découpe" => Box::new(Trim::default()),
         autre => return Err(SpecError::UnknownKind(autre.to_string())),
     };
     for (i, desc) in effet.params().iter().enumerate() {
@@ -154,6 +158,7 @@ mod tests {
             Box::new(RadialRepeat::new(5.0)),
             Box::new(Transform::default()),
             Box::new(Smooth::new(2.0, 0.25)),
+            Box::new(Trim::new(0.1, 0.6).with_offset(0.25)),
             Box::new(ShapeEchoes::new(5.0, 0.7, 0.3)),
             Box::new(Twist::new(1.5, 0.75)),
             Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
