@@ -66,7 +66,9 @@ pub mod video;
 pub use crt::{CrtParams, CrtStep, FilterKind, FilterStep, ImageFilter};
 pub use feedback::{FeedbackParams, FeedbackStep};
 pub use generator::{ParamDesc, ShapeGenerator, MAX_POINTS, SMOOTH_SEGMENTS};
-pub use ops::{Chain, Deform, Mirror, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform};
+pub use ops::{
+    Chain, Deform, GridRepeat, Mirror, NoiseDisplace, RadialRepeat, ShapeOp, Smooth, Transform,
+};
 pub use parametric::{Lissajous, Rose, Superformula};
 pub use path::{Contour, Path};
 pub use primitives::{Arc, Ellipse, Polygon, Rect, Star};

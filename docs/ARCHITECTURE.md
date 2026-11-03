@@ -749,6 +749,8 @@ composent en chaîne :
   Chaque copie devient son propre contour, et garde l'orientation de l'original : une copie
   retournée tournerait dans l'autre sens, et le remplissage `NonZero` l'annulerait là où elle
   recouvre l'original
+- **Répétition en grille** : colonnes, lignes, espacement, et une ligne sur deux décalée. La grille
+  est centrée sur l'origine ; une copie par cellule et par contour
 
 > **Où investir l'effort :** ajouter un opérateur multiplie les possibilités de toutes
 > les primitives existantes. Ajouter une primitive n'ajoute qu'elle-même. En cas de
@@ -2050,7 +2052,7 @@ qui les livre (skill `doc-sync`).
 | Feature | Détail |
 |---|---|
 | Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
-| Formes | 8 générateurs, 6 effets, style de remplissage et de trait |
+| Formes | 8 générateurs, 7 effets, style de remplissage et de trait |
 | Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
 | Bibliothèque | 27 clips calés sur le tempo, grille de départ (§23.6) |
 | Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |

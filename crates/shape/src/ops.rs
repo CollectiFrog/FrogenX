@@ -583,6 +583,107 @@ impl ShapeOp for Mirror {
     }
 }
 
+/// Répète la forme sur une grille centrée sur l'origine.
+///
+/// Une ligne sur deux se décale de `décalage` fois l'espacement : la grille
+/// devient un quinconce, ou des briques. Chaque copie de chaque contour devient
+/// son propre contour (§16.3). Les contours d'origine prennent la place de la
+/// première cellule.
+pub struct GridRepeat {
+    /// Saturé dans `[1, 16]`.
+    pub columns: Param,
+    /// Saturé dans `[1, 16]`.
+    pub rows: Param,
+    /// Écart entre deux cellules, en unités d'espace.
+    pub spacing: Param,
+    /// Décalage d'une ligne sur deux, en part de l'espacement.
+    pub offset: Param,
+}
+
+impl Default for GridRepeat {
+    /// Une seule cellule : ajouté à un clip, il ne change rien.
+    fn default() -> Self {
+        Self::new(1.0, 1.0, 0.5)
+    }
+}
+
+impl GridRepeat {
+    pub fn new(columns: f32, rows: f32, spacing: f32) -> Self {
+        Self {
+            columns: Param::fixed(columns),
+            rows: Param::fixed(rows),
+            spacing: Param::fixed(spacing),
+            offset: Param::fixed(0.0),
+        }
+    }
+
+    pub fn with_offset(mut self, offset: f32) -> Self {
+        self.offset = Param::fixed(offset);
+        self
+    }
+}
+
+/// Un nombre de copies utilisable : arrondi, dans `[1, max]`, `1` s'il n'est pas fini.
+fn compte(v: f32, max: f32) -> usize {
+    if v.is_finite() {
+        v.round().clamp(1.0, max) as usize
+    } else {
+        1
+    }
+}
+
+impl ShapeOp for GridRepeat {
+    params! {
+        "Répétition en grille";
+        columns: "colonnes", 1.0, 16.0;
+        rows: "lignes", 1.0, 16.0;
+        spacing: "espacement", 0.0, 2.0;
+        offset: "décalage", 0.0, 1.0;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let colonnes = compte(self.columns.get(g), 16.0);
+        let lignes = compte(self.rows.get(g), 16.0);
+        let cellules = colonnes * lignes;
+        if cellules <= 1 || path.points.is_empty() {
+            return;
+        }
+        let ecart = self.spacing.get(g);
+        let ecart = if ecart.is_finite() { ecart } else { 0.0 };
+        let decalage = self.offset.get(g);
+        let decalage = if decalage.is_finite() { decalage } else { 0.0 };
+        let total = path.points.len().saturating_mul(cellules);
+        if total > MAX_POINTS {
+            return;
+        }
+        let place = |k: usize| {
+            let (i, j) = (k % colonnes, k / colonnes);
+            let x = (i as f32 - (colonnes - 1) as f32 * 0.5) * ecart;
+            let y = ((lignes - 1) as f32 * 0.5 - j as f32) * ecart;
+            let quinconce = if j % 2 == 1 { decalage * ecart } else { 0.0 };
+            Vec2::new(x + quinconce, y)
+        };
+        path.points.reserve(total - path.points.len());
+        let (originaux, n) = (path.contours.len(), path.points.len());
+        // Les copies d'abord : elles lisent les points d'origine avant qu'ils bougent.
+        for k in 1..cellules {
+            let d = place(k);
+            for ci in 0..originaux {
+                let contour = path.contours[ci];
+                for i in contour.range() {
+                    let p = path.points[i] + d;
+                    path.points.push(p);
+                }
+                path.end_contour(contour.closed);
+            }
+        }
+        let d = place(0);
+        for p in &mut path.points[..n] {
+            *p += d;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,6 +1057,8 @@ mod tests {
             }),
             Box::new(Mirror::new(f32::NAN, f32::INFINITY)),
             Box::new(Mirror::new(-7.0, f32::NAN)),
+            Box::new(GridRepeat::new(f32::NAN, f32::INFINITY, f32::NAN)),
+            Box::new(GridRepeat::new(-3.0, 1e9, -1.0).with_offset(f32::NAN)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1090,6 +1193,7 @@ mod tests_operateurs {
     fn operateurs_actifs() -> Vec<fn() -> Box<dyn ShapeOp>> {
         vec![
             || Box::new(Mirror::new(3.0, 0.3)),
+            || Box::new(GridRepeat::new(3.0, 2.0, 0.4).with_offset(0.5)),
             // ACTIFS
         ]
     }
@@ -1160,6 +1264,51 @@ mod tests_operateurs {
         let dense =
             Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(64.0)));
         let p = applique(Box::new(dense), Box::new(Mirror::new(3.0, 0.0)));
+        assert!(p.points.len() <= crate::generator::MAX_POINTS);
+    }
+
+    #[test]
+    fn la_grille_repete_chaque_contour_par_cellule() {
+        let p = applique(
+            Box::new(Ellipse::circle(0.1)),
+            Box::new(GridRepeat::new(3.0, 2.0, 0.5)),
+        );
+        assert_eq!(p.contours.len(), 6);
+        assert!(p.contours.iter().all(|c| c.closed));
+    }
+
+    #[test]
+    fn la_grille_est_centree_et_suit_son_espacement() {
+        let p = applique(
+            Box::new(Ellipse::circle(0.1)),
+            Box::new(GridRepeat::new(3.0, 1.0, 0.5)),
+        );
+        let mut centres: Vec<f32> = p
+            .contours
+            .iter()
+            .map(|c| centre(p.contour_points(c)).x)
+            .collect();
+        centres.sort_by(f32::total_cmp);
+        for (x, attendu) in centres.iter().zip([-0.5, 0.0, 0.5]) {
+            assert!((x - attendu).abs() < EPS, "{centres:?}");
+        }
+    }
+
+    #[test]
+    fn une_ligne_sur_deux_se_decale() {
+        let op = GridRepeat::new(1.0, 2.0, 1.0).with_offset(0.5);
+        let p = applique(Box::new(Ellipse::circle(0.1)), Box::new(op));
+        let haut = centre(p.contour_points(&p.contours[0]));
+        let bas = centre(p.contour_points(&p.contours[1]));
+        assert!((haut - Vec2::new(0.0, 0.5)).length() < EPS, "{haut}");
+        assert!((bas - Vec2::new(0.5, -0.5)).length() < EPS, "{bas}");
+    }
+
+    #[test]
+    fn la_grille_respecte_la_borne_dure() {
+        let dense =
+            Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(8.0)));
+        let p = applique(Box::new(dense), Box::new(GridRepeat::new(16.0, 16.0, 0.1)));
         assert!(p.points.len() <= crate::generator::MAX_POINTS);
     }
 }
