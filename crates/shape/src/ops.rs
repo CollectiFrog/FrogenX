@@ -968,6 +968,93 @@ impl ShapeOp for Trim {
     }
 }
 
+/// Découpe chaque contour en tirets ouverts.
+///
+/// `longueur` et `écart` sont en unités d'espace ; `phase` décale le motif, en
+/// part d'une période. Un écart nul ne fait rien. Si les tirets dépassaient
+/// `MAX_POINTS`, la forme reste entière : mieux vaut un trait plein qu'un
+/// morceau de motif. Écrit à la suite des originaux, comme [`Trim`].
+pub struct Dashes {
+    /// En unités d'espace. Saturée à 0,001 au moins.
+    pub length: Param,
+    /// En unités d'espace.
+    pub gap: Param,
+    /// En part de la période tiret plus écart.
+    pub phase: Param,
+}
+
+impl Dashes {
+    pub fn new(length: f32, gap: f32) -> Self {
+        Self {
+            length: Param::fixed(length),
+            gap: Param::fixed(gap),
+            phase: Param::fixed(0.0),
+        }
+    }
+
+    pub fn with_phase(mut self, phase: f32) -> Self {
+        self.phase = Param::fixed(phase);
+        self
+    }
+}
+
+impl ShapeOp for Dashes {
+    params! {
+        "Pointillés";
+        length: "longueur", 0.01, 1.0;
+        gap: "écart", 0.0, 1.0;
+        phase: "phase", 0.0, 1.0;
+    }
+
+    fn apply(&self, _t: f64, _ctx: &Ctx, g: &Graph, path: &mut Path) {
+        let ecart = self.gap.get(g);
+        if !ecart.is_finite() || ecart <= 0.0 || path.points.is_empty() {
+            return;
+        }
+        let trait_ = self.length.get(g);
+        let trait_ = if trait_.is_finite() {
+            trait_.max(1e-3)
+        } else {
+            0.1
+        };
+        let periode = trait_ + ecart;
+        let phase = self.phase.get(g);
+        let phase = if phase.is_finite() {
+            phase.rem_euclid(1.0)
+        } else {
+            0.0
+        };
+        let (points, contours) = (path.points.len(), path.contours.len());
+        // Chaque tiret ajoute au plus ses deux bouts aux sommets qu'il reprend.
+        let tirets: f32 = path
+            .contours
+            .iter()
+            .map(|c| (longueur(&path.points, c) / periode).floor() + 2.0)
+            .sum();
+        if points as f32 + 2.0 * tirets > MAX_POINTS as f32 {
+            return;
+        }
+        for ci in 0..contours {
+            let c = path.contours[ci];
+            let l = longueur(&path.points, &c);
+            if c.len() < 2 || l <= 1e-9 {
+                recopier(path, &c);
+                continue;
+            }
+            let mut debut = -phase * periode;
+            while debut < l {
+                let (a, b) = (debut.max(0.0), (debut + trait_).min(l));
+                if b - a > 1e-9 {
+                    tracer(&mut path.points, &c, a, b);
+                    path.end_contour(false);
+                }
+                debut += periode;
+            }
+        }
+        garder_les_ajouts(path, points, contours);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1349,6 +1436,8 @@ mod tests {
             Box::new(ShapeEchoes::new(1e9, -2.0, 0.0)),
             Box::new(Trim::new(f32::NAN, f32::INFINITY).with_offset(f32::NAN)),
             Box::new(Trim::new(0.9, 0.1).with_offset(-7.5)),
+            Box::new(Dashes::new(f32::NAN, f32::INFINITY).with_phase(f32::NAN)),
+            Box::new(Dashes::new(1e-9, 1e-9)),
         ];
         for (i, op) in cas.into_iter().enumerate() {
             let chaine = Chain::new(Box::new(Ellipse::circle(1.0))).then(op);
@@ -1487,6 +1576,7 @@ mod tests_operateurs {
             || Box::new(Twist::new(2.0, 0.5)),
             || Box::new(ShapeEchoes::new(5.0, 0.8, 0.25)),
             || Box::new(Trim::new(0.2, 0.7).with_offset(0.4)),
+            || Box::new(Dashes::new(0.1, 0.05).with_phase(0.3)),
             // ACTIFS
         ]
     }
@@ -1746,5 +1836,53 @@ mod tests_operateurs {
         trim.apply(0.0, &ctx, &g, &mut p);
         assert!(p.is_valid());
         assert!((longueur_de(&p, &p.contours[0]) - tour * 0.3).abs() < 1e-3);
+    }
+
+    #[test]
+    fn les_pointilles_coupent_le_contour_en_tirets_de_la_bonne_longueur() {
+        let cercle = gen_path(&Ellipse::circle(0.5), &Graph::new());
+        let tour = longueur_de(&cercle, &cercle.contours[0]);
+        let p = applique(
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Dashes::new(0.2, 0.2)),
+        );
+        assert_eq!(p.contours.len(), (tour / 0.4).ceil() as usize);
+        assert!(p.contours.iter().all(|c| !c.closed));
+        for c in &p.contours[..p.contours.len() - 1] {
+            assert!(
+                (longueur_de(&p, c) - 0.2).abs() < 1e-3,
+                "{}",
+                longueur_de(&p, c)
+            );
+        }
+    }
+
+    #[test]
+    fn la_phase_fait_glisser_les_tirets() {
+        let cercle = gen_path(&Ellipse::circle(0.5), &Graph::new());
+        let p = applique(
+            Box::new(Ellipse::circle(0.5)),
+            Box::new(Dashes::new(0.2, 0.2).with_phase(0.5)),
+        );
+        // Une demi-période de recul : le premier tiret commence à 0,2 du départ.
+        let mut copie = cercle.clone();
+        let n = copie.points.len();
+        tracer(&mut copie.points, &cercle.contours[0], 0.2, 0.2);
+        assert!(
+            (p.points[0] - copie.points[n]).length() < 1e-3,
+            "{} {}",
+            p.points[0],
+            copie.points[n]
+        );
+    }
+
+    #[test]
+    fn des_tirets_trop_fins_laissent_la_forme_entiere() {
+        let g = Graph::new();
+        let dense =
+            || Chain::new(Box::new(Ellipse::circle(0.5))).then(Box::new(RadialRepeat::new(8.0)));
+        let entier = gen_path(&dense(), &g);
+        let p = applique(Box::new(dense()), Box::new(Dashes::new(1e-6, 1e-6)));
+        assert!(memes_formes(&entier, &p));
     }
 }
