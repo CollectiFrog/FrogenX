@@ -106,13 +106,13 @@ mod tests {
     const FRAMES: u64 = 240;
 
     #[test]
-    fn le_catalogue_compte_27_clips_en_cinq_familles() {
-        assert_eq!(catalog().len(), 27);
+    fn le_catalogue_compte_31_clips_en_cinq_familles() {
+        assert_eq!(catalog().len(), 31);
         let compte = |f| catalog().iter().filter(|p| p.family == f).count();
         assert_eq!(compte(Family::Backgrounds), 4);
         assert_eq!(compte(Family::Shapes), 8);
-        assert_eq!(compte(Family::Lines), 6);
-        assert_eq!(compte(Family::Patterns), 6);
+        assert_eq!(compte(Family::Lines), 8);
+        assert_eq!(compte(Family::Patterns), 8);
         assert_eq!(compte(Family::Echoes), 3);
     }
 

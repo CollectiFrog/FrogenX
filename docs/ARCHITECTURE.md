@@ -2069,7 +2069,7 @@ qui les livre (skill `doc-sync`).
 | Signaux et graphe | oscillateurs, LFO, bruit à graine, enveloppes, opérateurs, 15 types de nœuds |
 | Formes | 8 générateurs, 13 effets, style de remplissage et de trait |
 | Grille | decks, pistes, colonnes, cases, tempo partagé, tap tempo, 5 modes de mélange |
-| Bibliothèque | 27 clips calés sur le tempo, grille de départ (§23.6) |
+| Bibliothèque | 31 clips calés sur le tempo, grille de départ (§23.6) |
 | Interface | en-tête unique, potentiomètres, panneau de clip flottant, apparence façon Pro-Q (§23.9) |
 | Sortie plein écran | menu `Sortie`, fenêtre sans bordure, écran perdu géré (§8.4) |
 | Sauvegarde | format JSON versionné, migrations, dernier fichier rouvert, confirmation (§19, §23.8) |
@@ -2107,7 +2107,7 @@ qui les livre (skill `doc-sync`).
 
 | Point | État |
 |---|---|
-| Opérateurs de forme ajoutés (miroir…) regardés sur une forme | vérifiés par tests seulement |
+| Opérateurs de forme du §5.4 en mouvement, et à la vraie souris | une image fixe de chacun vue sur la planche du catalogue (`Tracé`, `Spirale`, `Miroir`, `Damier`) ; l'animation sur le tempo et le menu de l'éditeur, non regardés |
 | BPM, phase, features et trig sur de la vraie musique | jamais essayés : seuils venus de sons de synthèse (§7.1) |
 | Menus `Sortie`, `Fichier` et `Édition`, clic droit des potentiomètres, fils de l'éditeur, Ctrl+Z, à la vraie souris et au vrai clavier | validés par clics simulés seulement |
 | Un flux entre deux machines, sur un vrai réseau, et sa latence jusqu'à l'écran | essayé en boucle locale seulement (§8.5) |
@@ -3572,8 +3572,9 @@ nœuds (§23.10). Le sélecteur n'a ni palette ni saisie hexadécimale.
 ### 23.6 La bibliothèque de clips (étape 7c)
 
 **`library` tient un catalogue statique.** Chaque entrée porte un nom, une famille et une
-fonction qui construit le clip : 27 clips, en cinq familles (fonds, formes, traits,
-motifs, échos). Tous sont écrits en code, parce que le format de fichier n'arrive qu'à l'étape
+fonction qui construit le clip : 31 clips, en cinq familles (fonds, formes, traits,
+motifs, échos). `Tracé`, `Spirale`, `Miroir` et `Damier` montrent les opérateurs ajoutés au §5.4 :
+la découpe qui se dessine, les échos de forme et l'onde, la torsion en miroir, la grille quantifiée. Tous sont écrits en code, parce que le format de fichier n'arrive qu'à l'étape
 7e. Une sauvegarde décrira ensuite le clip lui-même, jamais son entrée de catalogue : un
 clip réglé n'est plus celui du catalogue.
 

@@ -1,4 +1,4 @@
-//! Le catalogue : 27 clips calés sur le tempo (§23.6).
+//! Le catalogue : 31 clips calés sur le tempo (§23.6).
 //!
 //! Un clip assemble un graphe de LFO, une forme, des effets et un style. Les
 //! durées sont en battements, jamais en secondes : un clip suit le tempo de
@@ -9,12 +9,13 @@ use frogenx_composition::{BeatRate, Clip, PlayMode, Transport};
 use frogenx_core::{Graph, NodeId, Param};
 use frogenx_osc::{Lfo, Noise, Waveform};
 use frogenx_shape::{
-    Arc, ColorParam, Deform, Ellipse, FeedbackParams, Lissajous, NoiseDisplace, Polygon,
-    RadialRepeat, Rect, Rose, ShapeGenerator, ShapeStyle, Smooth, Star, Superformula, Transform,
+    Arc, ColorParam, Deform, Ellipse, FeedbackParams, GridRepeat, LinearWave, Lissajous, Mirror,
+    NoiseDisplace, Polygon, Quantize, RadialRepeat, Rect, Rose, ShapeEchoes, ShapeGenerator,
+    ShapeStyle, Smooth, Star, Superformula, Transform, Trim, Twist,
 };
 use std::f32::consts::PI;
 
-pub(crate) static CATALOG: [Preset; 27] = [
+pub(crate) static CATALOG: [Preset; 31] = [
     Preset::new("Nuit", Family::Backgrounds, nuit),
     Preset::new("Aurore", Family::Backgrounds, aurore),
     Preset::new("Braise", Family::Backgrounds, braise),
@@ -33,12 +34,16 @@ pub(crate) static CATALOG: [Preset; 27] = [
     Preset::new("Superformule", Family::Lines, superformule),
     Preset::new("Arcs", Family::Lines, arcs),
     Preset::new("Spirographe", Family::Lines, spirographe),
+    Preset::new("Tracé", Family::Lines, trace),
+    Preset::new("Spirale", Family::Lines, spirale),
     Preset::new("Rosace", Family::Patterns, rosace),
     Preset::new("Mandala", Family::Patterns, mandala),
     Preset::new("Constellation", Family::Patterns, constellation),
     Preset::new("Engrenage", Family::Patterns, engrenage),
     Preset::new("Kaléidoscope", Family::Patterns, kaleidoscope),
     Preset::new("Pétales", Family::Patterns, petales),
+    Preset::new("Miroir", Family::Patterns, miroir),
+    Preset::new("Damier", Family::Patterns, damier),
     Preset::new("Traînée", Family::Echoes, trainee),
     Preset::new("Tunnel", Family::Echoes, tunnel),
     Preset::new("Tourbillon", Family::Echoes, tourbillon),
@@ -400,4 +405,64 @@ fn petales() -> Clip {
             scale: Param::modulated(0.9, 0.12, pouls),
             ..Default::default()
         }))
+}
+
+/// Une dent de scie de 0 à 1, sur `beats` battements : le LFO va de -1 à 1.
+fn rampe(graph: &mut Graph, beats: f32) -> Param {
+    Param::modulated(0.5, 0.5, lfo(graph, Waveform::Saw, beats))
+}
+
+/// Le tracé se dessine sur un cycle, puis repart : la `fin` d'une découpe suit
+/// une rampe, et la fenêtre tourne doucement. Elle part de 15 % : à 0, le clip
+/// serait vide à son lancement.
+fn trace() -> Clip {
+    let mut g = Graph::new();
+    let scie = lfo(&mut g, Waveform::Saw, CYCLE);
+    let derive = rampe(&mut g, CYCLE * 4.0);
+    let mut decoupe = Trim::new(0.0, 1.0);
+    decoupe.end = Param::modulated(0.575, 0.425, scie);
+    decoupe.offset = derive;
+    clip(g, Rose::new(5.0, 0.85), trait_blanc(0.01)).with_effect(Box::new(decoupe))
+}
+
+/// Des étoiles emboîtées qui tournent, traversées par une onde qui défile.
+fn spirale() -> Clip {
+    let mut g = Graph::new();
+    let onde = sinus(&mut g, CYCLE);
+    let defile = rampe(&mut g, CYCLE / 2.0);
+    let mut echos = ShapeEchoes::new(8.0, 0.82, 0.25);
+    echos.rotation = Param::modulated(0.25, 0.15, onde);
+    let mut vague = LinearWave::new(0.04, 0.5);
+    vague.phase = defile;
+    clip(g, Star::new(7.0, 0.9, 0.5), trait_blanc(0.008))
+        .with_effect(Box::new(echos))
+        .with_effect(Box::new(vague))
+}
+
+/// Une étoile tordue, mise en miroir quatre fois : la torsion respire sur le tempo.
+fn miroir() -> Clip {
+    let mut g = Graph::new();
+    let souffle = sinus(&mut g, CYCLE);
+    let rotation = tour(&mut g, CYCLE * 4.0);
+    let mut torsion = Twist::new(0.0, 0.8);
+    torsion.strength = Param::modulated(0.0, 1.6, souffle);
+    clip(g, Star::new(5.0, 0.22, 0.5), plein(0.35, 0.6, 0.95))
+        .with_effect(Box::new(decale(0.42)))
+        .with_effect(Box::new(torsion))
+        .with_effect(Box::new(Mirror::new(3.0, 0.0)))
+        .with_effect(Box::new(rotation))
+}
+
+/// Des disques en quinconce qui respire, accrochés à une grille qui pulse.
+fn damier() -> Clip {
+    let mut g = Graph::new();
+    let quinconce = sinus(&mut g, CYCLE);
+    let pouls = sinus(&mut g, 2.0);
+    let mut grille = GridRepeat::new(7.0, 4.0, 0.32);
+    grille.offset = Param::modulated(0.5, 0.5, quinconce);
+    let mut pixel = Quantize::new(0.0);
+    pixel.step = Param::modulated(0.035, 0.025, pouls);
+    clip(g, Ellipse::circle(0.11), plein(0.95, 0.75, 0.2))
+        .with_effect(Box::new(grille))
+        .with_effect(Box::new(pixel))
 }

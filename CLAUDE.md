@@ -97,7 +97,7 @@ disposition de Resolume, apparence de Pro-Q, et toute l'interface sur le modèle
 - `crates/video` : le décodage des clips vidéo (§9.3), ffmpeg en pipe et tampon de tête ; `plan` y
   décide d'où vient une image. Ne dépend de rien, ni wgpu ni `Graph`. `app` passe ses images à
   `VideoRenderer` (`layer`), qui convertit le YUV en shader.
-- `crates/library` : les 27 clips prédéfinis et la grille de départ (§23.6), en code
+- `crates/library` : les 31 clips prédéfinis et la grille de départ (§23.6), en code
   jusqu'au format de l'étape 7e. Sans GPU ni carte son.
 - `crates/patch` : le format de fichier (§19), `Composition` ↔ JSON, version et fixture,
   écriture par fichier temporaire. Seule crate à connaître le JSON ; `core` décrit un nœud
