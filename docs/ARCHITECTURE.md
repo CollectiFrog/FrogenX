@@ -858,6 +858,49 @@ un écran ou une cadence autres que 60 fps pour le rendu réel.
 
 ---
 
+### 6.2 Les effets d'image : le CRT
+
+> Tranché (par clip, quatre familles de composants). Raisons au §13.
+
+Les effets du §16.3 bis transforment des `Path` : ils ne voient pas de pixels. **Un effet d'image
+agit sur la texture que le clip vient de rendre**, avant le mélange de la piste. Le CRT est le
+premier ; les shaders WGSL du backlog (§23.4) prendront la même place.
+
+**Une seule chaîne, deux sortes d'effets.** `Clip.filters` suit `Clip.effects` : la géométrie
+d'abord, les pixels ensuite, toujours dans cet ordre. Les deux partagent une numérotation, celle de
+`ParamSlot::Effect` : les effets de forme puis les effets d'image. Retirer, réordonner, les cartes
+du panneau et le clic droit de l'éditeur de nœuds servent donc tels quels. Un déplacement ne
+franchit pas la frontière : un effet de forme ne passe jamais après un effet d'image. Une forme,
+une vidéo et un écho acceptent tous des effets d'image.
+
+```rust
+pub enum ImageFilter { Crt(CrtParams) }      // dans `shape` : `composition` ne connaît pas wgpu
+pub enum FilterKind { Crt }                  // ce que propose le menu
+Command::AddFilter { clip: ClipId, kind: FilterKind }   // RemoveEffect et MoveEffect servent aux deux
+```
+
+**Les réglages du CRT, tous des `Param`.** Une intensité nulle coupe son composant.
+
+| Famille | Réglages |
+|---|---|
+| Lignes et masque | `lignes` (nombre, 240 par défaut), `balayage` (force des lignes), `masque` (phosphores RGB) |
+| Courbure et vignette | `courbure`, `vignette` |
+| Halo et aberration | `halo` (flou lumineux des zones claires), `aberration` (rouge et bleu décalés vers les bords) |
+| Bruit et rémanence | `bruit`, `scintillement`, `bande` (qui défile), `rémanence` (secondes pour perdre la moitié de l'image) |
+
+**Le rendu.** Une passe principale lit l'image du clip et écrit sa cible. Le halo ajoute un flou
+séparable en demi-résolution, seulement s'il n'est pas nul. La rémanence garde l'image d'avant dans
+une texture à elle, comme l'écho (§6.1) : lire et écrire la même texture est interdit (§22). Elle
+s'exprime par seconde, jamais par frame. Le bruit tire son grain de `t` : un rendu offline reste
+identique (§20.3). Chaque calcul a sa référence en Rust (`crt.rs` dans `shape`), que les tests
+comparent au shader, comme pour le mélange (§22.1).
+
+**L'image reste prémultipliée.** Lignes, masque et vignette assombrissent la couleur sans toucher
+l'alpha. Le halo, qui éclaire, remonte l'alpha au niveau de la couleur. Hors de l'écran bombé, la
+couche est transparente : les pistes du dessous se voient dans les coins.
+
+**Le fichier.** Version 8 : un clip porte `filters`, facultatif.
+
 ## 7. Audio
 
 L'audio n'est pas un module de plus : il impose une **contrainte de threading**.
@@ -2091,6 +2134,7 @@ Un résumé pour qui reprend le projet — ou pour vous-même dans six mois.
 | **Le plein écran rend le focus à l'interface** (§8.4) | sous Windows, `set_fullscreen` active toujours la fenêtre, qui volerait le clavier en plein jeu ; rendre le focus couvre aussi un clic accidentel, sur toutes les plateformes |
 | **Écran perdu : la sortie se ferme, le moteur continue** (§8.4) | un câble débranché ne doit couper ni l'interface ni le monitor ; laisser la fenêtre glisser sur l'écran restant pourrait recouvrir l'interface |
 | **`OutputRequest` distinct de `Command`** (§8.4) | une fenêtre n'est pas la grille : `Composition` n'a rien à en savoir, et `Command` ne concerne que ce qui s'applique entre deux frames du moteur |
+| **Les effets d'image sont par clip, dans la chaîne de ses effets** (§6.2) | les gestes, la modulation, le fichier et l'annulation existent déjà pour cette chaîne ; une seule numérotation, et la géométrie toujours avant les pixels |
 | **La vidéo se décode par ffmpeg en pipe, avec un tampon de tête** (§9.3) | un clip part au clic alors qu'un décodeur met 150 ms à s'ouvrir ; garder 0,5 s d'avance couvre ce délai, sans bindings ni tout charger en mémoire |
 | **`position` d'une vidéo est son temps, réglé par `VideoRate`** (§9.3) | un seul `Signal` de plus suffit au calage sur le tempo : la quantification, le recalage, la vitesse et `PlayMode` s'appliquent sans cas particulier |
 | **Le son d'une vidéo est ignoré** (§9.3) | FrogenX mixe de l'image ; une sortie audio serait un chantier à elle seule, avec un risque de larsen |
